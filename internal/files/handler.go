@@ -111,15 +111,26 @@ func (h *handler) handleNewVideo(filePath string, file db.File) error {
 	if err != nil {
 		return err
 	}
+
+	// Create a thumbnail while maintaining aspect ratio
+	var thumbnail image.Image
+	if width > height {
+		thumbnail = imaging.Resize(img, h.config.MaxThumbnailSize, 0, imaging.Lanczos)
+	} else {
+		thumbnail = imaging.Resize(img, 0, h.config.MaxThumbnailSize, imaging.Lanczos)
+	}
+
+	// Encode thumbnail to JPEG
 	var thumbnailBuffer bytes.Buffer
-	if err := jpeg.Encode(&thumbnailBuffer, img, &jpeg.Options{Quality: 85}); err != nil {
+	if err := jpeg.Encode(&thumbnailBuffer, thumbnail, &jpeg.Options{Quality: 85}); err != nil {
 		return err
 	}
 
 	// Get thumbnail dimensions
-	thumbBounds := img.Bounds()
+	thumbBounds := thumbnail.Bounds()
 	thumbWidth := thumbBounds.Max.X - thumbBounds.Min.X
 	thumbHeight := thumbBounds.Max.Y - thumbBounds.Min.Y
+
 	// Create Video record
 	image := db.Video{
 		FullMimeType:    getFullMimeType(filePath),
