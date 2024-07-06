@@ -20,7 +20,7 @@ var schema string
 
 func createSchema(dbPath string) error {
 	if _, err := os.Stat(dbPath); errors.Is(err, os.ErrNotExist) {
-		db, err := sql.Open("sqlite3", dbPath)
+		db, err := sql.Open("sqlite", dbPath)
 		if err != nil {
 			return fmt.Errorf("error opening database: %w", err)
 		}
@@ -34,7 +34,6 @@ func createSchema(dbPath string) error {
 }
 
 func GetDb(dbPath string) (*gorm.DB, error) {
-	log.Println(schema)
 	dataFolder, exists := os.LookupEnv("$XDG_DATA_HOME")
 	if !exists {
 		dataFolder = os.Getenv("HOME") + "/.local/share"
