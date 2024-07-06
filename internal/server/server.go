@@ -3,8 +3,10 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"path/filepath"
 	"picshow/internal/config"
 	"picshow/internal/db"
+	"strconv"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -28,6 +30,7 @@ func (s *Server) Start() error {
 	e.Use(middleware.CORS())
 
 	e.GET("/", s.getFiles)
+	e.GET("/:id", s.getFile)
 	e.GET("/stats", s.getStats)
 	return e.Start(fmt.Sprintf(":%d", s.config.Port))
 }
@@ -73,6 +76,24 @@ func (s *Server) getFiles(e echo.Context) error {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch files"})
 	}
 	return e.JSON(http.StatusOK, files)
+}
+
+func (s *Server) getFile(e echo.Context) error {
+	id := e.Param("id")
+	fileId, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
+	}
+	file, err := db.GetFile(s.db, fileId)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
+	}
+	if file.MimeType == db.MimeTypeImage.String() {
+		return e.File(filepath.Join(s.config.FolderPath, file.Filename))
+	} else {
+		// TODO: Here we will need to create a stream from the file
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Unsupported mimetype"})
+	}
 }
 
 func (s *Server) getStats(c echo.Context) error {

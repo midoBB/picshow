@@ -122,3 +122,11 @@ func GetStats(db *gorm.DB) (*ServerStats, error) {
 		ImageCount: totalImageCount,
 	}, nil
 }
+
+func GetFile(db *gorm.DB, id uint64) (*File, error) {
+	var file File
+	if err := db.First(&file, id).Error; err != nil {
+		return nil, err
+	}
+	return &file, nil
+}
