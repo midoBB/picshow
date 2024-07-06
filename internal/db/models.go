@@ -22,7 +22,8 @@ type Image struct {
 	File            File `json:"-"`
 	ThumbnailWidth  uint64
 	ThumbnailHeight uint64
-	ThumbnailData   []byte
+	ThumbnailData   []byte `json:"-"`
+	ThumbnailBase64 string `gorm:"-"`
 }
 
 type Video struct {
@@ -35,7 +36,8 @@ type Video struct {
 	File            File `json:"-"`
 	ThumbnailWidth  uint64
 	ThumbnailHeight uint64
-	ThumbnailData   []byte
+	ThumbnailData   []byte `json:"-"`
+	ThumbnailBase64 string `gorm:"-"`
 }
 
 type ServerStats struct {

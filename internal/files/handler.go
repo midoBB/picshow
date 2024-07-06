@@ -3,7 +3,6 @@ package files
 import (
 	"bytes"
 	"crypto/md5"
-	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"image"
@@ -198,8 +197,4 @@ func (h *handler) handleNewImage(filePath string, file db.File) error {
 
 	log.Printf("Successfully processed and saved image: %s", filepath.Base(filePath))
 	return nil
-}
-
-func ThumbBytesToBase64(thumbBytes []byte) string {
-	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(thumbBytes)
 }

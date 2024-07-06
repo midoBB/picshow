@@ -3,6 +3,7 @@ package db
 import (
 	"fmt"
 	"math"
+	"picshow/internal/utils"
 
 	"gorm.io/gorm"
 )
@@ -16,7 +17,7 @@ type Pagination struct {
 }
 
 type FilesWithPagination struct {
-	Files      []File     `json:"files"`
+	Files      []*File    `json:"files"`
 	Pagination Pagination `json:"pagination"`
 }
 
@@ -51,7 +52,7 @@ func OrderFiles(by OrderBy, direction OrderDirection, seed *uint64) func(db *gor
 }
 
 func GetFiles(db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDirection, seed *uint64) (*FilesWithPagination, error) {
-	var files []File
+	var files []*File
 	var totalRecords int64
 
 	// Count total records
@@ -78,6 +79,14 @@ func GetFiles(db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDir
 	if page > 1 {
 		prev := page - 1
 		prevPage = &prev
+	}
+
+	for _, file := range files {
+		if file.Image != nil {
+			file.Image.ThumbnailBase64 = utils.ThumbBytesToBase64(file.Image.ThumbnailData)
+		} else if file.Video != nil {
+			file.Video.ThumbnailBase64 = utils.ThumbBytesToBase64(file.Video.ThumbnailData)
+		}
 	}
 
 	pagination := Pagination{
