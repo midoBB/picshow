@@ -2,6 +2,7 @@ create table files
 (
     id integer
     primary key autoincrement,
+    created_at datetime default current_timestamp,
     hash text unique not null,
     filename text not null,
     size integer not null,
@@ -12,7 +13,6 @@ create table images
 (
     id integer
     primary key autoincrement,
-    created_at datetime default current_timestamp,
     full_mime_type text not null,
     width integer not null,
     height integer not null,
@@ -27,7 +27,6 @@ create table videos
 (
     id integer
     primary key autoincrement,
-    created_at datetime default current_timestamp,
     full_mime_type text not null,
     width integer not null,
     height integer not null,

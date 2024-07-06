@@ -33,7 +33,7 @@ func createSchema(dbPath string) error {
 	return nil
 }
 
-func GetDb(dbPath string) (*gorm.DB, error) {
+func GetDb() (*gorm.DB, error) {
 	dataFolder, exists := os.LookupEnv("$XDG_DATA_HOME")
 	if !exists {
 		dataFolder = os.Getenv("HOME") + "/.local/share"

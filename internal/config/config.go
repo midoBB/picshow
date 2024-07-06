@@ -7,7 +7,7 @@ type Config struct {
 	BatchSize        int
 	HashSize         int
 	MaxThumbnailSize int
-	DbPath           string
+	Port             int
 }
 
 func LoadConfig() (*Config, error) {

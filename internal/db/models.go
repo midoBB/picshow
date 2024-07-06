@@ -3,21 +3,23 @@ package db
 import "time"
 
 type File struct {
-	ID       uint64 `gorm:"primaryKey"`
-	Hash     string `gorm:"uniqueIndex"`
-	Filename string
-	Size     int64
-	MimeType string
+	ID        uint64 `gorm:"primaryKey"`
+	Hash      string `gorm:"uniqueIndex"`
+	CreatedAt time.Time
+	Filename  string
+	Size      int64
+	MimeType  string
+	Image     *Image `gorm:"foreignKey:FileID" json:",omitempty"`
+	Video     *Video `gorm:"foreignKey:FileID" json:",omitempty"`
 }
 
 type Image struct {
 	ID              uint `gorm:"primaryKey"`
-	CreatedAt       time.Time
 	FullMimeType    string
 	Width           uint64
 	Height          uint64
 	FileID          uint64
-	File            File
+	File            File `json:"-"`
 	ThumbnailWidth  uint64
 	ThumbnailHeight uint64
 	ThumbnailData   []byte
@@ -25,17 +27,23 @@ type Image struct {
 
 type Video struct {
 	ID              uint64 `gorm:"primaryKey"`
-	CreatedAt       time.Time
 	FullMimeType    string
 	Width           uint64
 	Height          uint64
 	Length          uint64
 	FileID          uint64
-	File            File
+	File            File `json:"-"`
 	ThumbnailWidth  uint64
 	ThumbnailHeight uint64
 	ThumbnailData   []byte
 }
+
+type ServerStats struct {
+	Count      int64 `json:"count"`
+	VideoCount int64 `json:"video_count"`
+	ImageCount int64 `json:"image_count"`
+}
+
 type MimeType string
 
 const (
