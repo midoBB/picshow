@@ -35,6 +35,11 @@ func newHandler(config *config.Config, db *gorm.DB) *handler {
 	return &handler{config: config, db: db}
 }
 
+func getFullMimeType(filePath string) string {
+	mtype, _ := mimetype.DetectFile(filePath) // since this was already had been given a mimetype we know this operation will not fail
+	return mtype.String()
+}
+
 func getFileMimeType(filePath string) (db.MimeType, error) {
 	mtype, err := mimetype.DetectFile(filePath)
 	if err != nil {
@@ -118,7 +123,7 @@ func (h *handler) handleNewVideo(filePath string, file db.File) error {
 	thumbHeight := thumbBounds.Max.Y - thumbBounds.Min.Y
 	// Create Video record
 	image := db.Video{
-		FullMimeType:    file.MimeType,
+		FullMimeType:    getFullMimeType(filePath),
 		Width:           width,
 		Height:          height,
 		FileID:          file.ID,
@@ -177,7 +182,7 @@ func (h *handler) handleNewImage(filePath string, file db.File) error {
 
 	// Create Image record
 	image := db.Image{
-		FullMimeType:    file.MimeType,
+		FullMimeType:    getFullMimeType(filePath),
 		Width:           uint64(width),
 		Height:          uint64(height),
 		FileID:          file.ID,
