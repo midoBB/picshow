@@ -8,6 +8,7 @@ type Config struct {
 	HashSize         int
 	MaxThumbnailSize int
 	Port             int
+	RefreshInterval  int
 }
 
 func LoadConfig() (*Config, error) {
