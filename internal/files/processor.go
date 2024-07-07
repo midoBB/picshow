@@ -96,6 +96,12 @@ func (p *Processor) Process() error {
 			updateBuffer = updateBuffer[:0]
 		}
 		if len(deleteBuffer) > 0 {
+			if err := p.db.Where("file_id IN (select id from files where hash IN ? )", deleteBuffer).Delete(&db.Image{}).Error; err != nil {
+				log.Printf("Error deleting files in batch: %v", err)
+			}
+			if err := p.db.Where("file_id IN (select id from files where hash IN ? )", deleteBuffer).Delete(&db.Video{}).Error; err != nil {
+				log.Printf("Error deleting files in batch: %v", err)
+			}
 			if err := p.db.Where("hash IN ?", deleteBuffer).Delete(&db.File{}).Error; err != nil {
 				log.Printf("Error deleting files in batch: %v", err)
 			}

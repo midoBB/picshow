@@ -41,12 +41,3 @@ create table videos
 -- Index for file_id in images and videos tables
 create index idx_images_file_id on images (file_id);
 create index idx_videos_file_id on videos (file_id);
-
--- Trigger to delete associated image or video when a file is deleted
-create trigger delete_associated_media
-after delete on files
-for each row
-begin
-delete from images where file_id = old.id;
-delete from videos where file_id = old.id;
-end;
