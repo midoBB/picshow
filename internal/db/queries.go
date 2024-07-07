@@ -51,12 +51,21 @@ func OrderFiles(by OrderBy, direction OrderDirection, seed *uint64) func(db *gor
 	}
 }
 
-func GetFiles(db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDirection, seed *uint64) (*FilesWithPagination, error) {
+func ByType(mimetype *string) func(db *gorm.DB) *gorm.DB {
+	return func(db *gorm.DB) *gorm.DB {
+		if mimetype == nil {
+			return db
+		}
+		return db.Where("mime_type = ?", mimetype)
+	}
+}
+
+func GetFiles(db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDirection, seed *uint64, mimetype *string) (*FilesWithPagination, error) {
 	var files []*File
 	var totalRecords int64
 
 	// Count total records
-	if err := db.Model(&File{}).Count(&totalRecords).Error; err != nil {
+	if err := db.Model(&File{}).Scopes(ByType(mimetype)).Count(&totalRecords).Error; err != nil {
 		return nil, err
 	}
 
@@ -65,7 +74,7 @@ func GetFiles(db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDir
 	offset := (page - 1) * pageSize
 
 	// Fetch files with pagination
-	if err := db.Preload("Image").Preload("Video").Scopes(OrderFiles(order, direction, seed)).
+	if err := db.Preload("Image").Preload("Video").Scopes(ByType(mimetype), OrderFiles(order, direction, seed)).
 		Offset(offset).Limit(pageSize).Find(&files).Error; err != nil {
 		return nil, err
 	}

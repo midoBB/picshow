@@ -45,6 +45,7 @@ type FileQuery struct {
 	Order    *string `query:"order"`
 	OrderDir *string `query:"direction"`
 	Seed     *uint64 `query:"seed"`
+	Type     *string `query:"type"`
 }
 
 func (fq *FileQuery) BindAndSetDefaults(e echo.Context) error {
@@ -75,7 +76,7 @@ func (s *Server) getFiles(e echo.Context) error {
 	if err := query.BindAndSetDefaults(e); err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Failed to parse query"})
 	}
-	files, err := db.GetFiles(s.db, *query.Page, *query.PageSize, db.OrderBy(*query.Order), db.OrderDirection(*query.OrderDir), query.Seed)
+	files, err := db.GetFiles(s.db, *query.Page, *query.PageSize, db.OrderBy(*query.Order), db.OrderDirection(*query.OrderDir), query.Seed, query.Type)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch files"})
 	}
