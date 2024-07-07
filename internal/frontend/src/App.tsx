@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, useMemo } from "react";
 import { Player, Video, DefaultUi } from "@vime/react";
 import { BASE_URL, fetchFileContents } from "@/queries/api";
+import Navbar from "@/Navbar";
 import Lightbox from "yet-another-react-lightbox";
 import Slideshow from "yet-another-react-lightbox/plugins/slideshow";
 import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
@@ -105,7 +106,7 @@ export default function App() {
     setIsOpen(true);
   };
 
-  const { data: stats, isLoading: isLoadingStats } = useStats();
+  const { isLoading: isLoadingStats } = useStats();
   const {
     data,
     fetchNextPage,
@@ -179,18 +180,8 @@ export default function App() {
   }
 
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-2xl font-bold mb-4">File Manager</h1>
-
-      {stats && (
-        <div className="bg-gray-100 p-4 mb-4 rounded">
-          <h2 className="text-xl font-semibold mb-2">Stats</h2>
-          <p>Total Files: {stats.count}</p>
-          <p>Images: {stats.image_count}</p>
-          <p>Videos: {stats.video_count}</p>
-        </div>
-      )}
-
+    <div className="flex flex-col h-full">
+      <Navbar />
       <Lightbox
         open={isOpen}
         close={() => setIsOpen(false)}
@@ -219,36 +210,37 @@ export default function App() {
           },
         }}
       />
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-8">
-        {allFiles.map((file, index) => (
-          <div key={`${file.pageIndex}-${file.fileIndex}`} className="mb-8">
-            <div
-              className="cursor-pointer group"
-              onClick={() => openLightbox(index)}
-            >
-              <figure className="relative h-64 w-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
-                <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
-                  {file.Image && (
-                    <img
-                      src={file.Image.ThumbnailBase64}
-                      alt={file.Filename}
-                      className="w-full h-full object-contain aspect-auto rounded-lg"
-                    />
-                  )}
-                  {file.Video && (
-                    <img
-                      src={file.Video.ThumbnailBase64}
-                      alt={file.Filename}
-                      className="w-full h-full object-contain aspect-auto rounded-lg"
-                    />
-                  )}
-                </div>
-              </figure>
+      <div className="container p-4 mx-auto">
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-8">
+          {allFiles.map((file, index) => (
+            <div key={`${file.pageIndex}-${file.fileIndex}`} className="mb-8">
+              <div
+                className="cursor-pointer group"
+                onClick={() => openLightbox(index)}
+              >
+                <figure className="relative h-64 w-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
+                  <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
+                    {file.Image && (
+                      <img
+                        src={file.Image.ThumbnailBase64}
+                        alt={file.Filename}
+                        className="w-full h-full object-contain aspect-auto rounded-lg"
+                      />
+                    )}
+                    {file.Video && (
+                      <img
+                        src={file.Video.ThumbnailBase64}
+                        alt={file.Filename}
+                        className="w-full h-full object-contain aspect-auto rounded-lg"
+                      />
+                    )}
+                  </div>
+                </figure>
+              </div>
             </div>
-          </div>
-        ))}
+          ))}
+        </div>
       </div>
-
       {isFetchingNextPage && (
         <div className="text-center py-4">Loading more...</div>
       )}
