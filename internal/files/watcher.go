@@ -106,12 +106,16 @@ func (w *Watcher) handleCreate(filePath string) {
 		log.Printf("Successfully inserted new file: %+v", newFile)
 	}
 	if mtype == db.MimeTypeImage {
-		if err := w.handler.handleNewImage(filePath, newFile); err != nil {
+		if image, err := w.handler.handleNewImage(filePath, newFile); err != nil {
 			log.Printf("Error processing image %s: %v", filePath, err)
+		} else {
+			w.db.Create(&image)
 		}
 	} else if mtype == db.MimeTypeVideo {
-		if err := w.handler.handleNewVideo(filePath, newFile); err != nil {
+		if video, err := w.handler.handleNewVideo(filePath, newFile); err != nil {
 			log.Printf("Error processing video %s: %v", filePath, err)
+		} else {
+			w.db.Create(&video)
 		}
 	}
 }

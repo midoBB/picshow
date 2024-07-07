@@ -50,7 +50,8 @@ func (p *Processor) Process() error {
 	insertBuffer := make([]db.File, 0, p.config.BatchSize)
 	updateBuffer := make([]db.File, 0, p.config.BatchSize)
 	deleteBuffer := make([]string, 0, p.config.BatchSize)
-
+	imageBuffer := make([]db.Image, 0, p.config.BatchSize)
+	videoBuffer := make([]db.Video, 0, p.config.BatchSize)
 	applyBuffers := func() {
 		if len(insertBuffer) > 0 {
 			if err := p.db.CreateInBatches(insertBuffer, p.config.BatchSize).Error; err != nil {
@@ -59,16 +60,32 @@ func (p *Processor) Process() error {
 			for _, file := range insertBuffer {
 				filePath := filepath.Join(p.config.FolderPath, file.Filename)
 				if db.MimeType(file.MimeType) == db.MimeTypeImage {
-					if err := p.handler.handleNewImage(filePath, file); err != nil {
+					if image, err := p.handler.handleNewImage(filePath, file); err != nil {
 						log.Printf("Error processing image %s: %v", filePath, err)
+					} else {
+						imageBuffer = append(imageBuffer, *image)
 					}
 				} else if db.MimeType(file.MimeType) == db.MimeTypeVideo {
-					if err := p.handler.handleNewVideo(filePath, file); err != nil {
+					if video, err := p.handler.handleNewVideo(filePath, file); err != nil {
 						log.Printf("Error processing video %s: %v", filePath, err)
+					} else {
+						videoBuffer = append(videoBuffer, *video)
 					}
 				}
 			}
 			insertBuffer = insertBuffer[:0]
+		}
+		if len(imageBuffer) > 0 {
+			if err := p.db.CreateInBatches(imageBuffer, p.config.BatchSize).Error; err != nil {
+				log.Printf("Error inserting images in batch: %v", err)
+			}
+			imageBuffer = imageBuffer[:0]
+		}
+		if len(videoBuffer) > 0 {
+			if err := p.db.CreateInBatches(videoBuffer, p.config.BatchSize).Error; err != nil {
+				log.Printf("Error inserting videos in batch: %v", err)
+			}
+			videoBuffer = videoBuffer[:0]
 		}
 		if len(updateBuffer) > 0 {
 			for _, file := range updateBuffer {

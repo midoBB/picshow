@@ -10,10 +10,8 @@ import (
 	"image/jpeg"
 	_ "image/png"
 	"io"
-	"log"
 	"math"
 	"os"
-	"path/filepath"
 	"picshow/internal/config"
 	"picshow/internal/db"
 	"strings"
@@ -97,10 +95,10 @@ func readFrameAsJPEG(inFileName string, timestamp float64) io.Reader {
 	return buf
 }
 
-func (h *handler) handleNewVideo(filePath string, file db.File) error {
+func (h *handler) handleNewVideo(filePath string, file db.File) (*db.Video, error) {
 	res, err := ffmpeg.Probe(filePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	duration := gjson.Get(res, "format.duration").Float()
 	width := gjson.Get(res, "streams.#(codec_type=video).width").Uint()
@@ -109,7 +107,7 @@ func (h *handler) handleNewVideo(filePath string, file db.File) error {
 	reader := readFrameAsJPEG(filePath, screenshotAt)
 	img, err := imaging.Decode(reader)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Create a thumbnail while maintaining aspect ratio
@@ -123,7 +121,7 @@ func (h *handler) handleNewVideo(filePath string, file db.File) error {
 	// Encode thumbnail to JPEG
 	var thumbnailBuffer bytes.Buffer
 	if err := jpeg.Encode(&thumbnailBuffer, thumbnail, &jpeg.Options{Quality: 85}); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Get thumbnail dimensions
@@ -132,7 +130,7 @@ func (h *handler) handleNewVideo(filePath string, file db.File) error {
 	thumbHeight := thumbBounds.Max.Y - thumbBounds.Min.Y
 
 	// Create Video record
-	image := db.Video{
+	video := db.Video{
 		FullMimeType:    getFullMimeType(filePath),
 		Width:           width,
 		Height:          height,
@@ -143,27 +141,21 @@ func (h *handler) handleNewVideo(filePath string, file db.File) error {
 		ThumbnailData:   thumbnailBuffer.Bytes(),
 	}
 
-	// Save Image record to database
-	if err := h.db.Create(&image).Error; err != nil {
-		return err
-	}
-
-	log.Printf("Successfully processed and saved image: %s", filepath.Base(filePath))
-	return nil
+	return &video, nil
 }
 
-func (h *handler) handleNewImage(filePath string, file db.File) error {
+func (h *handler) handleNewImage(filePath string, file db.File) (*db.Image, error) {
 	// Open the image file
 	imgFile, err := os.Open(filePath)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer imgFile.Close()
 
 	// Decode the image
 	img, _, err := image.Decode(imgFile)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
 	// Get image dimensions
@@ -182,7 +174,7 @@ func (h *handler) handleNewImage(filePath string, file db.File) error {
 	// Encode thumbnail to JPEG
 	var thumbnailBuffer bytes.Buffer
 	if err := jpeg.Encode(&thumbnailBuffer, thumbnail, &jpeg.Options{Quality: 85}); err != nil {
-		return err
+		return nil, err
 	}
 
 	// Get thumbnail dimensions
@@ -201,11 +193,5 @@ func (h *handler) handleNewImage(filePath string, file db.File) error {
 		ThumbnailData:   thumbnailBuffer.Bytes(),
 	}
 
-	// Save Image record to database
-	if err := h.db.Create(&image).Error; err != nil {
-		return err
-	}
-
-	log.Printf("Successfully processed and saved image: %s", filepath.Base(filePath))
-	return nil
+	return &image, nil
 }
