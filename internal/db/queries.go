@@ -130,3 +130,7 @@ func GetFile(db *gorm.DB, id uint64) (*File, error) {
 	}
 	return &file, nil
 }
+
+func DeleteFile(db *gorm.DB, id uint64) error {
+	return db.Delete(&File{}, id).Error
+}

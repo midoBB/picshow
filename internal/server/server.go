@@ -31,6 +31,7 @@ func (s *Server) Start() error {
 	e.Use(middleware.CORS())
 
 	e.GET("/", s.getFiles)
+	e.DELETE("/:id", s.deleteFile)
 	e.GET("/image/:id", s.getImage)
 	e.GET("/video/:id", s.streamVideo)
 	e.HEAD("/video/:id", s.streamVideo)
@@ -121,4 +122,23 @@ func (s *Server) getStats(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch count"})
 	}
 	return c.JSON(http.StatusOK, stats)
+}
+
+func (s *Server) deleteFile(e echo.Context) error {
+	id := e.Param("id")
+	fileId, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
+	}
+	file, err := db.GetFile(s.db, fileId)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
+	}
+	if err := os.Remove(filepath.Join(s.config.FolderPath, file.Filename)); err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file"})
+	}
+	if err := db.DeleteFile(s.db, fileId); err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file from database"})
+	}
+	return e.NoContent(http.StatusNoContent)
 }
