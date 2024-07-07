@@ -54,6 +54,7 @@ func (p *Processor) Process() error {
 	videoBuffer := make([]db.Video, 0, p.config.BatchSize)
 	applyBuffers := func() {
 		if len(insertBuffer) > 0 {
+			// FIXME: This should catch the hash conflicts that happen and treat them accordingly or at least delete the corresponding image/video
 			if err := p.db.CreateInBatches(insertBuffer, p.config.BatchSize).Error; err != nil {
 				log.Printf("Error inserting files in batch: %v", err)
 			}
