@@ -10,8 +10,9 @@ import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
 import { useStats, usePaginatedFiles } from "@/queries/loaders";
 import { useQuery } from "@tanstack/react-query";
+import useNavbarStore from "@/state";
 
-const PAGE_SIZE = 10;
+const PAGE_SIZE = 5;
 
 const CustomThumbnail = ({ slide }: any) => {
   if (slide.type === "custom") {
@@ -98,6 +99,13 @@ const CustomSlide = ({ slide }: any) => {
 };
 
 export default function App() {
+  const { sortDirection, sortType, selectedCategory, seed, setSeed } =
+    useNavbarStore();
+  useEffect(() => {
+    if (!seed) {
+      setSeed(Math.floor(Date.now() / 1000));
+    }
+  }, [seed, setSeed]);
   const [isOpen, setIsOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
 
@@ -113,8 +121,13 @@ export default function App() {
     hasNextPage,
     isFetchingNextPage,
     isLoading: isLoadingFiles,
-  } = usePaginatedFiles(PAGE_SIZE);
-
+  } = usePaginatedFiles({
+    pageSize: PAGE_SIZE,
+    order: sortType,
+    direction: sortDirection,
+    type: selectedCategory === "all" ? undefined : selectedCategory,
+    seed,
+  });
   const handleScroll = useCallback(() => {
     if (
       window.innerHeight + document.documentElement.scrollTop >=

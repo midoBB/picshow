@@ -2,43 +2,46 @@ import { create } from "zustand";
 
 type NavbarState = {
   sortDirection: "asc" | "desc";
-  sortType: "date" | "random";
+  sortType: "created_at" | "random";
   selectedCategory: string;
   isSortDirectionDisabled: boolean;
+  seed: number | null;
   setSortDirection: (direction: "asc" | "desc") => void;
-  setSortType: (type: "date" | "random") => void;
+  setSortType: (type: "created_at" | "random") => void;
   setSelectedCategory: (category: string) => void;
+  setSeed: (seed: number) => void;
   toggleSortDirection: () => void;
   toggleSortType: () => void;
 };
 
 const useNavbarStore = create<NavbarState>((set) => ({
   sortDirection: "desc",
-  sortType: "date",
+  sortType: "created_at",
   selectedCategory: "all",
   isSortDirectionDisabled: false,
+  seed: null,
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSortType: (type) =>
     set((state) => ({
       sortType: type,
       isSortDirectionDisabled: type === "random",
-      // Reset sort direction to 'desc' when switching to 'random'
       sortDirection: type === "random" ? "desc" : state.sortDirection,
     })),
   setSelectedCategory: (category) => set({ selectedCategory: category }),
+  setSeed: (seed) => set({ seed }),
   toggleSortDirection: () =>
     set((state) => ({
       sortDirection: state.sortDirection === "desc" ? "asc" : "desc",
     })),
   toggleSortType: () =>
     set((state) => {
-      const newType = state.sortType === "date" ? "random" : "date";
+      const newType = state.sortType === "created_at" ? "random" : "created_at";
       return {
         sortType: newType,
         isSortDirectionDisabled: newType === "random",
-        // Reset sort direction to 'desc' when switching to 'random'
         sortDirection: newType === "random" ? "desc" : state.sortDirection,
       };
     }),
 }));
+
 export default useNavbarStore;
