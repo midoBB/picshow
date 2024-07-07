@@ -125,7 +125,7 @@ func GetStats(db *gorm.DB) (*ServerStats, error) {
 
 func GetFile(db *gorm.DB, id uint64) (*File, error) {
 	var file File
-	if err := db.First(&file, id).Error; err != nil {
+	if err := db.Preload("Video").First(&file, id).Error; err != nil {
 		return nil, err
 	}
 	return &file, nil

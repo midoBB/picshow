@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"picshow/internal/config"
 	"picshow/internal/db"
@@ -26,11 +27,13 @@ func (s *Server) Start() error {
 	e := echo.New()
 
 	e.Use(middleware.Logger())
-	e.Use(middleware.Recover())
+	e.Use(middleware.Gzip())
 	e.Use(middleware.CORS())
 
 	e.GET("/", s.getFiles)
-	e.GET("/:id", s.getFile)
+	e.GET("/image/:id", s.getImage)
+	e.GET("/video/:id", s.streamVideo)
+	e.HEAD("/video/:id", s.streamVideo)
 	e.GET("/stats", s.getStats)
 	return e.Start(fmt.Sprintf(":%d", s.config.Port))
 }
@@ -78,7 +81,7 @@ func (s *Server) getFiles(e echo.Context) error {
 	return e.JSON(http.StatusOK, files)
 }
 
-func (s *Server) getFile(e echo.Context) error {
+func (s *Server) getImage(e echo.Context) error {
 	id := e.Param("id")
 	fileId, err := strconv.ParseUint(id, 10, 64)
 	if err != nil {
@@ -91,9 +94,25 @@ func (s *Server) getFile(e echo.Context) error {
 	if file.MimeType == db.MimeTypeImage.String() {
 		return e.File(filepath.Join(s.config.FolderPath, file.Filename))
 	} else {
-		// TODO: Here we will need to create a stream from the file
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Unsupported mimetype"})
 	}
+}
+
+func (s *Server) streamVideo(e echo.Context) error {
+	id := e.Param("id")
+	fileId, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
+	}
+	file, err := db.GetFile(s.db, fileId)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
+	}
+	f, err := os.Open(filepath.Join(s.config.FolderPath, file.Filename))
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to open file"})
+	}
+	return e.Stream(http.StatusOK, file.Video.FullMimeType, f)
 }
 
 func (s *Server) getStats(c echo.Context) error {
