@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from "react";
-import { BASE_URL, fetchFileContents } from "@/queries/api";
+import { BASE_URL } from "@/queries/api";
 import Navbar from "@/Navbar";
 import Lightbox from "yet-another-react-lightbox";
 import Slideshow from "yet-another-react-lightbox/plugins/slideshow";
@@ -8,9 +8,10 @@ import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
 import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
 import { useStats, usePaginatedFiles } from "@/queries/loaders";
-import { useQuery } from "@tanstack/react-query";
 import useNavbarStore from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
+import VideoSlide from "@/VideoSlide";
+import ImageSlide from "@/ImageSlide";
 
 const PAGE_SIZE = 100; // Increased page size for better performance
 
@@ -29,55 +30,6 @@ const CustomThumbnail = ({ slide }: any) => {
 };
 
 // Custom slide component for the lightbox
-const ImageSlide = ({ slide }: any) => {
-  const [objectUrl, setObjectUrl] = useState<string | null>(null);
-
-  const { data: fullSizeFile, status } = useQuery({
-    queryKey: ["fullSizeFile", slide.id],
-    queryFn: () => fetchFileContents(slide.id),
-    enabled: !!slide.id,
-    staleTime: Infinity, // Cache the result indefinitely
-  });
-
-  useEffect(() => {
-    if (fullSizeFile instanceof Blob) {
-      const url = URL.createObjectURL(fullSizeFile);
-      setObjectUrl(url);
-      return () => {
-        URL.revokeObjectURL(url);
-      };
-    }
-  }, [fullSizeFile]);
-
-  if (status === "pending") {
-    return <div>Loading full-size file...</div>;
-  } else if (status === "error") {
-    return <div>Error loading full-size file...</div>;
-  }
-
-  return (
-    <img
-      src={objectUrl || slide.src}
-      alt={slide.alt}
-      style={{
-        width: "100%",
-        height: "100%",
-        objectFit: "contain",
-      }}
-    />
-  );
-};
-
-const VideoSlide = ({ slide }: any) => {
-  return (
-    <video
-      src={slide.sources[0].src}
-      controls
-      autoPlay
-      className="h-full w-full rounded-lg"
-    />
-  );
-};
 
 const CustomSlide = ({ slide }: any) => {
   if (slide.type === "video") {
