@@ -2,13 +2,13 @@ package files
 
 import (
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
 	"picshow/internal/config"
 	"picshow/internal/db"
-	"sync"
+	"picshow/internal/utils"
+	"strings"
 
 	"gorm.io/gorm"
 )
@@ -43,144 +43,118 @@ func (p *Processor) Process() error {
 		existingHashesMap[hash] = struct{}{}
 	}
 
-	var wg sync.WaitGroup
-	semaphore := make(chan struct{}, 10) // Limit concurrent goroutines
-
-	var mu sync.Mutex
-	insertBuffer := make([]db.File, 0, p.config.BatchSize)
-	updateBuffer := make([]db.File, 0, p.config.BatchSize)
-	deleteBuffer := make([]string, 0, p.config.BatchSize)
-	imageBuffer := make([]db.Image, 0, p.config.BatchSize)
-	videoBuffer := make([]db.Video, 0, p.config.BatchSize)
-	applyBuffers := func() {
-		if len(insertBuffer) > 0 {
-			// FIXME: This should catch the hash conflicts that happen and treat them accordingly or at least delete the corresponding image/video
-			if err := p.db.CreateInBatches(insertBuffer, p.config.BatchSize).Error; err != nil {
-				log.Printf("Error inserting files in batch: %v", err)
-			}
-			for _, file := range insertBuffer {
-				filePath := filepath.Join(p.config.FolderPath, file.Filename)
-				if db.MimeType(file.MimeType) == db.MimeTypeImage {
-					if image, err := p.handler.handleNewImage(filePath, file); err != nil {
-						log.Printf("Error processing image %s: %v", filePath, err)
-					} else {
-						imageBuffer = append(imageBuffer, *image)
-					}
-				} else if db.MimeType(file.MimeType) == db.MimeTypeVideo {
-					if video, err := p.handler.handleNewVideo(filePath, file); err != nil {
-						log.Printf("Error processing video %s: %v", filePath, err)
-					} else {
-						videoBuffer = append(videoBuffer, *video)
-					}
-				}
-			}
-			insertBuffer = insertBuffer[:0]
-		}
-		if len(imageBuffer) > 0 {
-			if err := p.db.CreateInBatches(imageBuffer, p.config.BatchSize).Error; err != nil {
-				log.Printf("Error inserting images in batch: %v", err)
-			}
-			imageBuffer = imageBuffer[:0]
-		}
-		if len(videoBuffer) > 0 {
-			if err := p.db.CreateInBatches(videoBuffer, p.config.BatchSize).Error; err != nil {
-				log.Printf("Error inserting videos in batch: %v", err)
-			}
-			videoBuffer = videoBuffer[:0]
-		}
-		if len(updateBuffer) > 0 {
-			for _, file := range updateBuffer {
-				if err := p.db.Model(&db.File{}).Where("hash = ?", file.Hash).Update("filename", file.Filename).Error; err != nil {
-					log.Printf("Error updating file %s: %v", file.Filename, err)
-				}
-			}
-			updateBuffer = updateBuffer[:0]
-		}
-		if len(deleteBuffer) > 0 {
-			if err := p.db.Where("file_id IN (select id from files where hash IN ? )", deleteBuffer).Delete(&db.Image{}).Error; err != nil {
-				log.Printf("Error deleting files in batch: %v", err)
-			}
-			if err := p.db.Where("file_id IN (select id from files where hash IN ? )", deleteBuffer).Delete(&db.Video{}).Error; err != nil {
-				log.Printf("Error deleting files in batch: %v", err)
-			}
-			if err := p.db.Where("hash IN ?", deleteBuffer).Delete(&db.File{}).Error; err != nil {
-				log.Printf("Error deleting files in batch: %v", err)
-			}
-			deleteBuffer = deleteBuffer[:0]
-		}
-	}
-
 	for _, file := range files {
 		if file.IsDir() {
 			continue
 		}
 
-		wg.Add(1)
-		go func(f fs.DirEntry) {
-			defer wg.Done()
-			semaphore <- struct{}{}
-			defer func() { <-semaphore }()
+		filePath := filepath.Join(p.config.FolderPath, file.Name())
+		hash, err := p.handler.generateFileKey(filePath)
+		if err != nil {
+			log.Printf("Error generating hash for %s: %v", file.Name(), err)
+			continue
+		}
 
-			filePath := filepath.Join(p.config.FolderPath, f.Name())
-			hash, err := p.handler.generateFileKey(filePath)
-			if err != nil {
-				log.Printf("Error generating hash for %s: %v", f.Name(), err)
-				return
+		fileInfo, err := file.Info()
+		if err != nil {
+			log.Printf("Error getting file info for %s: %v", file.Name(), err)
+			continue
+		}
+
+		if _, exists := existingHashesMap[hash]; exists {
+			// File exists, update filename if necessary
+			var existingFile db.File
+			if err := p.db.Where("hash = ?", hash).First(&existingFile).Error; err != nil {
+				log.Printf("Error fetching existing file for hash %s: %v", hash, err)
+				continue
 			}
-
-			fileInfo, err := f.Info()
-			if err != nil {
-				log.Printf("Error getting file info for %s: %v", f.Name(), err)
-				return
-			}
-
-			mu.Lock()
-			defer mu.Unlock()
-
-			if _, exists := existingHashesMap[hash]; exists {
-				// File exists, update filename if necessary
-				var existingFile db.File
-				if err := p.db.Where("hash = ?", hash).First(&existingFile).Error; err != nil {
-					log.Printf("Error fetching existing file for hash %s: %v", hash, err)
-					return
+			if existingFile.Filename != file.Name() {
+				if err := p.db.Model(&db.File{}).Where("hash = ?", hash).Update("filename", file.Name()).Error; err != nil {
+					log.Printf("Error updating file %s: %v", file.Name(), err)
 				}
-				if existingFile.Filename != f.Name() {
-					updateBuffer = append(updateBuffer, db.File{Hash: hash, Filename: f.Name()})
-					if len(updateBuffer) >= p.config.BatchSize {
-						applyBuffers()
+			}
+			delete(existingHashesMap, hash)
+		} else {
+			mtype, err := getFileMimeType(filePath)
+			if err != nil {
+				log.Printf("Error detecting mime type for %s: %v", file.Name(), err)
+				continue
+			}
+
+			// New file, insert it
+			newFile := db.File{Hash: hash, Filename: file.Name(), Size: fileInfo.Size(), MimeType: mtype.String()}
+			if err := p.db.Create(&newFile).Error; err != nil {
+				if strings.Contains(err.Error(), "UNIQUE constraint failed: files.hash") {
+					log.Printf("Duplicate hash detected for %s: %v", file.Name(), err)
+					log.Printf("Duplicate hash detected for %s", file.Name())
+
+					// Create duplicates directory if it doesn't exist
+					duplicatesDir := filepath.Join(filepath.Dir(p.config.FolderPath), "duplicates")
+					if err := os.MkdirAll(duplicatesDir, 0755); err != nil {
+						log.Printf("Error creating duplicates directory: %v", err)
+						continue
+					}
+
+					// Get the original file
+					var originalFile db.File
+					if err := p.db.Where("hash = ?", hash).First(&originalFile).Error; err != nil {
+						log.Printf("Error fetching original file for hash %s: %v", hash, err)
+						continue
+					}
+
+					// Copy the original file to the duplicates directory
+					originalPath := filepath.Join(p.config.FolderPath, originalFile.Filename)
+					originalDuplicatePath := filepath.Join(duplicatesDir, originalFile.Filename)
+					if err := utils.CopyFile(originalPath, originalDuplicatePath); err != nil {
+						log.Printf("Error copying original file %s: %v", originalFile.Filename, err)
+					}
+
+					// Move the duplicate file to the duplicates directory
+					duplicatePath := filepath.Join(duplicatesDir, file.Name())
+					if err := os.Rename(filePath, duplicatePath); err != nil {
+						log.Printf("Error moving duplicate file %s: %v", file.Name(), err)
+					}
+					continue
+				}
+				log.Printf("Error inserting file %s: %v", file.Name(), err)
+				continue
+			}
+
+			// Process new file based on its type
+			if mtype == db.MimeTypeImage {
+				image, err := p.handler.handleNewImage(filePath, newFile)
+				if err != nil {
+					log.Printf("Error processing image %s: %v", filePath, err)
+				} else {
+					if err := p.db.Create(image).Error; err != nil {
+						log.Printf("Error inserting image %s: %v", filePath, err)
 					}
 				}
-				delete(existingHashesMap, hash)
-			} else {
-				mtype, err := getFileMimeType(filePath)
+			} else if mtype == db.MimeTypeVideo {
+				video, err := p.handler.handleNewVideo(filePath, newFile)
 				if err != nil {
-					log.Printf("Error detecting mime type for %s: %v", f.Name(), err)
-					return
-				}
-				// New file, insert it
-				insertBuffer = append(insertBuffer, db.File{Hash: hash, Filename: f.Name(), Size: fileInfo.Size(), MimeType: mtype.String()})
-				if len(insertBuffer) >= p.config.BatchSize {
-					applyBuffers()
+					log.Printf("Error processing video %s: %v", filePath, err)
+				} else {
+					if err := p.db.Create(video).Error; err != nil {
+						log.Printf("Error inserting video %s: %v", filePath, err)
+					}
 				}
 			}
-		}(file)
+		}
 	}
-
-	wg.Wait()
-
-	// Process remaining files in buffers
-	mu.Lock()
-	applyBuffers()
 
 	// Remove files from DB that no longer exist in the folder
 	for hash := range existingHashesMap {
-		deleteBuffer = append(deleteBuffer, hash)
-		if len(deleteBuffer) >= p.config.BatchSize {
-			applyBuffers()
+		if err := p.db.Where("file_id IN (SELECT id FROM files WHERE hash = ?)", hash).Delete(&db.Image{}).Error; err != nil {
+			log.Printf("Error deleting image for hash %s: %v", hash, err)
+		}
+		if err := p.db.Where("file_id IN (SELECT id FROM files WHERE hash = ?)", hash).Delete(&db.Video{}).Error; err != nil {
+			log.Printf("Error deleting video for hash %s: %v", hash, err)
+		}
+		if err := p.db.Where("hash = ?", hash).Delete(&db.File{}).Error; err != nil {
+			log.Printf("Error deleting file for hash %s: %v", hash, err)
 		}
 	}
-	applyBuffers() // Process any remaining deletions
-	mu.Unlock()
 
 	return nil
 }

@@ -111,8 +111,10 @@ export default function App() {
       const file = allFiles[index];
       if (file.Image) {
         return file.Image.ThumbnailHeight;
+      } else if (file.Video) {
+        return file.Video.ThumbnailHeight;
       } else {
-        return file.Video!.ThumbnailHeight;
+        return 300;
       }
     },
     [allFiles],
@@ -153,13 +155,13 @@ export default function App() {
         if (file.MimeType === "video") {
           return {
             type: "video",
-            width: file.Video!.Width, // You might want to replace these with actual video dimensions if available
-            height: file.Video!.Height,
-            poster: file.Video!.ThumbnailBase64,
+            width: file.Video?.Width, // You might want to replace these with actual video dimensions if available
+            height: file.Video?.Height,
+            poster: file.Video?.ThumbnailBase64,
             sources: [
               {
                 src: `${BASE_URL}/video/${file.ID}`,
-                type: file.Video!.FullMimeType,
+                type: file.Video?.FullMimeType,
               },
             ],
             id: file.ID,
@@ -169,7 +171,7 @@ export default function App() {
           // For images, keep the same behavior
           return {
             type: "custom",
-            src: file.Image!.ThumbnailBase64,
+            src: file.Image?.ThumbnailBase64,
             alt: file.Filename,
             id: file.ID,
             hash: file.Hash,
