@@ -15,12 +15,11 @@
     "@tanstack/react-query": "^5.50.1",
     "@tanstack/react-query-devtools": "^5.50.1",
     "@tanstack/react-virtual": "^3.8.1",
-    "@vime/core": "^5.4.1",
-    "@vime/react": "^5.4.1",
     "axios": "^1.7.2",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-icons": "^5.2.1",
+    "video.js": "^8.12.0",
     "yet-another-react-lightbox": "^3.21.1",
     "zod": "^3.23.8",
     "zustand": "^4.5.4"

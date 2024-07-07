@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from "react";
-import { Player, Video, DefaultUi } from "@vime/react";
 import { BASE_URL, fetchFileContents } from "@/queries/api";
 import Navbar from "@/Navbar";
 import Lightbox from "yet-another-react-lightbox";
@@ -71,23 +70,12 @@ const ImageSlide = ({ slide }: any) => {
 
 const VideoSlide = ({ slide }: any) => {
   return (
-    <div className="flex items-center justify-center h-full w-full">
-      <div className="w-full h-full max-w-[90vw] max-h-[90vh]">
-        <Player
-          theme="dark"
-          autoplay
-          loop
-          style={{ width: "100%", height: "100%" }}
-        >
-          <Video poster={slide.poster}>
-            {slide.sources.map((source: any) => (
-              <source key={source.src} src={source.src} type={source.type} />
-            ))}
-          </Video>
-          <DefaultUi />
-        </Player>
-      </div>
-    </div>
+    <video
+      src={slide.sources[0].src}
+      controls
+      autoPlay
+      className="h-full w-full rounded-lg"
+    />
   );
 };
 
