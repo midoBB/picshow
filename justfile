@@ -5,4 +5,4 @@ build:
     env CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w"
 
 run:
-    cd internal/frontend && pnpm run dev & air && fg
+    air
