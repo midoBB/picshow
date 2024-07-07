@@ -103,7 +103,7 @@ const Navbar = () => {
                   onClick={toggleSortType}
                   className="hover:bg-gray-700 p-2 rounded-full"
                 >
-                  {sortType === "date" ? (
+                  {sortType === "created_at" ? (
                     <FaRegCalendarAlt size={20} />
                   ) : (
                     <FaShuffle size={20} />

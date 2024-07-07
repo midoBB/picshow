@@ -14,5 +14,13 @@ export default defineConfig({
       "@": "/src",
     },
   },
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://localhost:8281",
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [react()],
 });
