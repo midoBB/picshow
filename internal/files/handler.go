@@ -2,8 +2,6 @@ package files
 
 import (
 	"bytes"
-	"crypto/md5"
-	"encoding/hex"
 	"fmt"
 	"image"
 	_ "image/gif"
@@ -16,6 +14,7 @@ import (
 	"picshow/internal/db"
 	"strings"
 
+	"github.com/cespare/xxhash"
 	"github.com/disintegration/imaging"
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/tidwall/gjson"
@@ -65,19 +64,25 @@ func (h *handler) generateFileKey(filePath string) (string, error) {
 
 	fileSize := fileInfo.Size()
 
-	// Read the first 'hashSize' bytes for hashing
-	buffer := make([]byte, h.config.HashSize)
-	n, err := file.Read(buffer)
-	if err != nil && err != io.EOF {
-		return "", fmt.Errorf("error reading file: %w", err)
+	// Initialize xxHash
+	hasher := xxhash.New()
+
+	// Read and hash the entire file in chunks
+	buffer := make([]byte, 64*1024)
+	for {
+		n, err := file.Read(buffer)
+		if err != nil && err != io.EOF {
+			return "", fmt.Errorf("error reading file: %w", err)
+		}
+		if n == 0 {
+			break
+		}
+		hasher.Write(buffer[:n])
 	}
 
-	hasher := md5.New()
-	hasher.Write(buffer[:n])
-	contentHash := hex.EncodeToString(hasher.Sum(nil))
+	contentHash := hasher.Sum64()
 
-	// Combine the elements into a key
-	key := fmt.Sprintf("%d_%s", fileSize, contentHash)
+	key := fmt.Sprintf("%d_%d", fileSize, contentHash)
 
 	return key, nil
 }

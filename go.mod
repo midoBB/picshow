@@ -16,6 +16,7 @@ require (
 
 require (
 	github.com/aws/aws-sdk-go v1.54.15 // indirect
+	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/glebarez/go-sqlite v1.22.0 // indirect
