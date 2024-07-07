@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"picshow/internal/config"
 	"picshow/internal/db"
+	"picshow/internal/frontend"
 	"strconv"
 
 	"github.com/labstack/echo/v4"
@@ -30,12 +31,15 @@ func (s *Server) Start() error {
 	e.Use(middleware.Gzip())
 	e.Use(middleware.CORS())
 
-	e.GET("/", s.getFiles)
-	e.DELETE("/:id", s.deleteFile)
-	e.GET("/image/:id", s.getImage)
-	e.GET("/video/:id", s.streamVideo)
-	e.HEAD("/video/:id", s.streamVideo)
-	e.GET("/stats", s.getStats)
+	frontend.RegisterHandlers(e)
+	// API routes
+	api := e.Group("/api")
+	api.GET("/", s.getFiles)
+	api.DELETE("/:id", s.deleteFile)
+	api.GET("/image/:id", s.getImage)
+	api.GET("/video/:id", s.streamVideo)
+	api.GET("/stats", s.getStats)
+
 	return e.Start(fmt.Sprintf(":%d", s.config.Port))
 }
 
