@@ -37,11 +37,8 @@ export const fetchPaginatedFiles = async ({
   return data;
 };
 
-export const fetchFileContents = async (id: string): Promise<Blob> => {
-  const response = await api.get(`/image/${id}`, {
-    responseType: "blob",
-  });
-  return response.data;
+export const deleteFile = async (id: number): Promise<void> => {
+  await api.delete(`/${id}`);
 };
 
 export const fetchStats = async (): Promise<Stats> => {

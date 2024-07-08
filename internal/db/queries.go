@@ -141,5 +141,22 @@ func GetFile(db *gorm.DB, id uint64) (*File, error) {
 }
 
 func DeleteFile(db *gorm.DB, id uint64) error {
-	return db.Delete(&File{}, id).Error
+	// First, delete records from images and videos tables where file_id matches the given id
+	err := db.Where("file_id = ?", id).Delete(&Image{}).Error
+	if err != nil {
+		return err
+	}
+
+	err = db.Where("file_id = ?", id).Delete(&Video{}).Error
+	if err != nil {
+		return err
+	}
+
+	// Finally, delete the record from the files table where id matches
+	err = db.Delete(&File{}, id).Error
+	if err != nil {
+		return err
+	}
+
+	return nil
 }

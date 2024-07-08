@@ -9,12 +9,13 @@ import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
 import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
 import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
-import { useStats, usePaginatedFiles } from "@/queries/loaders";
+import { useStats, usePaginatedFiles, useDeleteFile } from "@/queries/loaders";
 import useNavbarStore from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
-
-const PAGE_SIZE = 5;
+import ConfirmDialog from "@/ConfirmDeleteDialog";
+import * as ContextMenu from "@radix-ui/react-context-menu";
+const PAGE_SIZE = 40;
 
 const CustomSlide = ({ slide }: any) => {
   if (slide.type === "video") {
@@ -27,24 +28,28 @@ export default function App() {
   useEffect(() => {
     function handleResize() {
       if (window.innerWidth < 640) {
-        // Mobile
         setColumnCount(1);
       } else if (window.innerWidth >= 640 && window.innerWidth < 768) {
-        // Tablet
         setColumnCount(2);
       } else {
-        // Monitor
         setColumnCount(3);
       }
     }
 
     window.addEventListener("resize", handleResize);
-    handleResize(); // Initial call
+    handleResize();
 
-    return () => window.removeEventListener("resize", handleResize); // Cleanup
+    return () => window.removeEventListener("resize", handleResize);
   }, []);
-  const { sortDirection, sortType, selectedCategory, seed, setSeed } =
-    useNavbarStore();
+  const {
+    sortDirection,
+    sortType,
+    selectedCategory,
+    seed,
+    setSeed,
+    dontAskAgainForDelete,
+    setDontAskAgainForDelete,
+  } = useNavbarStore();
   useEffect(() => {
     if (!seed) {
       setSeed(Math.floor(Date.now() / 1000));
@@ -52,12 +57,42 @@ export default function App() {
   }, [seed, setSeed]);
   const [isOpen, setIsOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
-
   const openLightbox = (index: number) => {
     setCurrentIndex(index);
     setIsOpen(true);
   };
+  const deleteFileMutation = useDeleteFile();
+  const [deleteDialogState, setDeleteDialogState] = useState<{
+    isOpen: boolean;
+    itemId: number | null;
+  }>({
+    isOpen: false,
+    itemId: null,
+  });
 
+  const handleDelete = useCallback(
+    (id: number) => {
+      if (dontAskAgainForDelete) {
+        deleteFileMutation.mutate(id);
+      } else {
+        setDeleteDialogState({ isOpen: true, itemId: id });
+      }
+    },
+    [deleteFileMutation, dontAskAgainForDelete],
+  );
+
+  const confirmDelete = useCallback(() => {
+    if (deleteDialogState.itemId) {
+      deleteFileMutation.mutate(deleteDialogState.itemId);
+    }
+    setDeleteDialogState({ isOpen: false, itemId: null });
+  }, [deleteDialogState.itemId, deleteFileMutation]);
+
+  const handleOpenChange = useCallback((open: boolean) => {
+    if (!open) {
+      setDeleteDialogState((prev) => ({ ...prev, isOpen: false }));
+    }
+  }, []);
   const { isLoading: isLoadingStats } = useStats();
   const {
     data,
@@ -208,44 +243,56 @@ export default function App() {
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const file = allFiles[virtualRow.index];
             return (
-              <div
-                key={virtualRow.index}
-                className="cursor-pointer group"
-                onClick={() => openLightbox(virtualRow.index)}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: `${(virtualRow.lane / columnCount) * 100}%`,
-                  width: `${100 / columnCount}%`,
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                  padding: "8px",
-                }}
-              >
-                <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
-                  <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
-                    {file.Image && (
-                      <img
-                        src={file.Image.ThumbnailBase64}
-                        alt={file.Filename}
-                        className="w-full h-full object-cover rounded-lg"
-                      />
-                    )}
-                    {file.Video && (
-                      <div className="relative w-full h-full">
-                        <img
-                          src={file.Video.ThumbnailBase64}
-                          alt={file.Filename}
-                          className="w-full h-full object-cover rounded-lg"
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
-                        </div>
+              <ContextMenu.Root key={virtualRow.index}>
+                <ContextMenu.Trigger>
+                  <div
+                    key={virtualRow.index}
+                    className="cursor-pointer group"
+                    onClick={() => openLightbox(virtualRow.index)}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: `${(virtualRow.lane / columnCount) * 100}%`,
+                      width: `${100 / columnCount}%`,
+                      height: `${virtualRow.size}px`,
+                      transform: `translateY(${virtualRow.start}px)`,
+                      padding: "8px",
+                    }}
+                  >
+                    <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
+                      <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
+                        {file.Image && (
+                          <img
+                            src={file.Image.ThumbnailBase64}
+                            alt={file.Filename}
+                            className="w-full h-full object-cover rounded-lg"
+                          />
+                        )}
+                        {file.Video && (
+                          <div className="relative w-full h-full">
+                            <img
+                              src={file.Video.ThumbnailBase64}
+                              alt={file.Filename}
+                              className="w-full h-full object-cover rounded-lg"
+                            />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    )}
+                    </figure>
                   </div>
-                </figure>
-              </div>
+                </ContextMenu.Trigger>
+                <ContextMenu.Content className="min-w-[220px] bg-white rounded-md overflow-hidden p-[5px] shadow-[0px_10px_38px_-10px_rgba(22,_23,_24,_0.35),_0px_10px_20px_-15px_rgba(22,_23,_24,_0.2)]">
+                  <ContextMenu.Item
+                    className="text-[13px] leading-none text-violet11 rounded-[3px] flex items-center h-[25px] px-[5px] relative pl-[25px] select-none outline-none data-[disabled]:text-mauve8 data-[disabled]:pointer-events-none data-[highlighted]:bg-violet9 data-[highlighted]:text-violet1 cursor-pointer"
+                    onSelect={() => handleDelete(file.ID)}
+                  >
+                    Delete
+                  </ContextMenu.Item>
+                </ContextMenu.Content>
+              </ContextMenu.Root>
             );
           })}
         </div>
@@ -256,6 +303,13 @@ export default function App() {
           <div className="text-center py-4">No more files</div>
         )}
       </div>
+      <ConfirmDialog
+        isOpen={deleteDialogState.isOpen}
+        onOpenChange={handleOpenChange}
+        onConfirm={confirmDelete}
+        dontAskAgain={dontAskAgainForDelete}
+        setDontAskAgain={setDontAskAgainForDelete}
+      />
     </div>
   );
 }

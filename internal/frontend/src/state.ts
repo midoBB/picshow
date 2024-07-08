@@ -6,6 +6,8 @@ type NavbarState = {
   selectedCategory: string;
   isSortDirectionDisabled: boolean;
   seed: number | null;
+  dontAskAgainForDelete: boolean;
+  setDontAskAgainForDelete: (value: boolean) => void;
   setSortDirection: (direction: "asc" | "desc") => void;
   setSortType: (type: "created_at" | "random") => void;
   setSelectedCategory: (category: string) => void;
@@ -20,6 +22,8 @@ const useNavbarStore = create<NavbarState>((set) => ({
   selectedCategory: "all",
   isSortDirectionDisabled: false,
   seed: null,
+  dontAskAgainForDelete: false,
+  setDontAskAgainForDelete: (value) => set({ dontAskAgainForDelete: value }),
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSortType: (type) =>
     set((state) => ({
