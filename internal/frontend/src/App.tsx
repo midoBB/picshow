@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from "react";
+import { FaRegPlayCircle } from "react-icons/fa";
 import { BASE_URL } from "@/queries/api";
 import Navbar from "@/Navbar";
 import Lightbox from "yet-another-react-lightbox";
@@ -255,11 +256,16 @@ export default function App() {
                       />
                     )}
                     {file.Video && (
-                      <img
-                        src={file.Video.ThumbnailBase64}
-                        alt={file.Filename}
-                        className="w-full h-full object-cover rounded-lg"
-                      />
+                      <div className="relative w-full h-full">
+                        <img
+                          src={file.Video.ThumbnailBase64}
+                          alt={file.Filename}
+                          className="w-full h-full object-cover rounded-lg"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
+                        </div>
+                      </div>
                     )}
                   </div>
                 </figure>
