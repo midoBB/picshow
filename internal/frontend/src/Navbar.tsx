@@ -1,3 +1,6 @@
+import { useState } from "react";
+import { FaChartBar } from "react-icons/fa";
+import StatsDialog from "@/StatsDialog";
 import * as Select from "@radix-ui/react-select";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -11,6 +14,7 @@ import { FaShuffle } from "react-icons/fa6";
 import useNavbarStore from "./state";
 
 const Navbar = () => {
+  const [isStatsOpen, setIsStatsOpen] = useState(false);
   const {
     sortDirection,
     sortType,
@@ -126,8 +130,27 @@ const Navbar = () => {
               </Tooltip.Portal>
             </Tooltip.Root>
           </Tooltip.Provider>
+          <Tooltip.Provider>
+            <Tooltip.Root>
+              <Tooltip.Trigger asChild>
+                <button
+                  onClick={() => setIsStatsOpen(true)}
+                  className="hover:bg-gray-700 p-2 rounded-full"
+                >
+                  <FaChartBar size={20} />
+                </button>
+              </Tooltip.Trigger>
+              <Tooltip.Portal>
+                <Tooltip.Content className="bg-gray-700 text-white px-2 py-1 rounded text-sm z-50">
+                  View Stats
+                  <Tooltip.Arrow className="fill-gray-700" />
+                </Tooltip.Content>
+              </Tooltip.Portal>
+            </Tooltip.Root>
+          </Tooltip.Provider>
         </div>
       </div>
+      <StatsDialog isOpen={isStatsOpen} onClose={() => setIsStatsOpen(false)} />
     </nav>
   );
 };
