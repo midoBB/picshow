@@ -4,6 +4,7 @@ import { BASE_URL } from "@/queries/api";
 import Navbar from "@/Navbar";
 import Lightbox from "yet-another-react-lightbox";
 import Slideshow from "yet-another-react-lightbox/plugins/slideshow";
+import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
 import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
 import "yet-another-react-lightbox/styles.css";
@@ -12,31 +13,12 @@ import { useStats, usePaginatedFiles } from "@/queries/loaders";
 import useNavbarStore from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
-import ImageSlide from "@/ImageSlide";
 
-const PAGE_SIZE = 40;
-
-const CustomThumbnail = ({ slide }: any) => {
-  if (slide.type === "custom") {
-    return (
-      <div className="thumbnail">
-        <img src={slide.src} alt={slide.alt} />
-      </div>
-    );
-  } else {
-    <div className="thumbnail">
-      <img src={slide.poster} alt={slide.alt} />
-    </div>;
-  }
-};
-
-// Custom slide component for the lightbox
+const PAGE_SIZE = 5;
 
 const CustomSlide = ({ slide }: any) => {
   if (slide.type === "video") {
     return <VideoSlide slide={slide} />;
-  } else {
-    return <ImageSlide slide={slide} />;
   }
 };
 
@@ -50,9 +32,6 @@ export default function App() {
       } else if (window.innerWidth >= 640 && window.innerWidth < 768) {
         // Tablet
         setColumnCount(2);
-      } else if (window.innerWidth >= 768 && window.innerWidth < 1024) {
-        // Laptop
-        setColumnCount(3);
       } else {
         // Monitor
         setColumnCount(3);
@@ -155,7 +134,7 @@ export default function App() {
         if (file.MimeType === "video") {
           return {
             type: "video",
-            width: file.Video?.Width, // You might want to replace these with actual video dimensions if available
+            width: file.Video?.Width,
             height: file.Video?.Height,
             poster: file.Video?.ThumbnailBase64,
             sources: [
@@ -168,10 +147,9 @@ export default function App() {
             hash: file.Hash,
           };
         } else {
-          // For images, keep the same behavior
           return {
-            type: "custom",
-            src: file.Image?.ThumbnailBase64,
+            type: "image",
+            src: `${BASE_URL}/image/${file.ID}`,
             alt: file.Filename,
             id: file.ID,
             hash: file.Hash,
@@ -195,11 +173,10 @@ export default function App() {
         slides={slides}
         fullscreen={{ auto: true }}
         slideshow={{ autoplay: false, delay: 5000 }}
-        plugins={[Thumbnails, Fullscreen, Slideshow]}
+        plugins={[Thumbnails, Fullscreen, Slideshow, Zoom]}
         thumbnails={{ showToggle: true, hidden: true }}
         render={{
           slide: CustomSlide,
-          thumbnail: CustomThumbnail,
           buttonPrev: currentIndex > 0 ? undefined : () => null,
           buttonNext: currentIndex < slides.length - 1 ? undefined : () => null,
         }}
