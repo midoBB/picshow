@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"image"
+	"image/color"
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
@@ -95,7 +96,17 @@ func readFrameAsJPEG(inFileName string, timestamp float64) io.Reader {
 		WithOutput(buf, os.Stdout).
 		Run()
 	if err != nil {
-		panic(err)
+		width, height := 400, 400
+		img := image.NewGray(image.Rect(0, 0, width, height))
+		gray := color.Gray{Y: 128}
+		for x := 0; x < width; x++ {
+			for y := 0; y < height; y++ {
+				img.Set(x, y, gray)
+			}
+		}
+		buf := new(bytes.Buffer)
+		jpeg.Encode(buf, img, nil)
+		return buf
 	}
 	return buf
 }
