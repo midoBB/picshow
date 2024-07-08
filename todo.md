@@ -1,0 +1,2 @@
+- Fix the delete dialog (most likely caused by the lightbox)
+- Check out a way to stop slideshow when showing videos
