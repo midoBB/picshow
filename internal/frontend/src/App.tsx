@@ -14,7 +14,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
 import ImageSlide from "@/ImageSlide";
 
-const PAGE_SIZE = 100; // Increased page size for better performance
+const PAGE_SIZE = 40;
 
 const CustomThumbnail = ({ slide }: any) => {
   if (slide.type === "custom") {
@@ -42,21 +42,20 @@ const CustomSlide = ({ slide }: any) => {
 
 export default function App() {
   const [columnCount, setColumnCount] = useState(0);
-
   useEffect(() => {
     function handleResize() {
       if (window.innerWidth < 640) {
         // Mobile
-        setColumnCount(2);
+        setColumnCount(1);
       } else if (window.innerWidth >= 640 && window.innerWidth < 768) {
         // Tablet
-        setColumnCount(3);
+        setColumnCount(2);
       } else if (window.innerWidth >= 768 && window.innerWidth < 1024) {
         // Laptop
         setColumnCount(3);
       } else {
         // Monitor
-        setColumnCount(4);
+        setColumnCount(3);
       }
     }
 

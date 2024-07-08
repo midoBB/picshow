@@ -30,6 +30,8 @@ const VideoSlide = ({ slide }: any) => {
         ref={videoRef}
         src={slide.sources[0].src}
         autoPlay
+        loop
+        controls
         className="h-full w-full rounded-lg"
       />
     </div>
