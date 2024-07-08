@@ -5,6 +5,7 @@ import {
   FaSortAmountUp,
   FaRegCalendarAlt,
   FaChevronDown,
+  FaDice,
 } from "react-icons/fa";
 import { FaShuffle } from "react-icons/fa6";
 import useNavbarStore from "./state";
@@ -18,8 +19,11 @@ const Navbar = () => {
     toggleSortDirection,
     toggleSortType,
     setSelectedCategory,
+    setSeed,
   } = useNavbarStore();
-
+  const handleReseed = () => {
+    setSeed(Math.floor(Date.now() / 1000));
+  };
   return (
     <nav className="bg-gray-900 text-white p-4 sticky top-0 z-50 shadow-md">
       <div className="container mx-auto flex justify-between items-center">
@@ -67,26 +71,30 @@ const Navbar = () => {
           <Tooltip.Provider>
             <Tooltip.Root>
               <Tooltip.Trigger asChild>
-                <button
-                  onClick={toggleSortDirection}
-                  className={`p-2 rounded-full ${
-                    isSortDirectionDisabled
-                      ? "opacity-50 cursor-not-allowed"
-                      : "hover:bg-gray-700"
-                  }`}
-                  disabled={isSortDirectionDisabled}
-                >
-                  {sortDirection === "desc" ? (
-                    <FaSortAmountDown size={20} />
-                  ) : (
-                    <FaSortAmountUp size={20} />
-                  )}
-                </button>
+                {isSortDirectionDisabled ? (
+                  <button
+                    onClick={handleReseed}
+                    className="hover:bg-gray-700 p-2 rounded-full"
+                  >
+                    <FaDice size={20} />
+                  </button>
+                ) : (
+                  <button
+                    onClick={toggleSortDirection}
+                    className="hover:bg-gray-700 p-2 rounded-full"
+                  >
+                    {sortDirection === "desc" ? (
+                      <FaSortAmountDown size={20} />
+                    ) : (
+                      <FaSortAmountUp size={20} />
+                    )}
+                  </button>
+                )}
               </Tooltip.Trigger>
               <Tooltip.Portal>
                 <Tooltip.Content className="bg-gray-700 text-white px-2 py-1 rounded text-sm z-50">
                   {isSortDirectionDisabled
-                    ? "Sort direction not available in random mode"
+                    ? "Reseed random order"
                     : sortDirection === "desc"
                       ? "Sort Descending"
                       : "Sort Ascending"}
