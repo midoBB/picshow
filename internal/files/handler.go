@@ -15,6 +15,11 @@ import (
 	"picshow/internal/db"
 	"strings"
 
+	_ "github.com/jdeng/goheif/heif"
+	_ "golang.org/x/image/bmp"
+	_ "golang.org/x/image/tiff"
+	_ "golang.org/x/image/webp"
+
 	"github.com/cespare/xxhash"
 	"github.com/disintegration/imaging"
 	"github.com/gabriel-vasile/mimetype"

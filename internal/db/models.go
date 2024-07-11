@@ -3,14 +3,23 @@ package db
 import "time"
 
 type File struct {
-	ID        uint64 `gorm:"primaryKey"`
-	Hash      string `gorm:"uniqueIndex"`
-	CreatedAt time.Time
-	Filename  string
-	Size      int64
-	MimeType  string
-	Image     *Image `gorm:"foreignKey:FileID" json:",omitempty"`
-	Video     *Video `gorm:"foreignKey:FileID" json:",omitempty"`
+	ID           uint64 `gorm:"primaryKey"`
+	Hash         string `gorm:"uniqueIndex"`
+	CreatedAt    time.Time
+	Filename     string
+	Size         int64
+	MimeType     string
+	LastModified int64
+	Image        *Image `gorm:"foreignKey:FileID" json:",omitempty"`
+	Video        *Video `gorm:"foreignKey:FileID" json:",omitempty"`
+}
+
+func (f *File) SetLastModified(t time.Time) {
+	f.LastModified = t.Unix()
+}
+
+func (f *File) GetLastModified() time.Time {
+	return time.Unix(f.LastModified, 0)
 }
 
 type Image struct {

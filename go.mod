@@ -3,20 +3,21 @@ module picshow
 go 1.21.10
 
 require (
+	github.com/cespare/xxhash v1.1.0
 	github.com/disintegration/imaging v1.6.2
 	github.com/gabriel-vasile/mimetype v1.4.4
 	github.com/glebarez/sqlite v1.11.0
-	github.com/illarion/gonotify v1.0.1
+	github.com/jdeng/goheif v0.0.0-20200323230657-a0d6a8b3e68f
 	github.com/labstack/echo/v4 v4.12.0
 	github.com/spf13/viper v1.19.0
 	github.com/tidwall/gjson v1.17.1
 	github.com/u2takey/ffmpeg-go v0.5.0
+	golang.org/x/image v0.0.0-20191009234506-e7c1f5e7dbb8
 	gorm.io/gorm v1.25.10
 )
 
 require (
 	github.com/aws/aws-sdk-go v1.54.15 // indirect
-	github.com/cespare/xxhash v1.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
 	github.com/glebarez/go-sqlite v1.22.0 // indirect
@@ -34,6 +35,7 @@ require (
 	github.com/ncruces/go-strftime v0.1.9 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/rwcarlsen/goexif v0.0.0-20190401172101-9e8deecbddbd // indirect
 	github.com/sagikazarmark/locafero v0.4.0 // indirect
 	github.com/sagikazarmark/slog-shim v0.1.0 // indirect
 	github.com/sourcegraph/conc v0.3.0 // indirect
@@ -50,7 +52,6 @@ require (
 	go.uber.org/multierr v1.9.0 // indirect
 	golang.org/x/crypto v0.25.0 // indirect
 	golang.org/x/exp v0.0.0-20230905200255-921286631fa9 // indirect
-	golang.org/x/image v0.0.0-20191009234506-e7c1f5e7dbb8 // indirect
 	golang.org/x/net v0.27.0 // indirect
 	golang.org/x/sys v0.22.0 // indirect
 	golang.org/x/text v0.16.0 // indirect

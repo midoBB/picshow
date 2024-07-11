@@ -1,43 +1,44 @@
-create table files
-(
-    id integer
-    primary key autoincrement,
-    created_at datetime default current_timestamp,
-    hash text unique not null,
-    filename text not null,
-    size integer not null,
-    mime_type text not null
+CREATE TABLE files (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    hash TEXT UNIQUE NOT NULL,
+    filename TEXT NOT NULL,
+    size INTEGER NOT NULL,
+    mime_type TEXT NOT NULL,
+    last_modified INTEGER NOT NULL
 );
 
-create table images
+CREATE INDEX idx_files_hash ON files (hash);
+CREATE INDEX idx_files_last_modified ON files (last_modified);
+
+CREATE TABLE images
 (
-    id integer
-    primary key autoincrement,
-    full_mime_type text not null,
-    width integer not null,
-    height integer not null,
-    file_id integer not null,
-    thumbnail_width integer not null,
-    thumbnail_height integer not null,
-    thumbnail_data blob not null,
-    foreign key (file_id) references files (id) on delete cascade
+    id INTEGER
+    PRIMARY KEY AUTOINCREMENT,
+    full_mime_type TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    thumbnail_width INTEGER NOT NULL,
+    thumbnail_height INTEGER NOT NULL,
+    thumbnail_data BLOB NOT NULL,
+    FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
 );
 
-create table videos
+CREATE TABLE videos
 (
-    id integer
-    primary key autoincrement,
-    full_mime_type text not null,
-    width integer not null,
-    height integer not null,
-    length integer not null,
-    file_id integer not null,
-    thumbnail_width integer not null,
-    thumbnail_height integer not null,
-    thumbnail_data blob not null,
-    foreign key (file_id) references files (id) on delete cascade
+    id INTEGER
+    PRIMARY KEY AUTOINCREMENT,
+    full_mime_type TEXT NOT NULL,
+    width INTEGER NOT NULL,
+    height INTEGER NOT NULL,
+    length INTEGER NOT NULL,
+    file_id INTEGER NOT NULL,
+    thumbnail_width INTEGER NOT NULL,
+    thumbnail_height INTEGER NOT NULL,
+    thumbnail_data BLOB NOT NULL,
+    FOREIGN KEY (file_id) REFERENCES files (id) ON DELETE CASCADE
 );
 
--- Index for file_id in images and videos tables
-create index idx_images_file_id on images (file_id);
-create index idx_videos_file_id on videos (file_id);
+CREATE INDEX idx_images_file_id ON images (file_id);
+CREATE INDEX idx_videos_file_id ON videos (file_id);
