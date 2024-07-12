@@ -55,10 +55,10 @@ func GetDb() (*gorm.DB, error) {
 	newLogger := logger.New(
 		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 		logger.Config{
-			SlowThreshold:             time.Second, // Slow SQL threshold
-			LogLevel:                  logger.Info, // Log level
-			IgnoreRecordNotFoundError: false,       // Don't ignore ErrRecordNotFound error
-			Colorful:                  true,        // Enable color
+			SlowThreshold:             time.Second,  // Slow SQL threshold
+			LogLevel:                  logger.Error, // Log level
+			IgnoreRecordNotFoundError: true,         // Don't ignore ErrRecordNotFound error
+			Colorful:                  true,         // Enable color
 		},
 	)
 	db, err := gorm.Open(sqlite.Open(dbName), &gorm.Config{
