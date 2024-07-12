@@ -42,6 +42,7 @@ func (s *Server) Start() error {
 	// API routes
 	api := e.Group("/api")
 	api.GET("/", s.getFiles)
+	api.DELETE("/", s.deleteFiles)
 	api.DELETE("/:id", s.deleteFile)
 	api.GET("/image/:id", s.getImage)
 	api.GET("/video/:id", s.streamVideo)
@@ -50,41 +51,9 @@ func (s *Server) Start() error {
 	return e.Start(fmt.Sprintf(":%d", s.config.Port))
 }
 
-type FileQuery struct {
-	Page     *int    `query:"page"`
-	PageSize *int    `query:"page_size"`
-	Order    *string `query:"order"`
-	OrderDir *string `query:"direction"`
-	Seed     *uint64 `query:"seed"`
-	Type     *string `query:"type"`
-}
-
-func (fq *FileQuery) BindAndSetDefaults(e echo.Context) error {
-	if err := e.Bind(fq); err != nil {
-		return err
-	}
-	if fq.Page == nil {
-		fq.Page = new(int)
-		*fq.Page = 1
-	}
-	if fq.PageSize == nil {
-		fq.PageSize = new(int)
-		*fq.PageSize = 10
-	}
-	if fq.Order == nil {
-		fq.Order = new(string)
-		*fq.Order = "created_at"
-	}
-	if fq.OrderDir == nil {
-		fq.OrderDir = new(string)
-		*fq.OrderDir = "desc"
-	}
-	return nil
-}
-
 func (s *Server) getFiles(e echo.Context) error {
-	query := &FileQuery{}
-	if err := query.BindAndSetDefaults(e); err != nil {
+	query := &fileQuery{}
+	if err := query.bindAndSetDefaults(e); err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Failed to parse query"})
 	}
 	files, err := s.repo.GetFiles(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
@@ -185,6 +154,27 @@ func (s *Server) deleteFile(e echo.Context) error {
 	}
 	if err := s.repo.DeleteFile(fileId); err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file from database"})
+	}
+	return e.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) deleteFiles(e echo.Context) error {
+	u := new(deleteRequest)
+	if err := e.Bind(u); err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Failed to parse request body"})
+	}
+	idsToDelete := u.toIds()
+	for _, fileId := range idsToDelete {
+		file, err := s.repo.GetFile(fileId)
+		if err != nil {
+			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
+		}
+		if err := os.Remove(filepath.Join(s.config.FolderPath, file.Filename)); err != nil {
+			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file"})
+		}
+		if err := s.repo.DeleteFile(fileId); err != nil {
+			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file from database"})
+		}
 	}
 	return e.NoContent(http.StatusNoContent)
 }
