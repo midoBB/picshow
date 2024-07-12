@@ -2,8 +2,9 @@ package main
 
 import (
 	"log"
+	"picshow/internal/cache"
 	"picshow/internal/config"
-	"picshow/internal/db"
+	"picshow/internal/database"
 	"picshow/internal/files"
 	"picshow/internal/server"
 	"sync"
@@ -15,16 +16,17 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
-	cache, err := db.NewCache(runtimeConfig)
+	cache, err := cache.NewCache(runtimeConfig)
 	if err != nil {
 		log.Fatalf("Error creating cache: %v", err)
 	}
-	db, err := db.GetDb()
+	db, err := database.GetDb()
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
 	}
+	repo := database.NewRepository(db, cache)
 
-	processor := files.NewProcessor(runtimeConfig, db)
+	processor := files.NewProcessor(runtimeConfig, repo)
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -76,7 +78,7 @@ func main() {
 	// Start the web server
 	go func() {
 		defer wg.Done()
-		server := server.NewServer(runtimeConfig, db, cache)
+		server := server.NewServer(runtimeConfig, repo)
 		if err := server.Start(); err != nil {
 			log.Fatalf("Error starting server: %v", err)
 		}

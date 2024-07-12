@@ -1,9 +1,10 @@
-package db
+package cache
 
 import (
 	"encoding/json"
 	"fmt"
 	"picshow/internal/config"
+	"picshow/internal/utils"
 	"time"
 
 	"github.com/maypok86/otter"
@@ -34,7 +35,13 @@ const (
 )
 
 // GenerateFilesCacheKey generates a unique key for files query
-func GenerateFilesCacheKey(page, pageSize int, order OrderBy, direction OrderDirection, seed *uint64, mimetype *string) string {
+func GenerateFilesCacheKey(
+	page, pageSize int,
+	order utils.OrderBy,
+	direction utils.OrderDirection,
+	seed *uint64,
+	mimetype *string,
+) string {
 	seedStr := "0"
 	if seed != nil {
 		seedStr = fmt.Sprintf("%d", *seed)
@@ -68,4 +75,8 @@ func (c *Cache) GetCache(key string, value interface{}) (bool, error) {
 		return false, nil
 	}
 	return true, json.Unmarshal(data, value)
+}
+
+func (c *Cache) Delete(key string) {
+	c.cache.Delete(key)
 }

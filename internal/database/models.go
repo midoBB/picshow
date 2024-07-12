@@ -1,4 +1,4 @@
-package db
+package database
 
 import "time"
 
@@ -76,4 +76,17 @@ func (mt MimeType) IsValid() bool {
 
 func (mt MimeType) String() string {
 	return string(mt)
+}
+
+type Pagination struct {
+	TotalRecords int64 `json:"total_records"`
+	CurrentPage  int   `json:"current_page"`
+	TotalPages   int   `json:"total_pages"`
+	NextPage     *int  `json:"next_page"`
+	PrevPage     *int  `json:"prev_page"`
+}
+
+type FilesWithPagination struct {
+	Files      []*File    `json:"files"`
+	Pagination Pagination `json:"pagination"`
 }

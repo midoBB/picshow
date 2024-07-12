@@ -12,7 +12,7 @@ import (
 	"math"
 	"os"
 	"picshow/internal/config"
-	"picshow/internal/db"
+	"picshow/internal/database"
 	"strings"
 
 	_ "github.com/jdeng/goheif/heif"
@@ -40,17 +40,17 @@ func getFullMimeType(filePath string) string {
 	return mtype.String()
 }
 
-func getFileMimeType(filePath string) (db.MimeType, error) {
+func getFileMimeType(filePath string) (database.MimeType, error) {
 	mtype, err := mimetype.DetectFile(filePath)
 	if err != nil {
-		return db.MimeTypeError, fmt.Errorf("error detecting mime type: %w", err)
+		return database.MimeTypeError, fmt.Errorf("error detecting mime type: %w", err)
 	}
 	if strings.Contains(mtype.String(), "image") {
-		return db.MimeTypeImage, nil
+		return database.MimeTypeImage, nil
 	} else if strings.Contains(mtype.String(), "video") {
-		return db.MimeTypeVideo, nil
+		return database.MimeTypeVideo, nil
 	}
-	return db.MimeTypeOther, nil
+	return database.MimeTypeOther, nil
 }
 
 // generateFileKey creates a unique key for a file based on its size, creation time, and partial content hash
@@ -129,7 +129,7 @@ func readFrameAsJPEG(inFileName string, timestamp float64) io.Reader {
 	return buf
 }
 
-func (h *handler) handleNewVideo(filePath string, file db.File) (*db.Video, error) {
+func (h *handler) handleNewVideo(filePath string, file database.File) (*database.Video, error) {
 	res, err := ffmpeg.Probe(filePath)
 	if err != nil {
 		return nil, err
@@ -164,7 +164,7 @@ func (h *handler) handleNewVideo(filePath string, file db.File) (*db.Video, erro
 	thumbHeight := thumbBounds.Max.Y - thumbBounds.Min.Y
 
 	// Create Video record
-	video := db.Video{
+	video := database.Video{
 		FullMimeType:    getFullMimeType(filePath),
 		Width:           width,
 		Height:          height,
@@ -178,7 +178,7 @@ func (h *handler) handleNewVideo(filePath string, file db.File) (*db.Video, erro
 	return &video, nil
 }
 
-func (h *handler) handleNewImage(filePath string, file db.File) (*db.Image, error) {
+func (h *handler) handleNewImage(filePath string, file database.File) (*database.Image, error) {
 	// Open the image file
 	imgFile, err := os.Open(filePath)
 	if err != nil {
@@ -217,7 +217,7 @@ func (h *handler) handleNewImage(filePath string, file db.File) (*db.Image, erro
 	thumbHeight := thumbBounds.Max.Y - thumbBounds.Min.Y
 
 	// Create Image record
-	image := db.Image{
+	image := database.Image{
 		FullMimeType:    getFullMimeType(filePath),
 		Width:           uint64(width),
 		Height:          uint64(height),
