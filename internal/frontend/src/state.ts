@@ -1,13 +1,18 @@
 import { create } from "zustand";
 
-type NavbarState = {
+type AppState = {
+  selectedFiles: number[];
+  isSelectionMode: boolean;
   sortDirection: "asc" | "desc";
   sortType: "created_at" | "random";
   selectedCategory: string;
+  selectedCount: () => number;
   isSortDirectionDisabled: boolean;
   seed: number | null;
   dontAskAgainForDelete: boolean;
   setDontAskAgainForDelete: (value: boolean) => void;
+  setIsSelectionMode: (isSelectionMode: boolean) => void;
+  setSelectedFiles: (fn: (prev: number[]) => number[]) => void;
   setSortDirection: (direction: "asc" | "desc") => void;
   setSortType: (type: "created_at" | "random") => void;
   setSelectedCategory: (category: string) => void;
@@ -16,13 +21,20 @@ type NavbarState = {
   toggleSortType: () => void;
 };
 
-const useNavbarStore = create<NavbarState>((set) => ({
+const useAppState = create<AppState>((set, get) => ({
+  selectedFiles: [],
+  selectedCount: () => get().selectedFiles.length,
+  isSelectionMode: false,
   sortDirection: "desc",
   sortType: "created_at",
   selectedCategory: "all",
   isSortDirectionDisabled: false,
   seed: null,
   dontAskAgainForDelete: false,
+  setIsSelectionMode: (isSelectionMode) => set({ isSelectionMode }),
+  setSelectedFiles: (fn: (prev: number[]) => number[]) => {
+    set((state) => ({ selectedFiles: fn(state.selectedFiles) }));
+  },
   setDontAskAgainForDelete: (value) => set({ dontAskAgainForDelete: value }),
   setSortDirection: (direction) => set({ sortDirection: direction }),
   setSortType: (type) =>
@@ -48,4 +60,4 @@ const useNavbarStore = create<NavbarState>((set) => ({
     }),
 }));
 
-export default useNavbarStore;
+export default useAppState;

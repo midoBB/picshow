@@ -10,11 +10,10 @@ import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
 import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
 import { useStats, usePaginatedFiles, useDeleteFile } from "@/queries/loaders";
-import useNavbarStore from "@/state";
+import useAppState from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
-import * as ContextMenu from "@radix-ui/react-context-menu";
 const PAGE_SIZE = 40;
 
 const CustomSlide = ({ slide }: any) => {
@@ -25,14 +24,15 @@ const CustomSlide = ({ slide }: any) => {
 
 export default function App() {
   const [columnCount, setColumnCount] = useState(0);
+
   useEffect(() => {
     function handleResize() {
       if (window.innerWidth < 640) {
-        setColumnCount(1);
-      } else if (window.innerWidth >= 640 && window.innerWidth < 768) {
         setColumnCount(2);
-      } else {
+      } else if (window.innerWidth >= 640 && window.innerWidth < 768) {
         setColumnCount(3);
+      } else {
+        setColumnCount(4);
       }
     }
 
@@ -41,6 +41,7 @@ export default function App() {
 
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
   const {
     sortDirection,
     sortType,
@@ -49,50 +50,75 @@ export default function App() {
     setSeed,
     dontAskAgainForDelete,
     setDontAskAgainForDelete,
-  } = useNavbarStore();
+    setIsSelectionMode,
+    setSelectedFiles,
+    isSelectionMode,
+    selectedFiles,
+  } = useAppState();
+
   useEffect(() => {
     if (!seed) {
       setSeed(Math.floor(Date.now() / 1000));
     }
   }, [seed, setSeed]);
+
   const [isOpen, setIsOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
+
   const openLightbox = (index: number) => {
     setCurrentIndex(index);
     setIsOpen(true);
   };
+
   const deleteFileMutation = useDeleteFile();
+
   const [deleteDialogState, setDeleteDialogState] = useState<{
     isOpen: boolean;
-    itemId: number | null;
+    itemIds: number[];
   }>({
     isOpen: false,
-    itemId: null,
+    itemIds: [],
   });
 
-  const handleDelete = useCallback(
-    (id: number) => {
-      if (dontAskAgainForDelete) {
-        deleteFileMutation.mutate(id);
-      } else {
-        setDeleteDialogState({ isOpen: true, itemId: id });
-      }
-    },
-    [deleteFileMutation, dontAskAgainForDelete],
-  );
+  const handleDelete = useCallback(() => {
+    if (dontAskAgainForDelete) {
+      selectedFiles.forEach((id) => deleteFileMutation.mutate(id));
+      setSelectedFiles(() => []);
+      setIsSelectionMode(false);
+    } else {
+      setDeleteDialogState({ isOpen: true, itemIds: selectedFiles });
+    }
+  }, [
+    deleteFileMutation,
+    dontAskAgainForDelete,
+    selectedFiles,
+    setIsSelectionMode,
+    setSelectedFiles,
+  ]);
 
   const confirmDelete = useCallback(() => {
-    if (deleteDialogState.itemId) {
-      deleteFileMutation.mutate(deleteDialogState.itemId);
-    }
-    setDeleteDialogState({ isOpen: false, itemId: null });
-  }, [deleteDialogState.itemId, deleteFileMutation]);
+    deleteDialogState.itemIds.forEach((id) => deleteFileMutation.mutate(id));
+    setDeleteDialogState({ isOpen: false, itemIds: [] });
+    setSelectedFiles(() => []);
+    setIsSelectionMode(false);
+  }, [
+    deleteDialogState.itemIds,
+    deleteFileMutation,
+    setIsSelectionMode,
+    setSelectedFiles,
+  ]);
 
-  const handleOpenChange = useCallback((open: boolean) => {
-    if (!open) {
-      setDeleteDialogState((prev) => ({ ...prev, isOpen: false }));
-    }
-  }, []);
+  const handleOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open) {
+        setDeleteDialogState((prev) => ({ ...prev, isOpen: false }));
+        setSelectedFiles(() => []);
+        setIsSelectionMode(false);
+      }
+    },
+    [setIsSelectionMode, setSelectedFiles],
+  );
+
   const { isLoading: isLoadingStats } = useStats();
   const {
     data,
@@ -119,7 +145,9 @@ export default function App() {
       ) || [],
     [data],
   );
+
   const parentRef = useRef<HTMLDivElement>(null);
+
   const estimateSize = useCallback(
     (index: number) => {
       const file = allFiles[index];
@@ -133,6 +161,7 @@ export default function App() {
     },
     [allFiles],
   );
+
   const rowVirtualizer = useVirtualizer({
     count: allFiles.length,
     getScrollElement: () => parentRef.current,
@@ -163,6 +192,7 @@ export default function App() {
     scrollElement.addEventListener("scroll", handleScroll);
     return () => scrollElement.removeEventListener("scroll", handleScroll);
   }, [loadMoreItems]);
+
   const slides = useMemo(
     () =>
       allFiles.map((file) => {
@@ -194,13 +224,48 @@ export default function App() {
     [allFiles],
   );
 
+  const handleContextMenu = (event: MouseEvent, id: number) => {
+    event.preventDefault();
+    toggleFileSelection(id);
+  };
+
+  function handleClick(index: number, ID: number): void {
+    if (!isSelectionMode) {
+      openLightbox(index);
+    } else {
+      toggleFileSelection(ID);
+    }
+  }
+  const toggleFileSelection = (id: number) => {
+    setSelectedFiles((prev) => {
+      if (prev.includes(id)) {
+        const newSelection = prev.filter((fileId) => fileId !== id);
+        if (newSelection.length === 0) {
+          setIsSelectionMode(false);
+        }
+        return newSelection;
+      } else {
+        setIsSelectionMode(true);
+        return [...prev, id];
+      }
+    });
+  };
+
+  const selectedFileObjects = useMemo(() => {
+    if (isSelectionMode) {
+      return allFiles.filter((file) => selectedFiles.includes(file.ID));
+    } else {
+      return [];
+    }
+  }, [allFiles, isSelectionMode, selectedFiles]);
+
   if (isLoadingStats || isLoadingFiles) {
     return <div className="container mx-auto p-4">Loading...</div>;
   }
 
   return (
     <div className="flex flex-col h-full">
-      <Navbar />
+      <Navbar onDelete={handleDelete} />
       <Lightbox
         open={isOpen}
         close={() => setIsOpen(false)}
@@ -242,57 +307,63 @@ export default function App() {
         >
           {rowVirtualizer.getVirtualItems().map((virtualRow) => {
             const file = allFiles[virtualRow.index];
+
             return (
-              <ContextMenu.Root key={virtualRow.index}>
-                <ContextMenu.Trigger>
-                  <div
-                    key={virtualRow.index}
-                    className="cursor-pointer group"
-                    onClick={() => openLightbox(virtualRow.index)}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: `${(virtualRow.lane / columnCount) * 100}%`,
-                      width: `${100 / columnCount}%`,
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                      padding: "8px",
-                    }}
-                  >
-                    <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
-                      <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
-                        {file.Image && (
-                          <img
-                            src={file.Image.ThumbnailBase64}
-                            alt={file.Filename}
-                            className="w-full h-full object-cover rounded-lg"
-                          />
-                        )}
-                        {file.Video && (
-                          <div className="relative w-full h-full">
-                            <img
-                              src={file.Video.ThumbnailBase64}
-                              alt={file.Filename}
-                              className="w-full h-full object-cover rounded-lg"
-                            />
-                            <div className="absolute inset-0 flex items-center justify-center">
-                              <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
-                            </div>
-                          </div>
-                        )}
+              <div
+                key={virtualRow.index}
+                className={`cursor-pointer group ${selectedFiles.includes(file.ID) ? "border-2 border-blue-500 rounded-lg" : ""}`}
+                onContextMenu={(e) => handleContextMenu(e, file.ID)}
+                onClick={() => handleClick(virtualRow.index, file.ID)}
+                style={{
+                  position: "absolute",
+                  top: 0,
+                  left: `${(virtualRow.lane / columnCount) * 100}%`,
+                  width: `${100 / columnCount}%`,
+                  height: `${virtualRow.size}px`,
+                  transform: `translateY(${virtualRow.start}px)`,
+                  padding: "8px",
+                }}
+              >
+                <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
+                  <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
+                    {file.Image && (
+                      <img
+                        src={file.Image.ThumbnailBase64}
+                        alt={file.Filename}
+                        className="w-full h-full object-cover rounded-lg"
+                      />
+                    )}
+                    {file.Video && (
+                      <div className="relative w-full h-full">
+                        <img
+                          src={file.Video.ThumbnailBase64}
+                          alt={file.Filename}
+                          className="w-full h-full object-cover rounded-lg"
+                        />
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
+                        </div>
                       </div>
-                    </figure>
+                    )}
                   </div>
-                </ContextMenu.Trigger>
-                <ContextMenu.Content className="min-w-[220px] bg-white rounded-md overflow-hidden p-[5px] shadow-[0px_10px_38px_-10px_rgba(22,_23,_24,_0.35),_0px_10px_20px_-15px_rgba(22,_23,_24,_0.2)]">
-                  <ContextMenu.Item
-                    className="text-[13px] leading-none text-violet11 rounded-[3px] flex items-center h-[25px] px-[5px] relative pl-[25px] select-none outline-none data-[disabled]:text-mauve8 data-[disabled]:pointer-events-none data-[highlighted]:bg-violet9 data-[highlighted]:text-violet1 cursor-pointer"
-                    onSelect={() => handleDelete(file.ID)}
-                  >
-                    Delete
-                  </ContextMenu.Item>
-                </ContextMenu.Content>
-              </ContextMenu.Root>
+                </figure>
+                {selectedFiles.includes(file.ID) && (
+                  <div className="absolute top-2 left-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
+                    <svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      className="h-4 w-4 text-white"
+                      viewBox="0 0 20 20"
+                      fill="currentColor"
+                    >
+                      <path
+                        fillRule="evenodd"
+                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                        clipRule="evenodd"
+                      />
+                    </svg>
+                  </div>
+                )}
+              </div>
             );
           })}
         </div>
@@ -309,6 +380,7 @@ export default function App() {
         onConfirm={confirmDelete}
         dontAskAgain={dontAskAgainForDelete}
         setDontAskAgain={setDontAskAgainForDelete}
+        files={selectedFileObjects}
       />
     </div>
   );

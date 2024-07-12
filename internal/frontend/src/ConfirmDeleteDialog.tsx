@@ -7,6 +7,7 @@ interface ConfirmDialogProps {
   onConfirm: () => void;
   dontAskAgain: boolean;
   setDontAskAgain: (value: boolean) => void;
+  files;
 }
 
 const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -15,6 +16,7 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   onConfirm,
   dontAskAgain,
   setDontAskAgain,
+  files,
 }) => {
   return (
     <Dialog.Root open={isOpen} onOpenChange={onOpenChange}>
@@ -25,8 +27,8 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
             Delete File
           </Dialog.Title>
           <Dialog.Description className="text-mauve11 mt-[10px] mb-5 text-[15px] leading-normal">
-            Are you sure you want to delete this file? This action cannot be
-            undone.
+            You're going to delete {files.length} files. <br /> Are you sure you
+            want to delete them? This action cannot be undone.
           </Dialog.Description>
           <div className="flex items-center space-x-2">
             <Checkbox.Root
