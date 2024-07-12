@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"picshow/internal/config"
 	"picshow/internal/utils"
+	"strings"
 	"time"
 
 	"github.com/maypok86/otter"
@@ -29,9 +30,9 @@ func NewCache(config *config.Config) (*Cache, error) {
 type CacheKey string
 
 const (
-	FilesCacheKey CacheKey = "files"
+	FilesCacheKey CacheKey = "list"
 	StatsCacheKey CacheKey = "stats"
-	FileCacheKey  CacheKey = "file"
+	FileCacheKey  CacheKey = "single"
 )
 
 // GenerateFilesCacheKey generates a unique key for files query
@@ -78,5 +79,7 @@ func (c *Cache) GetCache(key string, value interface{}) (bool, error) {
 }
 
 func (c *Cache) Delete(key string) {
-	c.cache.Delete(key)
+	c.cache.DeleteByFunc(func(cacheKey string, value []byte) bool {
+		return strings.Contains(cacheKey, key)
+	})
 }
