@@ -105,7 +105,7 @@ export default function App() {
     order: sortType,
     direction: sortDirection,
     type: selectedCategory === "all" ? undefined : selectedCategory,
-    seed,
+    seed: sortType === "random" ? seed : null,
   });
 
   const allFiles = useMemo(

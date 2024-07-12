@@ -13,7 +13,7 @@ export type PaginationParams = {
   order?: string;
   direction?: string;
   type?: string;
-  seed?: number;
+  seed: number | null;
 };
 
 export const fetchPaginatedFiles = async ({
