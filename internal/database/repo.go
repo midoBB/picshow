@@ -155,6 +155,33 @@ func (r *Repository) GetStats() (*ServerStats, error) {
 	return stats, nil
 }
 
+func (r *Repository) DeleteFiles(ids []uint64) error {
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("file_id IN ?", ids).Delete(&Image{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("file_id IN ?", ids).Delete(&Video{}).Error; err != nil {
+			return err
+		}
+		if err := tx.Where("id IN ?", ids).Delete(&File{}).Error; err != nil {
+			return err
+		}
+		for _, id := range ids {
+			r.clearCacheByFileID(id)
+		}
+		r.clearCache()
+		return nil
+	})
+}
+
+func (r *Repository) GetFilesByIds(ids []uint64) ([]*File, error) {
+	var files []*File
+	if err := r.db.Find(&files, ids).Error; err != nil {
+		return nil, err
+	}
+	return files, nil
+}
+
 func (r *Repository) GetFile(id uint64) (*File, error) {
 	cacheKey := cache.GenerateFileCacheKey(id)
 
@@ -176,11 +203,14 @@ func (r *Repository) GetFile(id uint64) (*File, error) {
 	return &file, nil
 }
 
-func (r *Repository) clearCache(id uint64) {
+func (r *Repository) clearCacheByFileID(id uint64) {
 	cacheKey := cache.GenerateFileCacheKey(id)
 	contentCacheKey := cache.GenerateFileContentCacheKey(id)
 	r.cache.Delete(cacheKey)
 	r.cache.Delete(contentCacheKey)
+}
+
+func (r *Repository) clearCache() {
 	r.cache.Delete(string(cache.StatsCacheKey))
 	r.cache.Delete(string(cache.FilesCacheKey))
 }
@@ -202,7 +232,8 @@ func (r *Repository) DeleteFile(id uint64) error {
 	if err != nil {
 		return err
 	}
-	r.clearCache(id)
+	r.clearCacheByFileID(id)
+	r.clearCache()
 	return nil
 }
 
@@ -215,7 +246,7 @@ func (r *Repository) FindAllFiles() ([]File, error) {
 }
 
 func (r *Repository) UpdateFile(file *File) error {
-	r.clearCache(file.ID)
+	r.clearCacheByFileID(file.ID)
 	return r.db.Model(file).Where("hash = ?", file.Hash).Updates(file).Error
 }
 

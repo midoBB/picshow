@@ -41,7 +41,8 @@ export const useDeleteFile = () => {
 
   return useMutation({
     mutationFn: deleteFile,
-    onMutate: async (deletedFileId) => {
+    onMutate: async (deletedFileIds) => {
+      const ids = deletedFileIds.split(",").map(Number);
       await queryClient.cancelQueries({ queryKey: ["files"] });
       const queries = queryClient.getQueriesData<{
         pages: Array<{ files: Array<{ ID: number }> }>;
@@ -51,7 +52,7 @@ export const useDeleteFile = () => {
         if (queryData) {
           const updatedPages = queryData.pages.map((page) => ({
             ...page,
-            files: page.files.filter((file) => file.ID !== deletedFileId),
+            files: page.files.filter((file) => !ids.includes(file.ID)),
           }));
           queryClient.setQueryData(queryKey, {
             ...queryData,

@@ -82,7 +82,7 @@ export default function App() {
 
   const handleDelete = useCallback(() => {
     if (dontAskAgainForDelete) {
-      selectedFiles.forEach((id) => deleteFileMutation.mutate(id));
+      deleteFileMutation.mutate(selectedFiles.join(","));
       setSelectedFiles(() => []);
       setIsSelectionMode(false);
     } else {
@@ -97,7 +97,7 @@ export default function App() {
   ]);
 
   const confirmDelete = useCallback(() => {
-    deleteDialogState.itemIds.forEach((id) => deleteFileMutation.mutate(id));
+    deleteFileMutation.mutate(deleteDialogState.itemIds.join(","));
     setDeleteDialogState({ isOpen: false, itemIds: [] });
     setSelectedFiles(() => []);
     setIsSelectionMode(false);

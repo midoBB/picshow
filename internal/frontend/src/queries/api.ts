@@ -37,8 +37,13 @@ export const fetchPaginatedFiles = async ({
   return data;
 };
 
-export const deleteFile = async (id: number): Promise<void> => {
-  await api.delete(`/${id}`);
+export const deleteFile = async (ids: string): Promise<void> => {
+  await api.delete(`/`, {
+    headers: {},
+    data: {
+      ids: ids,
+    },
+  });
 };
 
 export const fetchStats = async (): Promise<Stats> => {

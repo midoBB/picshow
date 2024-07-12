@@ -164,17 +164,20 @@ func (s *Server) deleteFiles(e echo.Context) error {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Failed to parse request body"})
 	}
 	idsToDelete := u.toIds()
-	for _, fileId := range idsToDelete {
-		file, err := s.repo.GetFile(fileId)
-		if err != nil {
-			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
+	files, err := s.repo.GetFilesByIds(idsToDelete)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch files"})
+	}
+	fileIDs := make([]uint64, 0)
+	for _, file := range files {
+		fileIDs = append(fileIDs, file.ID)
+		filePath := filepath.Join(s.config.FolderPath, file.Filename)
+		if err := os.Remove(filePath); err != nil {
+			return fmt.Errorf("failed to delete file %s: %w", file.Filename, err)
 		}
-		if err := os.Remove(filepath.Join(s.config.FolderPath, file.Filename)); err != nil {
-			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file"})
-		}
-		if err := s.repo.DeleteFile(fileId); err != nil {
-			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file from database"})
-		}
+	}
+	if err := s.repo.DeleteFiles(fileIDs); err != nil {
+		return fmt.Errorf("failed to delete files from database: %w", err)
 	}
 	return e.NoContent(http.StatusNoContent)
 }
