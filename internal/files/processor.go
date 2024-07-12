@@ -77,6 +77,7 @@ func (p *Processor) Process() error {
 		if existsByHash {
 			existingFile.Filename = file.Name()
 			existingFile.LastModified = lastModified
+			existingFile.Hash = hash
 			if err := p.repo.UpdateFile(&existingFile); err != nil {
 				log.Printf("Error updating file %s: %v", file.Name(), err)
 				continue

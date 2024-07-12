@@ -214,7 +214,7 @@ func (r *Repository) FindAllFiles() ([]File, error) {
 
 func (r *Repository) UpdateFile(file *File) error {
 	r.clearCache(file.ID)
-	return r.db.Model(file).Updates(file).Error
+	return r.db.Model(file).Where("hash = ?", file.Hash).Updates(file).Error
 }
 
 func (r *Repository) CreateFile(file *File) error {

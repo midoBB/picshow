@@ -6,3 +6,6 @@ build:
 
 run:
     air
+
+dev:
+    cd internal/frontend && pnpm dev --host && cd -
