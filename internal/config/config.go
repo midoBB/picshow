@@ -4,11 +4,12 @@ import "github.com/spf13/viper"
 
 type Config struct {
 	FolderPath       string
-	BatchSize        int
+	BatchSize        int // TODO: return to using batching when processiing at startup
 	HashSize         int
 	MaxThumbnailSize int
 	Port             int
 	RefreshInterval  int
+	CacheSizeMB      int
 }
 
 func LoadConfig() (*Config, error) {

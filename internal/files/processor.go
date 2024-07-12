@@ -23,7 +23,7 @@ func NewProcessor(config *config.Config, db *gorm.DB) *Processor {
 	return &Processor{
 		db:      db,
 		config:  config,
-		handler: newHandler(config, db),
+		handler: newHandler(config),
 	}
 }
 

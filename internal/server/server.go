@@ -18,10 +18,11 @@ import (
 type Server struct {
 	db     *gorm.DB
 	config *config.Config
+	cache  *db.Cache
 }
 
-func NewServer(config *config.Config, db *gorm.DB) *Server {
-	return &Server{db: db, config: config}
+func NewServer(config *config.Config, db *gorm.DB, cache *db.Cache) *Server {
+	return &Server{db: db, config: config, cache: cache}
 }
 
 func (s *Server) Start() error {
@@ -80,7 +81,7 @@ func (s *Server) getFiles(e echo.Context) error {
 	if err := query.BindAndSetDefaults(e); err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Failed to parse query"})
 	}
-	files, err := db.GetFiles(s.db, *query.Page, *query.PageSize, db.OrderBy(*query.Order), db.OrderDirection(*query.OrderDir), query.Seed, query.Type)
+	files, err := db.GetFiles(s.cache, s.db, *query.Page, *query.PageSize, db.OrderBy(*query.Order), db.OrderDirection(*query.OrderDir), query.Seed, query.Type)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch files"})
 	}
@@ -93,7 +94,7 @@ func (s *Server) getImage(e echo.Context) error {
 	if err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
 	}
-	file, err := db.GetFile(s.db, fileId)
+	file, err := db.GetFile(s.cache, s.db, fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
 	}
@@ -110,7 +111,7 @@ func (s *Server) streamVideo(e echo.Context) error {
 	if err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
 	}
-	file, err := db.GetFile(s.db, fileId)
+	file, err := db.GetFile(s.cache, s.db, fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
 	}
@@ -122,7 +123,7 @@ func (s *Server) streamVideo(e echo.Context) error {
 }
 
 func (s *Server) getStats(c echo.Context) error {
-	stats, err := db.GetStats(s.db)
+	stats, err := db.GetStats(s.cache, s.db)
 	if err != nil {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch count"})
 	}
@@ -135,14 +136,14 @@ func (s *Server) deleteFile(e echo.Context) error {
 	if err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
 	}
-	file, err := db.GetFile(s.db, fileId)
+	file, err := db.GetFile(s.cache, s.db, fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
 	}
 	if err := os.Remove(filepath.Join(s.config.FolderPath, file.Filename)); err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file"})
 	}
-	if err := db.DeleteFile(s.db, fileId); err != nil {
+	if err := db.DeleteFile(s.cache, s.db, fileId); err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file from database"})
 	}
 	return e.NoContent(http.StatusNoContent)

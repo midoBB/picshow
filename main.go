@@ -15,6 +15,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error loading config: %v", err)
 	}
+	cache, err := db.NewCache(runtimeConfig)
+	if err != nil {
+		log.Fatalf("Error creating cache: %v", err)
+	}
 	db, err := db.GetDb()
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
@@ -72,7 +76,7 @@ func main() {
 	// Start the web server
 	go func() {
 		defer wg.Done()
-		server := server.NewServer(runtimeConfig, db)
+		server := server.NewServer(runtimeConfig, db, cache)
 		if err := server.Start(); err != nil {
 			log.Fatalf("Error starting server: %v", err)
 		}

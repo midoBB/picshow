@@ -60,7 +60,16 @@ func ByType(mimetype *string) func(db *gorm.DB) *gorm.DB {
 	}
 }
 
-func GetFiles(db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDirection, seed *uint64, mimetype *string) (*FilesWithPagination, error) {
+func GetFiles(cache *Cache, db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDirection, seed *uint64, mimetype *string) (*FilesWithPagination, error) {
+	cacheKey := GenerateFilesCacheKey(page, pageSize, order, direction, seed, mimetype)
+	var cachedFiles FilesWithPagination
+	found, err := cache.GetCache(cacheKey, &cachedFiles)
+	if err != nil {
+		return nil, fmt.Errorf("cache error: %w", err)
+	}
+	if found {
+		return &cachedFiles, nil
+	}
 	var files []*File
 	var totalRecords int64
 
@@ -106,13 +115,25 @@ func GetFiles(db *gorm.DB, page, pageSize int, order OrderBy, direction OrderDir
 		PrevPage:     prevPage,
 	}
 
-	return &FilesWithPagination{
+	result := &FilesWithPagination{
 		Files:      files,
 		Pagination: pagination,
-	}, nil
+	}
+	if err := cache.SetCache(cacheKey, result); err != nil {
+		return nil, fmt.Errorf("failed to set cache: %w", err)
+	}
+	return result, nil
 }
 
-func GetStats(db *gorm.DB) (*ServerStats, error) {
+func GetStats(cache *Cache, db *gorm.DB) (*ServerStats, error) {
+	var cachedStats ServerStats
+	found, err := cache.GetCache(string(StatsCacheKey), &cachedStats)
+	if err != nil {
+		return nil, fmt.Errorf("cache error: %w", err)
+	}
+	if found {
+		return &cachedStats, nil
+	}
 	var totalCount int64
 	var totalVideoCount int64
 	var totalImageCount int64
@@ -125,22 +146,41 @@ func GetStats(db *gorm.DB) (*ServerStats, error) {
 	if err := db.Model(&Image{}).Count(&totalImageCount).Error; err != nil {
 		return nil, err
 	}
-	return &ServerStats{
+	stats := &ServerStats{
 		Count:      totalCount,
 		VideoCount: totalVideoCount,
 		ImageCount: totalImageCount,
-	}, nil
+	}
+
+	if err := cache.SetCache(string(StatsCacheKey), stats); err != nil {
+		return nil, fmt.Errorf("failed to set cache: %w", err)
+	}
+
+	return stats, nil
 }
 
-func GetFile(db *gorm.DB, id uint64) (*File, error) {
+func GetFile(cache *Cache, db *gorm.DB, id uint64) (*File, error) {
+	cacheKey := GenerateFileCacheKey(id)
+
+	var cachedFile File
+	found, err := cache.GetCache(cacheKey, &cachedFile)
+	if err != nil {
+		return nil, fmt.Errorf("cache error: %w", err)
+	}
+	if found {
+		return &cachedFile, nil
+	}
 	var file File
 	if err := db.Preload("Video").First(&file, id).Error; err != nil {
 		return nil, err
 	}
+	if err := cache.SetCache(cacheKey, &file); err != nil {
+		return nil, fmt.Errorf("failed to set cache: %w", err)
+	}
 	return &file, nil
 }
 
-func DeleteFile(db *gorm.DB, id uint64) error {
+func DeleteFile(cache *Cache, db *gorm.DB, id uint64) error {
 	// First, delete records from images and videos tables where file_id matches the given id
 	err := db.Where("file_id = ?", id).Delete(&Image{}).Error
 	if err != nil {
@@ -157,6 +197,10 @@ func DeleteFile(db *gorm.DB, id uint64) error {
 	if err != nil {
 		return err
 	}
-
+	cacheKey := GenerateFileCacheKey(id)
+	cache.cache.Delete(cacheKey)
+	cache.cache.Delete(string(StatsCacheKey))
+	// Invalidate files cache (simplistic approach, could be more granular)
+	cache.cache.Delete(string(FilesCacheKey))
 	return nil
 }

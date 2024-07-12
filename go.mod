@@ -9,6 +9,7 @@ require (
 	github.com/glebarez/sqlite v1.11.0
 	github.com/jdeng/goheif v0.0.0-20200323230657-a0d6a8b3e68f
 	github.com/labstack/echo/v4 v4.12.0
+	github.com/maypok86/otter v1.2.1
 	github.com/spf13/viper v1.19.0
 	github.com/tidwall/gjson v1.17.1
 	github.com/u2takey/ffmpeg-go v0.5.0
@@ -18,8 +19,10 @@ require (
 
 require (
 	github.com/aws/aws-sdk-go v1.54.15 // indirect
+	github.com/dolthub/maphash v0.1.0 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/fsnotify/fsnotify v1.7.0 // indirect
+	github.com/gammazero/deque v0.2.1 // indirect
 	github.com/glebarez/go-sqlite v1.22.0 // indirect
 	github.com/golang-jwt/jwt v3.2.2+incompatible // indirect
 	github.com/google/uuid v1.6.0 // indirect

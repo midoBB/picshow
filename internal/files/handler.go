@@ -25,16 +25,14 @@ import (
 	"github.com/gabriel-vasile/mimetype"
 	"github.com/tidwall/gjson"
 	ffmpeg "github.com/u2takey/ffmpeg-go"
-	"gorm.io/gorm"
 )
 
 type handler struct {
 	config *config.Config
-	db     *gorm.DB
 }
 
-func newHandler(config *config.Config, db *gorm.DB) *handler {
-	return &handler{config: config, db: db}
+func newHandler(config *config.Config) *handler {
+	return &handler{config: config}
 }
 
 func getFullMimeType(filePath string) string {
@@ -67,15 +65,31 @@ func (h *handler) generateFileKey(filePath string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("error getting file info: %w", err)
 	}
-
 	fileSize := fileInfo.Size()
 
 	// Initialize xxHash
 	hasher := xxhash.New()
 
-	// Read and hash the entire file in chunks
-	buffer := make([]byte, 64*1024)
-	for {
+	// Calculate the number of bytes to read based on hashSize (in KB)
+	bytesToRead := int64(h.config.HashSize * 1024)
+	if bytesToRead > fileSize {
+		bytesToRead = fileSize
+	}
+
+	// Adjust buffer size if it's larger than bytesToRead
+	bufferSize := int64(64 * 1024) // 64KB buffer
+	if bufferSize > bytesToRead {
+		bufferSize = bytesToRead
+	}
+	buffer := make([]byte, bufferSize)
+
+	// Read and hash up to bytesToRead bytes from the file
+	bytesRead := int64(0)
+	for bytesRead < bytesToRead {
+		remainingBytes := bytesToRead - bytesRead
+		if remainingBytes < bufferSize {
+			buffer = buffer[:remainingBytes]
+		}
 		n, err := file.Read(buffer)
 		if err != nil && err != io.EOF {
 			return "", fmt.Errorf("error reading file: %w", err)
@@ -84,12 +98,11 @@ func (h *handler) generateFileKey(filePath string) (string, error) {
 			break
 		}
 		hasher.Write(buffer[:n])
+		bytesRead += int64(n)
 	}
 
 	contentHash := hasher.Sum64()
-
 	key := fmt.Sprintf("%d_%d", fileSize, contentHash)
-
 	return key, nil
 }
 
