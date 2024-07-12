@@ -2,9 +2,11 @@ package server
 
 import (
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"picshow/internal/cache"
 	"picshow/internal/config"
 	"picshow/internal/database"
 	"picshow/internal/frontend"
@@ -18,13 +20,15 @@ import (
 type Server struct {
 	repo   *database.Repository
 	config *config.Config
+	ccache *cache.Cache
 }
 
 func NewServer(
 	config *config.Config,
 	repo *database.Repository,
+	ccache *cache.Cache,
 ) *Server {
-	return &Server{config: config, repo: repo}
+	return &Server{config: config, repo: repo, ccache: ccache}
 }
 
 func (s *Server) Start() error {
@@ -96,12 +100,46 @@ func (s *Server) getImage(e echo.Context) error {
 	if err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
 	}
+
+	// Generate cache key for this file
+	cacheKey := cache.GenerateFileContentCacheKey(fileId)
+
+	// Try to get the file from cache
+	var cachedFile []byte
+	found, err := s.ccache.GetCache(cacheKey, &cachedFile)
+	if err != nil {
+		// Log the error, but continue to fetch from database
+		log.Printf("Error retrieving from cache: %v\n", err)
+	}
+
+	if found {
+		log.Printf("Serving file from cache: %s\n", cacheKey)
+		return e.Blob(http.StatusOK, http.DetectContentType(cachedFile), cachedFile)
+	}
+
+	// If not in cache, fetch from database
 	file, err := s.repo.GetFile(fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
 	}
+
 	if file.MimeType == database.MimeTypeImage.String() {
-		return e.File(filepath.Join(s.config.FolderPath, file.Filename))
+		filePath := filepath.Join(s.config.FolderPath, file.Filename)
+
+		// Read file contents
+		fileContents, err := os.ReadFile(filePath)
+		if err != nil {
+			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read file"})
+		}
+
+		// Cache the file contents
+		if err := s.ccache.SetCache(cacheKey, fileContents); err != nil {
+			// Log the error, but continue to serve the file
+			log.Printf("Error caching file: %v", err)
+		}
+
+		// Serve the file
+		return e.Blob(http.StatusOK, http.DetectContentType(fileContents), fileContents)
 	} else {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Unsupported mimetype"})
 	}

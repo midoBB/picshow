@@ -30,9 +30,10 @@ func NewCache(config *config.Config) (*Cache, error) {
 type CacheKey string
 
 const (
-	FilesCacheKey CacheKey = "list"
-	StatsCacheKey CacheKey = "stats"
-	FileCacheKey  CacheKey = "single"
+	FilesCacheKey       CacheKey = "list"
+	StatsCacheKey       CacheKey = "stats"
+	FileCacheKey        CacheKey = "single"
+	FileContentCacheKey CacheKey = "content"
 )
 
 // GenerateFilesCacheKey generates a unique key for files query
@@ -57,6 +58,11 @@ func GenerateFilesCacheKey(
 // GenerateFileCacheKey generates a unique key for a single file
 func GenerateFileCacheKey(id uint64) string {
 	return fmt.Sprintf("%s:%d", FileCacheKey, id)
+}
+
+// GenerateFileContentCacheKey generates a unique key for a single file
+func GenerateFileContentCacheKey(id uint64) string {
+	return fmt.Sprintf("%s:%d", FileContentCacheKey, id)
 }
 
 // SetCache sets a value in the cache

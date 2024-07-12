@@ -178,7 +178,9 @@ func (r *Repository) GetFile(id uint64) (*File, error) {
 
 func (r *Repository) clearCache(id uint64) {
 	cacheKey := cache.GenerateFileCacheKey(id)
+	contentCacheKey := cache.GenerateFileContentCacheKey(id)
 	r.cache.Delete(cacheKey)
+	r.cache.Delete(contentCacheKey)
 	r.cache.Delete(string(cache.StatsCacheKey))
 	r.cache.Delete(string(cache.FilesCacheKey))
 }

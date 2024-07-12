@@ -78,7 +78,7 @@ func main() {
 	// Start the web server
 	go func() {
 		defer wg.Done()
-		server := server.NewServer(runtimeConfig, repo)
+		server := server.NewServer(runtimeConfig, repo, cache)
 		if err := server.Start(); err != nil {
 			log.Fatalf("Error starting server: %v", err)
 		}
