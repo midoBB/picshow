@@ -14,7 +14,18 @@ import (
 func main() {
 	runtimeConfig, err := config.LoadConfig()
 	if err != nil {
-		log.Fatalf("Error loading config: %v", err)
+		log.Printf("Error loading config: %v", err)
+		log.Println("Starting first-run server...")
+
+		firstRunServer := server.NewFirstRunServer()
+		if err := firstRunServer.Start(); err != nil {
+			log.Fatalf("Error starting first-run server: %v", err)
+		}
+
+		runtimeConfig, err = config.LoadConfig()
+		if err != nil {
+			log.Fatalf("Error loading config after first-run: %v", err)
+		}
 	}
 	cache, err := cache.NewCache(runtimeConfig)
 	if err != nil {

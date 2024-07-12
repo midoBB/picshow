@@ -33,8 +33,11 @@ func NewServer(
 
 func (s *Server) Start() error {
 	e := echo.New()
+	e.HideBanner = true
 
-	e.Use(middleware.Logger())
+	// e.Use(middleware.LoggerWithConfig(middleware.LoggerConfig{
+	// 	Format: "[${time_rfc3339}] ${status} ${method} ${path} ${remote_ip} ${latency_human} ${bytes_in} ${bytes_out}\n",
+	// }))
 	e.Use(middleware.Gzip())
 	e.Use(middleware.CORS())
 
@@ -48,7 +51,9 @@ func (s *Server) Start() error {
 	api.GET("/video/:id", s.streamVideo)
 	api.GET("/stats", s.getStats)
 
-	return e.Start(fmt.Sprintf(":%d", s.config.Port))
+	logURLs(s.config.PORT)
+
+	return e.Start(fmt.Sprintf(":%d", s.config.PORT))
 }
 
 func (s *Server) getFiles(e echo.Context) error {

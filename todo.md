@@ -1,5 +1,3 @@
 - Check out a way to stop slideshow when showing videos
-- Create a configuration dialog on startup if the config doesn't exist.
-- Create a multiple deletion action with a scrollable dialog that shows all images to delete
 - Add phash for images
-- Add caching for the actual image bits
+- Add Cursor based navigation
