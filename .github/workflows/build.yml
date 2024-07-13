@@ -22,20 +22,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v3
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v3
-        with:
-          node-version: "20"
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
-        with:
-          version: 9
-
-      - name: Setup Go
-        uses: actions/setup-go@v4
-        with:
-          go-version-file: go.mod
+      - name: Install asdf & tools
+        uses: asdf-vm/actions/install@v3
 
       - name: Build frontend
         run: |
