@@ -1,0 +1,63 @@
+---
+name: Upload binaries
+
+on:
+  push:
+    tags:
+      - "*"
+
+jobs:
+  build-and-upload:
+    name: Build and upload
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - os: linux
+            arch: amd64
+          - os: linux
+            arch: arm
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: "20"
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: 9
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version-file: go.mod
+
+      - name: Build frontend
+        run: |
+          cd internal/frontend
+          pnpm install
+          pnpm build
+          cd -
+
+      - name: Build firstrun
+        run: |
+          cd internal/firstrun
+          pnpm install
+          pnpm build
+          cd -
+
+      - name: Build binary
+        run: |
+          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static" -s -w' -o picshow-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }} .
+
+      - name: Upload
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: picshow-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}
+          tag: ${{ github.ref }}
