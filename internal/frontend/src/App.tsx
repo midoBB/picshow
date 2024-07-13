@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, useMemo, useRef } from "react";
 import { FaRegPlayCircle } from "react-icons/fa";
+import { LuLoader2, LuX } from "react-icons/lu";
 import { BASE_URL } from "@/queries/api";
 import Navbar from "@/Navbar";
 import Lightbox, { SlideshowRef } from "yet-another-react-lightbox";
@@ -265,9 +266,6 @@ export default function App() {
   useEffect(() => {
     setIsSlideshowPlaying(!!slideShowRef.current?.playing);
   }, [slideShowRef.current?.playing]);
-  if (isLoadingStats || isLoadingFiles) {
-    return <div className="container mx-auto p-4">Loading...</div>;
-  }
 
   return (
     <div
@@ -302,95 +300,111 @@ export default function App() {
           },
         }}
       />
-      <div
-        ref={parentRef}
-        className="w-full p-4 mx-auto flex-grow overflow-auto"
-        style={{ height: "100vh " }}
-      >
-        <div
-          style={{
-            height: `${rowVirtualizer.getTotalSize()}px`,
-            width: "100%",
-            position: "relative",
-          }}
-        >
-          {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-            const file = allFiles[virtualRow.index];
+      {isLoadingFiles ? (
+        <div className="absolute inset-0 flex items-center justify-center bg-black bg-opacity-50 z-50">
+          <LuLoader2 className="w-8 h-8 animate-spin text-blue-500" />
+        </div>
+      ) : (
+        <>
+          <div
+            ref={parentRef}
+            className="w-full p-4 mx-auto flex-grow overflow-auto"
+            style={{ height: "100vh " }}
+          >
+            <div
+              style={{
+                height: `${rowVirtualizer.getTotalSize()}px`,
+                width: "100%",
+                position: "relative",
+              }}
+            >
+              {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                const file = allFiles[virtualRow.index];
 
-            return (
-              <div
-                key={virtualRow.index}
-                className={`cursor-pointer group ${selectedFiles.includes(file.ID) ? "border-2 border-blue-500 rounded-lg" : ""}`}
-                onContextMenu={(e) => handleContextMenu(e, file.ID)}
-                onClick={() => handleClick(virtualRow.index, file.ID)}
-                style={{
-                  position: "absolute",
-                  top: 0,
-                  left: `${(virtualRow.lane / columnCount) * 100}%`,
-                  width: `${100 / columnCount}%`,
-                  height: `${virtualRow.size}px`,
-                  transform: `translateY(${virtualRow.start}px)`,
-                  padding: "8px",
-                }}
-              >
-                <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
-                  <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
-                    {file.Image && (
-                      <img
-                        src={file.Image.ThumbnailBase64}
-                        alt={file.Filename}
-                        className="w-full h-full object-cover rounded-lg"
-                      />
-                    )}
-                    {file.Video && (
-                      <div className="relative w-full h-full">
-                        <img
-                          src={file.Video.ThumbnailBase64}
-                          alt={file.Filename}
-                          className="w-full h-full object-cover rounded-lg"
-                        />
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
-                        </div>
+                return (
+                  <div
+                    key={virtualRow.index}
+                    className={`cursor-pointer group ${selectedFiles.includes(file.ID) ? "border-2 border-blue-500 rounded-lg" : ""}`}
+                    onContextMenu={(e) => handleContextMenu(e, file.ID)}
+                    onClick={() => handleClick(virtualRow.index, file.ID)}
+                    style={{
+                      position: "absolute",
+                      top: 0,
+                      left: `${(virtualRow.lane / columnCount) * 100}%`,
+                      width: `${100 / columnCount}%`,
+                      height: `${virtualRow.size}px`,
+                      transform: `translateY(${virtualRow.start}px)`,
+                      padding: "8px",
+                    }}
+                  >
+                    <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
+                      <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
+                        {file.Image && (
+                          <img
+                            src={file.Image.ThumbnailBase64}
+                            alt={file.Filename}
+                            className="w-full h-full object-cover rounded-lg"
+                          />
+                        )}
+                        {file.Video && (
+                          <div className="relative w-full h-full">
+                            <img
+                              src={file.Video.ThumbnailBase64}
+                              alt={file.Filename}
+                              className="w-full h-full object-cover rounded-lg"
+                            />
+                            <div className="absolute inset-0 flex items-center justify-center">
+                              <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </figure>
+                    {selectedFiles.includes(file.ID) && (
+                      <div className="absolute top-2 left-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-4 w-4 text-white"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                        >
+                          <path
+                            fillRule="evenodd"
+                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
                       </div>
                     )}
                   </div>
-                </figure>
-                {selectedFiles.includes(file.ID) && (
-                  <div className="absolute top-2 left-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
-                    <svg
-                      xmlns="http://www.w3.org/2000/svg"
-                      className="h-4 w-4 text-white"
-                      viewBox="0 0 20 20"
-                      fill="currentColor"
-                    >
-                      <path
-                        fillRule="evenodd"
-                        d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                        clipRule="evenodd"
-                      />
-                    </svg>
-                  </div>
-                )}
+                );
+              })}
+            </div>
+            {isFetchingNextPage && (
+              <div
+                className={`text-center py-4 ${
+                  isDarkMode ? "text-white" : "text-gray-900"
+                } flex justify-center items-center`}
+              >
+                <span className="inline-flex">
+                  <span className="animate-bounce">.</span>
+                  <span className="animate-bounce animation-delay-200">.</span>
+                  <span className="animate-bounce animation-delay-400">.</span>
+                </span>
               </div>
-            );
-          })}
-        </div>
-        {isFetchingNextPage && (
-          <div
-            className={`text-center py-4 ${isDarkMode ? "text-white" : "text-gray-900"}`}
-          >
-            Loading more...
+            )}
+            {!hasNextPage && allFiles.length > 0 && (
+              <div
+                className={`text-center py-4 ${
+                  isDarkMode ? "text-gray-400" : "text-gray-500"
+                } flex justify-center items-center`}
+              >
+                <LuX className="w-6 h-6" />
+              </div>
+            )}
           </div>
-        )}
-        {!hasNextPage && allFiles.length > 0 && (
-          <div
-            className={`text-center py-4 ${isDarkMode ? "text-white" : "text-gray-900"}`}
-          >
-            No more files
-          </div>
-        )}
-      </div>
+        </>
+      )}
       <ConfirmDialog
         isOpen={deleteDialogState.isOpen}
         onOpenChange={handleOpenChange}
