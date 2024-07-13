@@ -25,6 +25,12 @@ const configSchema = z.object({
     .refine(isValidLinuxDirectory, {
       message: "Invalid Linux directory path",
     }),
+  DBPath: z
+    .string()
+    .min(1, "Database path is required")
+    .refine(isValidLinuxDirectory, {
+      message: "Invalid Linux directory path",
+    }),
   HashSize: z.number().int().min(32).max(2048).default(128),
   MaxThumbnailSize: z.number().int().min(240).max(1024).default(480),
   RefreshInterval: z.number().int().min(1).max(100).default(72),
@@ -45,6 +51,7 @@ const ConfigInstallWizard = () => {
     resolver: zodResolver(configSchema),
     defaultValues: {
       FolderPath: "",
+      DBPath: "",
       HashSize: 128,
       MaxThumbnailSize: 480,
       RefreshInterval: 72,
@@ -125,6 +132,27 @@ const ConfigInstallWizard = () => {
                 {errors.FolderPath && (
                   <Text color="red" size="1">
                     {errors.FolderPath.message}
+                  </Text>
+                )}
+              </label>
+
+              <label>
+                <Text as="div" size="2" mb="1" weight="bold">
+                  Database Folder Path Ending In /
+                </Text>
+                <Controller
+                  name="DBPath"
+                  control={control}
+                  render={({ field }) => (
+                    <TextField.Root
+                      {...field}
+                      placeholder="Enter the path where your library is located"
+                    />
+                  )}
+                />
+                {errors.DBPath && (
+                  <Text color="red" size="1">
+                    {errors.DBPath.message}
                   </Text>
                 )}
               </label>

@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"picshow/internal/config"
 	"time"
 
 	"github.com/glebarez/sqlite"
@@ -33,16 +34,9 @@ func createSchema(dbPath string) error {
 	return nil
 }
 
-func GetDb() (*gorm.DB, error) {
-	dataFolder, exists := os.LookupEnv("$XDG_DATA_HOME")
-	if !exists {
-		dataFolder = os.Getenv("HOME") + "/.local/share"
-	}
-
-	folderPath := filepath.Join(dataFolder, "picshow")
-	dbName := filepath.Join(folderPath, "picshow.db")
-
-	err := os.MkdirAll(folderPath, 0755)
+func GetDb(config *config.Config) (*gorm.DB, error) {
+	dbName := filepath.Join(config.DBPath, "picshow.db")
+	err := os.MkdirAll(config.DBPath, 0755)
 	if err != nil {
 		return nil, fmt.Errorf("error creating database folder: %w", err)
 	}

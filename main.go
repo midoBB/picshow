@@ -31,7 +31,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error creating cache: %v", err)
 	}
-	db, err := database.GetDb()
+	db, err := database.GetDb(runtimeConfig)
 	if err != nil {
 		log.Fatalf("Error connecting to database: %v", err)
 	}
