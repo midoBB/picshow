@@ -57,6 +57,7 @@ export default function App() {
     setSelectedFiles,
     isSelectionMode,
     selectedFiles,
+    isDarkMode,
   } = useAppState();
 
   useEffect(() => {
@@ -269,7 +270,9 @@ export default function App() {
   }
 
   return (
-    <div className="flex flex-col h-full">
+    <div
+      className={`flex flex-col h-full ${isDarkMode ? "bg-slate-800" : "bg-white"}`}
+    >
       <KeepAwake isActive={isSlideshowPlaying} />
       <Navbar onDelete={handleDelete} />
       <Lightbox
@@ -301,7 +304,7 @@ export default function App() {
       />
       <div
         ref={parentRef}
-        className="container p-4 mx-auto flex-grow overflow-auto"
+        className="w-full p-4 mx-auto flex-grow overflow-auto"
         style={{ height: "100vh " }}
       >
         <div
@@ -374,10 +377,18 @@ export default function App() {
           })}
         </div>
         {isFetchingNextPage && (
-          <div className="text-center py-4">Loading more...</div>
+          <div
+            className={`text-center py-4 ${isDarkMode ? "text-white" : "text-gray-900"}`}
+          >
+            Loading more...
+          </div>
         )}
         {!hasNextPage && allFiles.length > 0 && (
-          <div className="text-center py-4">No more files</div>
+          <div
+            className={`text-center py-4 ${isDarkMode ? "text-white" : "text-gray-900"}`}
+          >
+            No more files
+          </div>
         )}
       </div>
       <ConfirmDialog

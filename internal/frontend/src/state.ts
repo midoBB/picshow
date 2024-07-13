@@ -10,6 +10,7 @@ type AppState = {
   isSortDirectionDisabled: boolean;
   seed: number | null;
   dontAskAgainForDelete: boolean;
+  isDarkMode: boolean;
   setDontAskAgainForDelete: (value: boolean) => void;
   setIsSelectionMode: (isSelectionMode: boolean) => void;
   setSelectedFiles: (fn: (prev: number[]) => number[]) => void;
@@ -19,6 +20,7 @@ type AppState = {
   setSeed: (seed: number) => void;
   toggleSortDirection: () => void;
   toggleSortType: () => void;
+  toggleDarkMode: () => void;
 };
 
 const useAppState = create<AppState>((set, get) => ({
@@ -31,6 +33,7 @@ const useAppState = create<AppState>((set, get) => ({
   isSortDirectionDisabled: false,
   seed: null,
   dontAskAgainForDelete: false,
+  isDarkMode: true,
   setIsSelectionMode: (isSelectionMode) => set({ isSelectionMode }),
   setSelectedFiles: (fn: (prev: number[]) => number[]) => {
     set((state) => ({ selectedFiles: fn(state.selectedFiles) }));
@@ -58,6 +61,7 @@ const useAppState = create<AppState>((set, get) => ({
         sortDirection: newType === "random" ? "desc" : state.sortDirection,
       };
     }),
+  toggleDarkMode: () => set((state) => ({ isDarkMode: !state.isDarkMode })),
 }));
 
 export default useAppState;

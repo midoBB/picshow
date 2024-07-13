@@ -14,14 +14,6 @@ type File struct {
 	Video        *Video `gorm:"foreignKey:FileID" json:",omitempty"`
 }
 
-func (f *File) SetLastModified(t time.Time) {
-	f.LastModified = t.Unix()
-}
-
-func (f *File) GetLastModified() time.Time {
-	return time.Unix(f.LastModified, 0)
-}
-
 type Image struct {
 	ID              uint `gorm:"primaryKey"`
 	FullMimeType    string
