@@ -1,0 +1,59 @@
+syntax = "proto3";
+package kv;
+import "google/protobuf/timestamp.proto";
+option go_package = "picshow/internal/kv";
+
+message File {
+  uint64 id = 1;
+  string hash = 2;
+  google.protobuf.Timestamp created_at = 3;
+  string filename = 4;
+  int64 size = 5;
+  string mime_type = 6;
+  int64 last_modified = 7;
+  oneof media {
+    Image image = 8;
+    Video video = 9;
+  }
+}
+
+message Image {
+  string full_mime_type = 1;
+  uint64 width = 2;
+  uint64 height = 3;
+  uint64 thumbnail_width = 4;
+  uint64 thumbnail_height = 5;
+  bytes thumbnail_data = 6;
+}
+
+message Video {
+  string full_mime_type = 1;
+  uint64 width = 2;
+  uint64 height = 3;
+  uint64 length = 4;
+  uint64 thumbnail_width = 5;
+  uint64 thumbnail_height = 6;
+  bytes thumbnail_data = 7;
+}
+
+message FileList {
+  repeated uint64 ids = 1;
+  repeated uint64 imageFileIds = 2;
+  repeated uint64 videoFileIds = 3;
+  repeated uint64 favoriteFileIds = 4;
+}
+
+message Stats {
+  uint64 count = 1;
+  uint64 video_count = 2;
+  uint64 image_count = 3;
+  uint64 favorite_count = 4;
+}
+
+message Pagination {
+  uint64 total_records = 1;
+  uint64 current_page = 2;
+  uint64 total_pages = 3;
+  optional uint64 next_page = 4;
+  optional uint64 prev_page = 5;
+}

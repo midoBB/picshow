@@ -12,7 +12,8 @@ import (
 	"math"
 	"os"
 	"picshow/internal/config"
-	"picshow/internal/database"
+	"picshow/internal/kv"
+	"picshow/internal/utils"
 	"strings"
 
 	_ "github.com/jdeng/goheif/heif"
@@ -40,17 +41,17 @@ func getFullMimeType(filePath string) string {
 	return mtype.String()
 }
 
-func getFileMimeType(filePath string) (database.MimeType, error) {
+func getFileMimeType(filePath string) (utils.MimeType, error) {
 	mtype, err := mimetype.DetectFile(filePath)
 	if err != nil {
-		return database.MimeTypeError, fmt.Errorf("error detecting mime type: %w", err)
+		return utils.MimeTypeError, fmt.Errorf("error detecting mime type: %w", err)
 	}
 	if strings.Contains(mtype.String(), "image") {
-		return database.MimeTypeImage, nil
+		return utils.MimeTypeImage, nil
 	} else if strings.Contains(mtype.String(), "video") {
-		return database.MimeTypeVideo, nil
+		return utils.MimeTypeVideo, nil
 	}
-	return database.MimeTypeOther, nil
+	return utils.MimeTypeOther, nil
 }
 
 // generateFileKey creates a unique key for a file based on its size, creation time, and partial content hash
@@ -129,7 +130,7 @@ func readFrameAsJPEG(inFileName string, timestamp float64) io.Reader {
 	return buf
 }
 
-func (h *handler) handleNewVideo(filePath string, file database.File) (*database.Video, error) {
+func (h *handler) handleNewVideo(filePath string) (*kv.Video, error) {
 	res, err := ffmpeg.Probe(filePath)
 	if err != nil {
 		return nil, err
@@ -164,11 +165,10 @@ func (h *handler) handleNewVideo(filePath string, file database.File) (*database
 	thumbHeight := thumbBounds.Max.Y - thumbBounds.Min.Y
 
 	// Create Video record
-	video := database.Video{
+	video := kv.Video{
 		FullMimeType:    getFullMimeType(filePath),
 		Width:           width,
 		Height:          height,
-		FileID:          file.ID,
 		ThumbnailWidth:  uint64(thumbWidth),
 		ThumbnailHeight: uint64(thumbHeight),
 		Length:          uint64(duration),
@@ -178,7 +178,7 @@ func (h *handler) handleNewVideo(filePath string, file database.File) (*database
 	return &video, nil
 }
 
-func (h *handler) handleNewImage(filePath string, file database.File) (*database.Image, error) {
+func (h *handler) handleNewImage(filePath string) (*kv.Image, error) {
 	// Open the image file
 	imgFile, err := os.Open(filePath)
 	if err != nil {
@@ -217,11 +217,10 @@ func (h *handler) handleNewImage(filePath string, file database.File) (*database
 	thumbHeight := thumbBounds.Max.Y - thumbBounds.Min.Y
 
 	// Create Image record
-	image := database.Image{
+	image := kv.Image{
 		FullMimeType:    getFullMimeType(filePath),
 		Width:           uint64(width),
 		Height:          uint64(height),
-		FileID:          file.ID,
 		ThumbnailWidth:  uint64(thumbWidth),
 		ThumbnailHeight: uint64(thumbHeight),
 		ThumbnailData:   thumbnailBuffer.Bytes(),

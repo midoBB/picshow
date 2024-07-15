@@ -13,3 +13,16 @@ const (
 	Asc  OrderDirection = "asc"
 	Desc OrderDirection = "desc"
 )
+
+type MimeType string
+
+const (
+	MimeTypeImage MimeType = "image"
+	MimeTypeVideo MimeType = "video"
+	MimeTypeOther MimeType = "other"
+	MimeTypeError MimeType = "error"
+)
+
+func (mt MimeType) String() string {
+	return string(mt)
+}

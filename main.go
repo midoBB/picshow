@@ -4,8 +4,8 @@ import (
 	"log"
 	"picshow/internal/cache"
 	"picshow/internal/config"
-	"picshow/internal/database"
 	"picshow/internal/files"
+	kvdb "picshow/internal/kv"
 	"picshow/internal/server"
 	"sync"
 	"time"
@@ -27,17 +27,19 @@ func main() {
 			log.Fatalf("Error loading config after first-run: %v", err)
 		}
 	}
-	cache, err := cache.NewCache(runtimeConfig)
+	runtimeCache, err := cache.NewCache(runtimeConfig)
 	if err != nil {
 		log.Fatalf("Error creating cache: %v", err)
 	}
-	db, err := database.GetDb(runtimeConfig)
-	if err != nil {
-		log.Fatalf("Error connecting to database: %v", err)
-	}
-	repo := database.NewRepository(db, cache)
 
-	processor := files.NewProcessor(runtimeConfig, repo)
+	kv, err := kvdb.GetDB(runtimeConfig)
+	if err != nil {
+		log.Fatalf("Error creating KV repository: %v", err)
+	}
+
+	repo := kvdb.NewRepository(kv, runtimeCache)
+	// FIXME: Unhardcode the batch size and concurrency and move them to config
+	processor := files.NewProcessor(runtimeConfig, repo, 50, 5)
 	var wg sync.WaitGroup
 	wg.Add(2)
 
@@ -58,6 +60,7 @@ func main() {
 
 		// Run processor immediately on startup
 		runProcessor()
+		log.Println(repo.GetStats())
 
 		ticker := time.NewTicker(time.Duration(runtimeConfig.RefreshInterval) * time.Hour)
 		defer ticker.Stop()
@@ -89,7 +92,7 @@ func main() {
 	// Start the web server
 	go func() {
 		defer wg.Done()
-		server := server.NewServer(runtimeConfig, repo, cache)
+		server := server.NewServer(runtimeConfig, repo, runtimeCache)
 		if err := server.Start(); err != nil {
 			log.Fatalf("Error starting server: %v", err)
 		}
