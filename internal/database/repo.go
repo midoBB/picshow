@@ -66,21 +66,29 @@ func (r *Repository) GetFiles(
 	if found {
 		return &cachedFiles, nil
 	}
+
 	var files []*File
 	var totalRecords int64
+	var totalPages int
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		// Count total records
+		if err := tx.Model(&File{}).Scopes(ByType(mimetype)).Count(&totalRecords).Error; err != nil {
+			return err
+		}
 
-	// Count total records
-	if err := r.db.Model(&File{}).Scopes(ByType(mimetype)).Count(&totalRecords).Error; err != nil {
-		return nil, err
-	}
+		// Calculate pagination
+		totalPages = int(math.Ceil(float64(totalRecords) / float64(pageSize)))
+		offset := (page - 1) * pageSize
 
-	// Calculate pagination
-	totalPages := int(math.Ceil(float64(totalRecords) / float64(pageSize)))
-	offset := (page - 1) * pageSize
+		// Fetch files with pagination
+		query := tx.Preload("Image").Preload("Video").Scopes(ByType(mimetype), OrderFiles(order, direction, seed))
+		if err := query.Offset(offset).Limit(pageSize).Find(&files).Error; err != nil {
+			return err
+		}
 
-	// Fetch files with pagination
-	if err := r.db.Preload("Image").Preload("Video").Scopes(ByType(mimetype), OrderFiles(order, direction, seed)).
-		Offset(offset).Limit(pageSize).Find(&files).Error; err != nil {
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
 
@@ -130,33 +138,32 @@ func (r *Repository) GetStats() (*ServerStats, error) {
 	if found {
 		return &cachedStats, nil
 	}
-	var totalCount int64
-	var totalVideoCount int64
-	var totalImageCount int64
-	if err := r.db.Model(&File{}).Count(&totalCount).Error; err != nil {
+
+	var stats ServerStats
+	err = r.db.Transaction(func(tx *gorm.DB) error {
+		// Use a single query to get all stats
+		err := tx.Raw(`
+			SELECT
+				(SELECT COUNT(*) FROM files) as count,
+				(SELECT COUNT(*) FROM videos) as video_count,
+				(SELECT COUNT(*) FROM images) as image_count
+		`).Scan(&stats).Error
+		return err
+	})
+	if err != nil {
 		return nil, err
-	}
-	if err := r.db.Model(&Video{}).Count(&totalVideoCount).Error; err != nil {
-		return nil, err
-	}
-	if err := r.db.Model(&Image{}).Count(&totalImageCount).Error; err != nil {
-		return nil, err
-	}
-	stats := &ServerStats{
-		Count:      totalCount,
-		VideoCount: totalVideoCount,
-		ImageCount: totalImageCount,
 	}
 
-	if err := r.cache.SetCache(string(cache.StatsCacheKey), stats); err != nil {
+	if err := r.cache.SetCache(string(cache.StatsCacheKey), &stats); err != nil {
 		return nil, fmt.Errorf("failed to set cache: %w", err)
 	}
 
-	return stats, nil
+	return &stats, nil
 }
 
 func (r *Repository) DeleteFiles(ids []uint64) error {
 	return r.db.Transaction(func(tx *gorm.DB) error {
+		// Delete related records in a single query each
 		if err := tx.Where("file_id IN ?", ids).Delete(&Image{}).Error; err != nil {
 			return err
 		}
@@ -166,6 +173,7 @@ func (r *Repository) DeleteFiles(ids []uint64) error {
 		if err := tx.Where("id IN ?", ids).Delete(&File{}).Error; err != nil {
 			return err
 		}
+
 		for _, id := range ids {
 			r.clearCacheByFileID(id)
 		}
@@ -216,25 +224,34 @@ func (r *Repository) clearCache() {
 }
 
 func (r *Repository) DeleteFile(id uint64) error {
-	// First, delete records from images and videos tables where file_id matches the given id
-	err := r.db.Where("file_id = ?", id).Delete(&Image{}).Error
-	if err != nil {
-		return err
-	}
+	return r.db.Transaction(func(tx *gorm.DB) error {
+		// Check if the file exists
+		var file File
+		if err := tx.First(&file, id).Error; err != nil {
+			if err == gorm.ErrRecordNotFound {
+				return fmt.Errorf("file with id %d not found", id)
+			}
+			return err
+		}
 
-	err = r.db.Where("file_id = ?", id).Delete(&Video{}).Error
-	if err != nil {
-		return err
-	}
+		// Delete related records and the file in a single query each
+		if err := tx.Where("file_id = ?", id).Delete(&Image{}).Error; err != nil {
+			return err
+		}
 
-	// Finally, delete the record from the files table where id matches
-	err = r.db.Delete(&File{}, id).Error
-	if err != nil {
-		return err
-	}
-	r.clearCacheByFileID(id)
-	r.clearCache()
-	return nil
+		if err := tx.Where("file_id = ?", id).Delete(&Video{}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Delete(&file).Error; err != nil {
+			return err
+		}
+
+		r.clearCacheByFileID(id)
+		r.clearCache()
+
+		return nil
+	})
 }
 
 func (r *Repository) FindAllFiles() ([]File, error) {
