@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"picshow/internal/cache"
 	"picshow/internal/config"
-	"picshow/internal/database"
 	"picshow/internal/frontend"
+	"picshow/internal/kv"
 	"picshow/internal/utils"
 	"strconv"
 
@@ -18,14 +18,14 @@ import (
 )
 
 type Server struct {
-	repo   *database.Repository
+	repo   *kv.Repository
 	config *config.Config
 	ccache *cache.Cache
 }
 
 func NewServer(
 	config *config.Config,
-	repo *database.Repository,
+	repo *kv.Repository,
 	ccache *cache.Cache,
 ) *Server {
 	return &Server{config: config, repo: repo, ccache: ccache}
@@ -45,8 +45,8 @@ func (s *Server) Start() error {
 	// API routes
 	api := e.Group("/api")
 	api.GET("/", s.getFiles)
+	api.PATCH("/:id/favorite", s.toggleFavorite)
 	api.DELETE("/", s.deleteFiles)
-	api.DELETE("/:id", s.deleteFile)
 	api.GET("/image/:id", s.getImage)
 	api.GET("/video/:id", s.streamVideo)
 	api.GET("/stats", s.getStats)
@@ -56,16 +56,57 @@ func (s *Server) Start() error {
 	return e.Start(fmt.Sprintf(":%d", s.config.PORT))
 }
 
+func (s *Server) getFilesFromCache(query *fileQuery) (*FilesWithPagination, bool) {
+	cacheKey, paginationKey := cache.GenerateFilesCacheKey(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
+	var cachedFiles []*File
+	foundFiles, err := s.ccache.GetCache(cacheKey, &cachedFiles)
+	if err != nil {
+		return nil, false
+	}
+	var cachedPagination *Pagination
+	foundPagination, err := s.ccache.GetCache(paginationKey, &cachedPagination)
+	if err != nil {
+		return nil, false
+	}
+	if foundFiles && foundPagination {
+		log.Printf("Found files in cache %s", cacheKey)
+		result := &FilesWithPagination{
+			Files:      cachedFiles,
+			Pagination: cachedPagination,
+		}
+		return result, true
+	}
+	return nil, false
+}
+
 func (s *Server) getFiles(e echo.Context) error {
 	query := &fileQuery{}
 	if err := query.bindAndSetDefaults(e); err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Failed to parse query"})
 	}
-	files, err := s.repo.GetFiles(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
+
+	cacheResult, found := s.getFilesFromCache(query)
+	if found {
+		return e.JSON(http.StatusOK, cacheResult)
+	}
+	files, pagination, err := s.repo.GetFiles(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch files"})
 	}
-	return e.JSON(http.StatusOK, files)
+	// Map protobuf Files to server Files
+	serverFiles := make([]*File, len(files))
+	for i, protoFile := range files {
+		serverFiles[i] = MapProtoFileToServerFile(protoFile)
+	}
+
+	serverPagination := MapProtoPaginationToServerPagination(pagination)
+	result := FilesWithPagination{
+		Files:      serverFiles,
+		Pagination: serverPagination,
+	}
+
+	s.setQueryCache(query, result)
+	return e.JSON(http.StatusOK, result)
 }
 
 func (s *Server) getImage(e echo.Context) error {
@@ -92,12 +133,12 @@ func (s *Server) getImage(e echo.Context) error {
 	}
 
 	// If not in cache, fetch from database
-	file, err := s.repo.GetFile(fileId)
+	file, err := s.repo.GetFileByID(fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
 	}
 
-	if file.MimeType == database.MimeTypeImage.String() {
+	if file.MimeType == utils.MimeTypeImage.String() {
 		filePath := filepath.Join(s.config.FolderPath, file.Filename)
 
 		// Read file contents
@@ -125,7 +166,7 @@ func (s *Server) streamVideo(e echo.Context) error {
 	if err != nil {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
 	}
-	file, err := s.repo.GetFile(fileId)
+	file, err := s.repo.GetFileByID(fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
 	}
@@ -133,7 +174,7 @@ func (s *Server) streamVideo(e echo.Context) error {
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to open file"})
 	}
-	return e.Stream(http.StatusOK, file.Video.FullMimeType, f)
+	return e.Stream(http.StatusOK, file.GetVideo().FullMimeType, f)
 }
 
 func (s *Server) getStats(c echo.Context) error {
@@ -142,25 +183,6 @@ func (s *Server) getStats(c echo.Context) error {
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch count"})
 	}
 	return c.JSON(http.StatusOK, stats)
-}
-
-func (s *Server) deleteFile(e echo.Context) error {
-	id := e.Param("id")
-	fileId, err := strconv.ParseUint(id, 10, 64)
-	if err != nil {
-		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
-	}
-	file, err := s.repo.GetFile(fileId)
-	if err != nil {
-		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
-	}
-	if err := os.Remove(filepath.Join(s.config.FolderPath, file.Filename)); err != nil {
-		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file"})
-	}
-	if err := s.repo.DeleteFile(fileId); err != nil {
-		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to delete file from database"})
-	}
-	return e.NoContent(http.StatusNoContent)
 }
 
 func (s *Server) deleteFiles(e echo.Context) error {
@@ -175,7 +197,7 @@ func (s *Server) deleteFiles(e echo.Context) error {
 	}
 	fileIDs := make([]uint64, 0)
 	for _, file := range files {
-		fileIDs = append(fileIDs, file.ID)
+		fileIDs = append(fileIDs, file.Id)
 		filePath := filepath.Join(s.config.FolderPath, file.Filename)
 		if err := os.Remove(filePath); err != nil {
 			return fmt.Errorf("failed to delete file %s: %w", file.Filename, err)
@@ -185,4 +207,28 @@ func (s *Server) deleteFiles(e echo.Context) error {
 		return fmt.Errorf("failed to delete files from database: %w", err)
 	}
 	return e.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) toggleFavorite(e echo.Context) error {
+	id := e.Param("id")
+	fileId, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
+	}
+	if err := s.repo.ToggleFileFavorite(fileId); err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to toggle favorite file"})
+	}
+
+	return e.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) setQueryCache(query *fileQuery, result FilesWithPagination) {
+	cacheKey, paginationKey := cache.GenerateFilesCacheKey(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
+
+	if err := s.ccache.SetCache(cacheKey, result.Files); err != nil {
+		log.Printf("Error caching file: %v", err)
+	}
+	if err := s.ccache.SetCache(paginationKey, result.Pagination); err != nil {
+		log.Printf("Error caching file: %v", err)
+	}
 }

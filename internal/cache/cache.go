@@ -31,6 +31,7 @@ type CacheKey string
 
 const (
 	FilesCacheKey       CacheKey = "list"
+	PaginationCacheKey  CacheKey = "pagination"
 	StatsCacheKey       CacheKey = "stats"
 	FileCacheKey        CacheKey = "single"
 	FileContentCacheKey CacheKey = "content"
@@ -43,7 +44,7 @@ func GenerateFilesCacheKey(
 	direction utils.OrderDirection,
 	seed *uint64,
 	mimetype *string,
-) string {
+) (string, string) {
 	seedStr := "0"
 	if seed != nil {
 		seedStr = fmt.Sprintf("%d", *seed)
@@ -52,7 +53,7 @@ func GenerateFilesCacheKey(
 	if mimetype != nil {
 		mimetypeStr = *mimetype
 	}
-	return fmt.Sprintf("%s:%s:%s:%s:%s:%d:%d", FilesCacheKey, order, direction, seedStr, mimetypeStr, page, pageSize)
+	return fmt.Sprintf("%s:%s:%s:%s:%s:%d:%d", FilesCacheKey, order, direction, seedStr, mimetypeStr, page, pageSize), fmt.Sprintf("%s:%s:%s:%s:%s:%d:%d", PaginationCacheKey, order, direction, seedStr, mimetypeStr, page, pageSize)
 }
 
 // GenerateFileCacheKey generates a unique key for a single file
