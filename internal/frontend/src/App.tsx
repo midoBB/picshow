@@ -5,18 +5,17 @@ import { BASE_URL } from "@/queries/api";
 import Navbar from "@/Navbar";
 import Lightbox, { SlideshowRef } from "yet-another-react-lightbox";
 import Slideshow from "yet-another-react-lightbox/plugins/slideshow";
-import Zoom from "yet-another-react-lightbox/plugins/zoom";
 import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
 import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
 import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
-import { useStats, usePaginatedFiles, useDeleteFile } from "@/queries/loaders";
+import { usePaginatedFiles, useDeleteFile } from "@/queries/loaders";
 import useAppState from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
 import KeepAwake from "@/KeepAwake";
-const PAGE_SIZE = 40;
+const PAGE_SIZE = 15;
 
 const CustomSlide = ({ slide }: any) => {
   if (slide.type === "video") {
@@ -69,6 +68,7 @@ export default function App() {
 
   const [isOpen, setIsOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [isShowingControls, setIsShowingControls] = useState(true);
 
   const openLightbox = (index: number) => {
     setCurrentIndex(index);
@@ -124,7 +124,6 @@ export default function App() {
     [setIsSelectionMode, setSelectedFiles],
   );
 
-  const { isLoading: isLoadingStats } = useStats();
   const {
     data,
     fetchNextPage,
@@ -220,6 +219,20 @@ export default function App() {
           return {
             type: "image",
             src: `${BASE_URL}/image/${file.ID}`,
+            width: file.Image?.Width,
+            height: file.Image?.Height,
+            srcSet: [
+              {
+                src: file.Image?.ThumbnailBase64,
+                width: file.Image?.ThumbnailWidth,
+                height: file.Image?.ThumbnailHeight,
+              },
+              {
+                src: `${BASE_URL}/image/${file.ID}`,
+                width: file.Image?.Width,
+                height: file.Image?.Height,
+              },
+            ],
             alt: file.Filename,
             id: file.ID,
             hash: file.Hash,
@@ -280,14 +293,21 @@ export default function App() {
         slides={slides}
         fullscreen={{ auto: true }}
         slideshow={{ autoplay: false, delay: 5000, ref: slideShowRef }}
-        plugins={[Thumbnails, Fullscreen, Slideshow, Zoom]}
+        plugins={[Thumbnails, Fullscreen, Slideshow]}
         thumbnails={{ showToggle: true, hidden: true }}
         render={{
           slide: CustomSlide,
-          buttonPrev: currentIndex > 0 ? undefined : () => null,
-          buttonNext: currentIndex < slides.length - 1 ? undefined : () => null,
+          buttonPrev:
+            isShowingControls && currentIndex > 0 ? undefined : () => null,
+          buttonNext:
+            isShowingControls && currentIndex < slides.length - 1
+              ? undefined
+              : () => null,
         }}
         on={{
+          click: () => {
+            setIsShowingControls(!isShowingControls);
+          },
           view: ({ index }) => {
             setCurrentIndex(index);
             if (
