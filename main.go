@@ -38,8 +38,7 @@ func main() {
 	}
 
 	repo := kvdb.NewRepository(kv, runtimeCache)
-	// FIXME: Unhardcode the batch size and concurrency and move them to config
-	processor := files.NewProcessor(runtimeConfig, repo, 50, 5)
+	processor := files.NewProcessor(runtimeConfig, repo, runtimeConfig.BatchSize, runtimeConfig.Concurrency)
 	var wg sync.WaitGroup
 	wg.Add(2)
 

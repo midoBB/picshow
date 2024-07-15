@@ -10,7 +10,8 @@ import (
 type Config struct {
 	FolderPath       string
 	DBPath           string
-	BatchSize        *int // TODO: return to using batching when processiing at startup
+	BatchSize        int
+	Concurrency      int
 	HashSize         int
 	MaxThumbnailSize int
 	PORT             int
@@ -73,5 +74,7 @@ func (c *Config) Save() error {
 	v.Set("MaxThumbnailSize", c.MaxThumbnailSize)
 	v.Set("FolderPath", c.FolderPath)
 	v.Set("DBPath", c.DBPath)
+	v.Set("BatchSize", c.BatchSize)
+	v.Set("Concurrency", c.Concurrency)
 	return v.SafeWriteConfig()
 }
