@@ -32,6 +32,8 @@ const configSchema = z.object({
       message: "Invalid Linux directory path",
     }),
   HashSize: z.number().int().min(32).max(2048).default(128),
+  BatchSize: z.number().int().min(1).max(100).default(10),
+  Concurrency: z.number().int().min(1).max(32).default(3),
   MaxThumbnailSize: z.number().int().min(240).max(1024).default(480),
   RefreshInterval: z.number().int().min(1).max(100).default(72),
   CacheSizeMB: z.number().int().min(20).max(1024).default(64),
@@ -50,6 +52,8 @@ const ConfigInstallWizard = () => {
   } = useForm({
     resolver: zodResolver(configSchema),
     defaultValues: {
+      BatchSize: 10,
+      Concurrency: 3,
       FolderPath: "",
       DBPath: "",
       HashSize: 128,
@@ -229,6 +233,76 @@ const ConfigInstallWizard = () => {
                 )}
               />
 
+              <Controller
+                name="Concurrency"
+                control={control}
+                render={({ field }) => (
+                  <Flex direction="column" gap="2">
+                    <Text as="label" size="2" weight="bold">
+                      Concurrency (1-32 threads)
+                    </Text>
+                    <Flex gap="2" align="center">
+                      <Slider
+                        value={[field.value]}
+                        onValueChange={(value) => field.onChange(value[0])}
+                        min={240}
+                        max={1024}
+                        step={16}
+                        style={{ flexGrow: 1 }}
+                      />
+                      <TextField.Root
+                        style={{ width: "80px" }}
+                        type="number"
+                        value={field.value}
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                        min={1}
+                        max={32}
+                      ></TextField.Root>
+                      <Text size="2">px</Text>
+                    </Flex>
+                    {errors.Concurrency && (
+                      <Text color="red" size="1">
+                        {errors.Concurrency.message}
+                      </Text>
+                    )}
+                  </Flex>
+                )}
+              />
+              <Controller
+                name="BatchSize"
+                control={control}
+                render={({ field }) => (
+                  <Flex direction="column" gap="2">
+                    <Text as="label" size="2" weight="bold">
+                      Batch Size (1-100 files)
+                    </Text>
+                    <Flex gap="2" align="center">
+                      <Slider
+                        value={[field.value]}
+                        onValueChange={(value) => field.onChange(value[0])}
+                        min={1}
+                        max={100}
+                        step={4}
+                        style={{ flexGrow: 1 }}
+                      />
+                      <TextField.Root
+                        style={{ width: "80px" }}
+                        type="number"
+                        value={field.value}
+                        onChange={(e) => field.onChange(Number(e.target.value))}
+                        min={1}
+                        max={100}
+                      ></TextField.Root>
+                      <Text size="2">px</Text>
+                    </Flex>
+                    {errors.BatchSize && (
+                      <Text color="red" size="1">
+                        {errors.BatchSize.message}
+                      </Text>
+                    )}
+                  </Flex>
+                )}
+              />
               <Controller
                 name="RefreshInterval"
                 control={control}
