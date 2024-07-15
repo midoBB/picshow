@@ -148,7 +148,7 @@ func (r *Repository) updateStatsFromOP(op OP, file *File) error {
 		case *File_Video:
 			stats.VideoCount--
 		}
-		if favorite, _ := r.isFileFavorite(file.Id); favorite {
+		if favorite, _ := r.IsFileFavorite(file.Id); favorite {
 			stats.FavoriteCount--
 		}
 	} else {
@@ -169,7 +169,7 @@ func (r *Repository) updateStatsFromOP(op OP, file *File) error {
 	return nil
 }
 
-func (r *Repository) isFileFavorite(fileID uint64) (bool, error) {
+func (r *Repository) IsFileFavorite(fileID uint64) (bool, error) {
 	list, err := r.GetAllFileIds()
 	if err != nil {
 		return false, fmt.Errorf("failed to get stats: %w", err)

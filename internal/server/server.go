@@ -46,6 +46,7 @@ func (s *Server) Start() error {
 	api := e.Group("/api")
 	api.GET("/", s.getFiles)
 	api.PATCH("/:id/favorite", s.toggleFavorite)
+	api.GET("/:id/favorite", s.getFavoriteStatus)
 	api.DELETE("/", s.deleteFiles)
 	api.GET("/image/:id", s.getImage)
 	api.GET("/video/:id", s.streamVideo)
@@ -54,6 +55,19 @@ func (s *Server) Start() error {
 	logURLs(s.config.PORT)
 
 	return e.Start(fmt.Sprintf(":%d", s.config.PORT))
+}
+
+func (s *Server) getFavoriteStatus(e echo.Context) error {
+	id := e.Param("id")
+	fileId, err := strconv.ParseUint(id, 10, 64)
+	if err != nil {
+		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
+	}
+	favorite, err := s.repo.IsFileFavorite(fileId)
+	if err != nil {
+		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch favorite status"})
+	}
+	return e.JSON(http.StatusOK, favorite)
 }
 
 func (s *Server) getFilesFromCache(query *fileQuery) (*FilesWithPagination, bool) {

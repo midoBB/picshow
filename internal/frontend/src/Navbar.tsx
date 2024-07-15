@@ -94,6 +94,12 @@ const Navbar = ({ onDelete }: { onDelete: () => void }) => {
                     >
                       <Select.ItemText>Image</Select.ItemText>
                     </Select.Item>
+                    <Select.Item
+                      value="favorite"
+                      className={`cursor-pointer hover:${isDarkMode ? "bg-gray-700" : "bg-gray-100"} rounded px-2 py-1`}
+                    >
+                      <Select.ItemText>Favorites</Select.ItemText>
+                    </Select.Item>
                   </Select.Viewport>
                 </Select.Content>
               </Select.Portal>
