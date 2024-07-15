@@ -9,6 +9,8 @@ import {
   fetchPaginatedFiles,
   PaginationParams,
   deleteFile,
+  toggleFavorite,
+  getIsFavorite,
 } from "@/queries/api";
 import { Stats } from "@/queries/model";
 
@@ -33,6 +35,43 @@ export const usePaginatedFiles = (params: Omit<PaginationParams, "page">) => {
       firstPage.pagination.prev_page
         ? { page: firstPage.pagination.prev_page }
         : undefined,
+  });
+};
+
+export const useToggleFavorite = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: toggleFavorite,
+    onMutate: async (id) => {
+      await queryClient.cancelQueries({ queryKey: ["isFavorite", id] });
+      const queries = queryClient.getQueriesData<{
+        isFavorite: boolean;
+      }>({ queryKey: ["isFavorite", id] });
+
+      queries.forEach(([queryKey, queryData]) => {
+        if (queryData) {
+          queryClient.setQueryData(queryKey, !queryData.isFavorite);
+        }
+      });
+      return { queries };
+    },
+    onError: (_, __, context) => {
+      if (context?.queries) {
+        context.queries.forEach(([queryKey, queryData]) => {
+          queryClient.setQueryData(queryKey, queryData);
+        });
+      }
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ["isFavorite"] });
+    },
+  });
+};
+
+export const useGetIsFavorite = (id: number) => {
+  return useQuery({
+    queryKey: ["isFavorite", id],
+    queryFn: () => getIsFavorite(id),
   });
 };
 

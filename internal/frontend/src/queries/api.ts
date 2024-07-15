@@ -46,6 +46,15 @@ export const deleteFile = async (ids: string): Promise<void> => {
   });
 };
 
+export const toggleFavorite = async (id: number): Promise<void> => {
+  await api.patch(`/${id}/favorite`, {});
+};
+
+export const getIsFavorite = async (id: number): Promise<boolean> => {
+  const { data } = await api.get<boolean>(`/${id}/favorite`);
+  return data;
+};
+
 export const fetchStats = async (): Promise<Stats> => {
   const { data } = await api.get<Stats>("/stats");
   return data;

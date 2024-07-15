@@ -3,20 +3,71 @@ import { FaRegPlayCircle } from "react-icons/fa";
 import { LuLoader2, LuX } from "react-icons/lu";
 import { BASE_URL } from "@/queries/api";
 import Navbar from "@/Navbar";
-import Lightbox, { SlideshowRef } from "yet-another-react-lightbox";
+import Lightbox, {
+  SlideshowRef,
+  IconButton,
+  createIcon,
+  useLightboxState,
+} from "yet-another-react-lightbox";
 import Slideshow from "yet-another-react-lightbox/plugins/slideshow";
 import Thumbnails from "yet-another-react-lightbox/plugins/thumbnails";
 import Fullscreen from "yet-another-react-lightbox/plugins/fullscreen";
 import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
-import { usePaginatedFiles, useDeleteFile } from "@/queries/loaders";
+import {
+  usePaginatedFiles,
+  useDeleteFile,
+  useToggleFavorite,
+  useGetIsFavorite,
+} from "@/queries/loaders";
 import useAppState from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
 import KeepAwake from "@/KeepAwake";
 const PAGE_SIZE = 15;
+const FilledHeartIcon = createIcon(
+  "FilledHeartIcon",
+  <path
+    fill="currentColor"
+    d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+  />,
+);
 
+const EmptyHeartIcon = createIcon(
+  "EmptyHeartIcon",
+  <path
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
+  />,
+);
+
+function MyButton() {
+  const { currentSlide } = useLightboxState();
+  const toggleFavoriteMutation = useToggleFavorite();
+  const { data: isFavorite, isLoading } = useGetIsFavorite(
+    currentSlide?.id || 0,
+  );
+
+  const handleToggleFavorite = () => {
+    if (currentSlide && currentSlide.id) {
+      toggleFavoriteMutation.mutate(currentSlide.id.toString());
+    }
+  };
+
+  const HeartIcon = isFavorite ? FilledHeartIcon : EmptyHeartIcon;
+
+  return (
+    <IconButton
+      label={isFavorite ? "Remove from favorites" : "Add to favorites"}
+      icon={HeartIcon}
+      disabled={!currentSlide || isLoading}
+      onClick={handleToggleFavorite}
+    />
+  );
+}
 const CustomSlide = ({ slide }: any) => {
   if (slide.type === "video") {
     return <VideoSlide slide={slide} />;
@@ -295,6 +346,9 @@ export default function App() {
         slideshow={{ autoplay: false, delay: 5000, ref: slideShowRef }}
         plugins={[Thumbnails, Fullscreen, Slideshow]}
         thumbnails={{ showToggle: true, hidden: true }}
+        toolbar={{
+          buttons: [<MyButton key="my-button" />, "close"],
+        }}
         render={{
           slide: CustomSlide,
           buttonPrev:
