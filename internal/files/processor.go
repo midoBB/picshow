@@ -181,7 +181,7 @@ func (p *Processor) Process() error {
 		go func() {
 			defer wg.Done()
 			for batch := range batchChan {
-				if err := p.processBatch(batch, existingFilesMap, existingFilesHashesMap); err != nil {
+				if err := p.processBatch(batch); err != nil {
 					errChan <- err
 					return
 				}
@@ -265,7 +265,7 @@ func (p *Processor) processBatch(files []os.DirEntry) error {
 
 		if _, alreadyProcessed := processedHashes[hash]; alreadyProcessed {
 			log.Printf("Found duplicate file: %s (hash: %s)", file.Name(), hash)
-			p.handleDuplicateFile(filePath, file.Name(), hash)
+			p.handleDuplicateFile(filePath, file.Name())
 			continue
 		}
 
@@ -351,7 +351,7 @@ func (p *Processor) processNewFileMedia(filePath string, newFile *kv.File, mimeT
 	return nil
 }
 
-func (p *Processor) handleDuplicateFile(filePath, fileName, hash string) {
+func (p *Processor) handleDuplicateFile(filePath, fileName string) {
 	log.Printf("Duplicate hash detected for %s", fileName)
 
 	duplicatesDir := filepath.Join(filepath.Dir(p.config.FolderPath), "duplicates")
