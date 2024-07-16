@@ -1,9 +1,9 @@
 package files
 
 import (
+	"bufio"
 	"context"
 	"fmt"
-	"io/fs"
 	"log"
 	"os"
 	"os/exec"
@@ -53,6 +53,18 @@ func NewProcessor(
 	}
 }
 
+func findFdCommand() (string, error) {
+	possibleCommands := []string{"fd", "fdfind", "fd-find"}
+
+	for _, cmd := range possibleCommands {
+		if _, err := exec.LookPath(cmd); err == nil {
+			return cmd, nil
+		}
+	}
+
+	return "", fmt.Errorf("could not find fd command. Please install fd, fdfind, or fd-find")
+}
+
 func (p *Processor) handleDuplicateFile(filePath, filename string) {
 	log.Printf("duplicate hash detected for %s", filename)
 
@@ -81,7 +93,7 @@ func (p *Processor) Process() error {
 	log.Println("fetched existing files from repository")
 
 	processedHashes := &sync.Map{}
-	fileChan := make(chan fs.DirEntry, p.concurrency)
+	fileChan := make(chan string, p.concurrency)
 	errChan := make(chan error, p.concurrency)
 	var wg sync.WaitGroup
 	// Add a counter for processed files
@@ -110,40 +122,48 @@ func (p *Processor) Process() error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for file := range fileChan {
-				if err := p.processFile(file, existingFilesMap, existingFilesHashesMap, processedHashes); err != nil {
-					errChan <- fmt.Errorf("error processing file %s: %w", file.Name(), err)
+			for filePath := range fileChan {
+				if err := p.processFile(filePath, existingFilesMap, existingFilesHashesMap, processedHashes); err != nil {
+					errChan <- fmt.Errorf("error processing file %s: %w", filePath, err)
 				}
 				atomic.AddInt64(&processedFiles, 1)
 			}
 		}()
 	}
-
+	fdCommand, err := findFdCommand()
+	if err != nil {
+		return fmt.Errorf("error finding fd command: %w", err)
+	}
+	log.Printf("Using %s command for file discovery", fdCommand)
 	// Walk the directory and send files to the channel
-	err = filepath.WalkDir(p.config.FolderPath, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			log.Printf("error accessing path %q: %v\n", path, err)
-			return filepath.SkipDir
-		}
+	// Use fd to stream files
+	cmd := exec.CommandContext(p.ctx, fdCommand, ".", "-t", "f", "-d", "1", p.config.FolderPath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stdout pipe: %w", err)
+	}
 
-		// If it's a directory and not the root directory, skip it
-		if d.IsDir() && path != p.config.FolderPath {
-			return filepath.SkipDir
-		}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("error starting %s command: %w", fdCommand, err)
+	}
 
-		// Skip the root directory itself
-		if path == p.config.FolderPath {
-			return nil
-		}
-
-		// At this point, we're dealing with a file in the root directory
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
 		select {
 		case <-p.ctx.Done():
 			return p.ctx.Err()
-		case fileChan <- d:
-			return nil
+		case fileChan <- scanner.Text():
+
 		}
-	})
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("error reading %s output: %v", fdCommand, err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		log.Printf("%s command finished with error: %v", fdCommand, err)
+	}
 
 	close(fileChan)
 	wg.Wait()
@@ -154,53 +174,48 @@ func (p *Processor) Process() error {
 		log.Println(err)
 	}
 
-	if err != nil {
-		log.Printf("error walking directory: %v", err)
-		return err
-	}
-
 	p.removeNonExistentFiles(existingFilesMap)
 	log.Println("completed processing files")
 	return nil
 }
 
-func (p *Processor) processFile(file os.DirEntry, existingFilesMap *sync.Map, existingFilesHashesMap *sync.Map, processedHashes *sync.Map) error {
-	filePath := filepath.Join(p.config.FolderPath, file.Name())
-	fileInfo, err := file.Info()
+func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, existingFilesHashesMap *sync.Map, processedHashes *sync.Map) error {
+	fileInfo, err := os.Stat(filePath)
 	if err != nil {
-		return fmt.Errorf("error getting file info for %s: %v", file.Name(), err)
+		return fmt.Errorf("error getting file info for %s: %v", filePath, err)
 	}
 
 	lastModified := fileInfo.ModTime().Unix()
+	filename := filepath.Base(filePath)
 
 	// Early skipping of unmodified files
-	existingFileIDInterface, existsByName := existingFilesMap.Load(file.Name())
+	existingFileIDInterface, existsByName := existingFilesMap.Load(filename)
 	var existingFile *kv.File
 	if existsByName {
 		existingFileID, ok := existingFileIDInterface.(uint64)
 		if !ok {
-			return fmt.Errorf("invalid type for existingFileID for %s", file.Name())
+			return fmt.Errorf("invalid type for existingFileID for %s", filename)
 		}
 		existingFile, err = p.repo.GetFileByID(existingFileID)
 		if err != nil {
-			return fmt.Errorf("error fetching file %s: %v", file.Name(), err)
+			return fmt.Errorf("error fetching file %s: %v", filename, err)
 		}
 		if existingFile.LastModified >= lastModified {
-			log.Printf("file %s has not been modified since last processing, skipping", file.Name())
+			log.Printf("file %s has not been modified since last processing, skipping", filename)
 			processedHashes.Store(existingFile.Hash, true)
-			existingFilesMap.Delete(file.Name())
+			existingFilesMap.Delete(filename)
 			return nil
 		}
 	}
 
 	hash, err := p.handler.generateFileKey(filePath)
 	if err != nil {
-		return fmt.Errorf("error generating hash for %s: %v", file.Name(), err)
+		return fmt.Errorf("error generating hash for %s: %v", filename, err)
 	}
 
 	if _, alreadyProcessed := processedHashes.Load(hash); alreadyProcessed {
-		log.Printf("found duplicate file: %s (hash: %s)", file.Name(), hash)
-		p.handleDuplicateFile(filePath, file.Name())
+		log.Printf("found duplicate file: %s (hash: %s)", filename, hash)
+		p.handleDuplicateFile(filePath, filename)
 		return nil
 	}
 
@@ -212,23 +227,23 @@ func (p *Processor) processFile(file os.DirEntry, existingFilesMap *sync.Map, ex
 		}
 		existingFile, err = p.repo.GetFileByID(existingFileID)
 		if err != nil {
-			return fmt.Errorf("error fetching file %s: %v", file.Name(), err)
+			return fmt.Errorf("error fetching file %s: %v", filename, err)
 		}
-		log.Printf("updating existing file record for %s", file.Name())
-		existingFile.Filename = file.Name()
+		log.Printf("updating existing file record for %s", filename)
+		existingFile.Filename = filename
 		existingFile.LastModified = lastModified
 		if err := p.repo.UpdateFile(existingFile); err != nil {
-			return fmt.Errorf("error updating file %s: %v", file.Name(), err)
+			return fmt.Errorf("error updating file %s: %v", filename, err)
 		}
 		existingFilesMap.Delete(existingFile.Filename)
 	} else {
-		log.Printf("processing new file %s", file.Name())
+		log.Printf("processing new file %s", filename)
 		mimeType, err := getFileMimeType(filePath)
 		if err != nil {
-			return fmt.Errorf("error detecting mime type for %s: %v", file.Name(), err)
+			return fmt.Errorf("error detecting mime type for %s: %v", filename, err)
 		}
 		newFile := &kv.File{
-			Filename:     file.Name(),
+			Filename:     filename,
 			Hash:         hash,
 			LastModified: lastModified,
 			MimeType:     string(mimeType),
@@ -236,12 +251,12 @@ func (p *Processor) processFile(file os.DirEntry, existingFilesMap *sync.Map, ex
 			Size:         fileInfo.Size(),
 		}
 		if err := p.processNewFile(filePath, newFile, mimeType); err != nil {
-			return fmt.Errorf("error processing new file %s: %v", file.Name(), err)
+			return fmt.Errorf("error processing new file %s: %v", filename, err)
 		}
 	}
 
 	processedHashes.Store(hash, true)
-	existingFilesMap.Delete(file.Name())
+	existingFilesMap.Delete(filename)
 	return nil
 }
 

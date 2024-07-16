@@ -5,3 +5,4 @@
   - ffmpeg
   - xxhash
   - file
+  - fd-find
