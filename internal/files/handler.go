@@ -149,7 +149,15 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 	// Generate temporary file path for thumbnail
 	tempFile := filepath.Join(os.TempDir(), strconv.FormatUint(uint64(thumbWidth), 10)+"x"+strconv.FormatUint(uint64(thumbHeight), 10)+".jpg")
 	// Construct and execute ImageMagick convert command
-	cmd := exec.Command("convert", filePath, "-resize", strconv.Itoa(int(thumbWidth))+"x"+strconv.Itoa(int(thumbHeight)), tempFile)
+	cmd := exec.Command(
+		"convert",
+		filePath,
+		"-thumbnail", strconv.Itoa(int(thumbWidth))+"x"+strconv.Itoa(int(thumbHeight)),
+		"-depth", "8",
+		"-quality", "85",
+		"-filter", "Triangle",
+		tempFile,
+	)
 	convCmdKey := fmt.Sprintf("conver_%s", tempFile)
 	p.processes.Store(convCmdKey, cmd)
 	err = cmd.Run()
