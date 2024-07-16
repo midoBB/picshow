@@ -252,15 +252,16 @@ func (h *handler) handleNewVideo(p *Processor, filePath string) (*kv.Video, erro
 	defer os.Remove(thumbnailFile.Name())
 	defer p.tempFiles.Delete(thumbnailFile.Name())
 
-	// Execute FFmpeg command to extract and resize the frame
 	ffmpegCmd := exec.Command(
 		"ffmpeg",
-		"-i", filePath,
 		"-ss", fmt.Sprintf("%.2f", screenshotAt),
+		"-t", "0.1",
+		"-i", filePath,
+		"-an",
 		"-vframes", "1",
-		"-vf", fmt.Sprintf("scale=%d:%d", thumbWidth, thumbHeight),
-		"-f", "image2",
-		"-q:v", "2",
+		"-vf", fmt.Sprintf("scale=%d:%d:flags=fast_bilinear", thumbWidth, thumbHeight),
+		"-f", "mjpeg",
+		"-q:v", "5",
 		"-y",
 		thumbnailFile.Name(),
 	)
