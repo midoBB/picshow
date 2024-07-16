@@ -4,20 +4,22 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"picshow/internal/cache"
+	"sync"
+
+	// "picshow/internal/cache"
 	"picshow/internal/utils"
 	"slices"
 	"sort"
 	"strconv"
 
-	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v2"
 	"golang.org/x/exp/rand"
 	"google.golang.org/protobuf/proto"
 )
 
 type Repository struct {
-	db    *badger.DB
-	cache *cache.Cache
+	db *badger.DB
+	// cache *cache.Cache
 }
 
 type OP string
@@ -36,10 +38,17 @@ const (
 	allFilesKey   = "allFiles"
 )
 
-func NewRepository(db *badger.DB, cache *cache.Cache) *Repository {
+var (
+	currentSeed    uint64
+	currentFileIDs []uint64
+	currentOrder   []uint64
+	cacheMutex     sync.Mutex
+)
+
+func NewRepository(db *badger.DB /* , cache *cache.Cache */) *Repository {
 	return &Repository{
-		db:    db,
-		cache: cache,
+		db: db,
+		// cache: cache,
 	}
 }
 
@@ -48,7 +57,7 @@ func (r *Repository) Close() error {
 }
 
 func (r *Repository) AddFile(file *File) error {
-	defer r.cache.Delete(string(cache.FilesCacheKey))
+	// defer r.cache.Delete(string(cache.FilesCacheKey))
 	return r.db.Update(func(txn *badger.Txn) error {
 		seq, err := r.db.GetSequence([]byte("file_id_seq"), 100)
 		if err != nil {
@@ -98,7 +107,7 @@ func (r *Repository) AddFile(file *File) error {
 }
 
 func (r *Repository) updateAllFilesFromOP(op OP, file *File) error {
-	defer r.cache.Delete(string(cache.FilesCacheKey))
+	// defer r.cache.Delete(string(cache.FilesCacheKey))
 	fileIds, err := r.GetAllFileIds()
 	if err != nil {
 		return fmt.Errorf("failed to get stats: %w", err)
@@ -135,7 +144,7 @@ func (r *Repository) updateAllFilesFromOP(op OP, file *File) error {
 }
 
 func (r *Repository) updateStatsFromOP(op OP, file *File) error {
-	defer r.cache.Delete(string(cache.StatsCacheKey))
+	// defer r.cache.Delete(string(cache.StatsCacheKey))
 	stats, err := r.GetStats()
 	if err != nil {
 		return fmt.Errorf("failed to get stats: %w", err)
@@ -199,9 +208,9 @@ func (r *Repository) ToggleFileFavorite(fileID uint64) error {
 	return r.UpdateFileLists(fileIds)
 }
 
-func (r *Repository) FindAllFiles() (map[string]uint64, map[string]uint64, error) {
-	fileNameMap := make(map[string]uint64)
-	fileHashMap := make(map[string]uint64)
+func (r *Repository) FindAllFiles() (*sync.Map, *sync.Map, error) {
+	fileNameMap := &sync.Map{}
+	fileHashMap := &sync.Map{}
 
 	err := r.db.View(func(txn *badger.Txn) error {
 		// Iterate over fileName index
@@ -215,7 +224,7 @@ func (r *Repository) FindAllFiles() (map[string]uint64, map[string]uint64, error
 			err := item.Value(func(v []byte) error {
 				fileName := string(k[len(fileNameIndex):])
 				fileID := bytesToUint64(v)
-				fileNameMap[fileName] = fileID
+				fileNameMap.Store(fileName, fileID)
 				return nil
 			})
 			if err != nil {
@@ -232,7 +241,7 @@ func (r *Repository) FindAllFiles() (map[string]uint64, map[string]uint64, error
 			err := item.Value(func(v []byte) error {
 				fileHash := string(k[len(fileHashIndex):])
 				fileID := bytesToUint64(v)
-				fileHashMap[fileHash] = fileID
+				fileHashMap.Store(fileHash, fileID)
 				return nil
 			})
 			if err != nil {
@@ -406,17 +415,15 @@ func (r *Repository) GetFiles(
 }
 
 func (r *Repository) getStableRandomOrder(fileIDs []uint64, seed uint64) ([]uint64, error) {
-	cacheKey := fmt.Sprintf("random_order:%d", seed)
-	var cachedOrder []uint64
-	found, err := r.cache.GetCache(cacheKey, &cachedOrder)
-	if err != nil {
-		return nil, fmt.Errorf("cache error: %w", err)
-	}
-	if found {
-		return cachedOrder, nil
+	cacheMutex.Lock()
+	defer cacheMutex.Unlock()
+
+	// Check if the current seed and file IDs match
+	if seed == currentSeed {
+		return currentOrder, nil
 	}
 
-	// If not found in cache, generate a new random order
+	// Generate a new order since the seed or file IDs have changed
 	newOrder := make([]uint64, len(fileIDs))
 	copy(newOrder, fileIDs)
 	rng := rand.New(rand.NewSource(seed))
@@ -424,10 +431,11 @@ func (r *Repository) getStableRandomOrder(fileIDs []uint64, seed uint64) ([]uint
 		newOrder[i], newOrder[j] = newOrder[j], newOrder[i]
 	})
 
-	// Cache the new order
-	if err := r.cache.SetCache(cacheKey, newOrder); err != nil {
-		return nil, fmt.Errorf("failed to set cache: %w", err)
-	}
+	// Update the cache with the new order
+	currentSeed = seed
+	currentFileIDs = make([]uint64, len(fileIDs))
+	copy(currentFileIDs, fileIDs)
+	currentOrder = newOrder
 
 	return newOrder, nil
 }
@@ -522,7 +530,7 @@ func (r *Repository) GetAllFileIds() (*FileList, error) {
 }
 
 func (r *Repository) UpdateFile(file *File) error {
-	r.clearCacheByFileID(file.Id)
+	// r.clearCacheByFileID(file.Id)
 
 	fileData, err := proto.Marshal(file)
 	if err != nil {
@@ -535,8 +543,8 @@ func (r *Repository) UpdateFile(file *File) error {
 }
 
 func (r *Repository) DeleteFile(id uint64) error {
-	r.clearCacheByFileID(id)
-	r.clearCache()
+	// r.clearCacheByFileID(id)
+	// r.clearCache()
 
 	return r.db.Update(func(txn *badger.Txn) error {
 		item, err := txn.Get(fileKey(id))
@@ -576,10 +584,10 @@ func (r *Repository) DeleteFile(id uint64) error {
 }
 
 func (r *Repository) DeleteFiles(ids []uint64) error {
-	for _, id := range ids {
-		r.clearCacheByFileID(id)
-	}
-	r.clearCache()
+	// for _, id := range ids {
+	// 	r.clearCacheByFileID(id)
+	// }
+	// r.clearCache()
 
 	return r.db.Update(func(txn *badger.Txn) error {
 		for _, id := range ids {
@@ -614,21 +622,21 @@ func fileHashKey(hash string) []byte {
 	return []byte(fmt.Sprintf("%s%s", fileHashIndex, hash))
 }
 
-func (r *Repository) clearCacheByFileID(id uint64) {
-	cacheKey := cache.GenerateFileCacheKey(id)
-	contentCacheKey := cache.GenerateFileContentCacheKey(id)
-	r.cache.Delete(cacheKey)
-	r.cache.Delete(contentCacheKey)
-}
-
-func (r *Repository) clearCache() {
-	r.cache.Delete(string(cache.StatsCacheKey))
-	r.cache.Delete(string(cache.FilesCacheKey))
-}
-
+//	func (r *Repository) clearCacheByFileID(id uint64) {
+//		cacheKey := cache.GenerateFileCacheKey(id)
+//		contentCacheKey := cache.GenerateFileContentCacheKey(id)
+//		// r.cache.Delete(cacheKey)
+//		// r.cache.Delete(contentCacheKey)
+//	}
+//
+//	func (r *Repository) clearCache() {
+//		r.cache.Delete(string(cache.StatsCacheKey))
+//		r.cache.Delete(string(cache.FilesCacheKey))
+//	}
+//
 // AddBatch adds multiple files to the repository in a single transaction
 func (r *Repository) AddBatch(files []*File) error {
-	defer r.cache.Delete(string(cache.FilesCacheKey))
+	// defer r.cache.Delete(string(cache.FilesCacheKey))
 	return r.db.Update(func(txn *badger.Txn) error {
 		seq, err := r.db.GetSequence([]byte("file_id_seq"), 100)
 		if err != nil {
@@ -684,10 +692,10 @@ func (r *Repository) AddBatch(files []*File) error {
 
 // UpdateBatch updates multiple files in the repository in a single transaction
 func (r *Repository) UpdateBatch(files []*File) error {
-	for _, file := range files {
-		r.clearCacheByFileID(file.Id)
-	}
-	r.clearCache()
+	// for _, file := range files {
+	// 	r.clearCacheByFileID(file.Id)
+	// }
+	// r.clearCache()
 
 	return r.db.Update(func(txn *badger.Txn) error {
 		for _, file := range files {

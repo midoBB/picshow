@@ -1,3 +1,7 @@
 - Check out a way to stop slideshow when showing videos
 - Add phash for images
-- Add Cursor based navigation
+- Add listing of dependencies to the README
+  - imagemagick
+  - ffmpeg
+  - xxhash
+  - file

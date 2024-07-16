@@ -1,12 +1,13 @@
 package server
 
 import (
+	"context"
 	"fmt"
-	"log"
+	// "log"
 	"net/http"
 	"os"
 	"path/filepath"
-	"picshow/internal/cache"
+	// "picshow/internal/cache"
 	"picshow/internal/config"
 	"picshow/internal/frontend"
 	"picshow/internal/kv"
@@ -18,17 +19,18 @@ import (
 )
 
 type Server struct {
+	e      *echo.Echo
 	repo   *kv.Repository
 	config *config.Config
-	ccache *cache.Cache
+	// ccache *cache.Cache
 }
 
 func NewServer(
 	config *config.Config,
 	repo *kv.Repository,
-	ccache *cache.Cache,
+	// ccache *cache.Cache,
 ) *Server {
-	return &Server{config: config, repo: repo, ccache: ccache}
+	return &Server{config: config, repo: repo /* ccache: ccache */}
 }
 
 func (s *Server) Start() error {
@@ -53,8 +55,12 @@ func (s *Server) Start() error {
 	api.GET("/stats", s.getStats)
 
 	logURLs(s.config.PORT)
-
+	s.e = e
 	return e.Start(fmt.Sprintf(":%d", s.config.PORT))
+}
+
+func (s *Server) Shutdown(ctx context.Context) error {
+	return s.e.Shutdown(ctx)
 }
 
 func (s *Server) getFavoriteStatus(e echo.Context) error {
@@ -71,25 +77,25 @@ func (s *Server) getFavoriteStatus(e echo.Context) error {
 }
 
 func (s *Server) getFilesFromCache(query *fileQuery) (*FilesWithPagination, bool) {
-	cacheKey, paginationKey := cache.GenerateFilesCacheKey(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
-	var cachedFiles []*File
-	foundFiles, err := s.ccache.GetCache(cacheKey, &cachedFiles)
-	if err != nil {
-		return nil, false
-	}
-	var cachedPagination *Pagination
-	foundPagination, err := s.ccache.GetCache(paginationKey, &cachedPagination)
-	if err != nil {
-		return nil, false
-	}
-	if foundFiles && foundPagination {
-		log.Printf("Found files in cache %s", cacheKey)
-		result := &FilesWithPagination{
-			Files:      cachedFiles,
-			Pagination: cachedPagination,
-		}
-		return result, true
-	}
+	// cacheKey, paginationKey := cache.GenerateFilesCacheKey(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
+	// var cachedFiles []*File
+	// foundFiles, err := s.ccache.GetCache(cacheKey, &cachedFiles)
+	// if err != nil {
+	// 	return nil, false
+	// }
+	// var cachedPagination *Pagination
+	// foundPagination, err := s.ccache.GetCache(paginationKey, &cachedPagination)
+	// if err != nil {
+	// 	return nil, false
+	// }
+	// if foundFiles && foundPagination {
+	// 	log.Printf("Found files in cache %s", cacheKey)
+	// 	result := &FilesWithPagination{
+	// 		Files:      cachedFiles,
+	// 		Pagination: cachedPagination,
+	// 	}
+	// 	return result, true
+	// }
 	return nil, false
 }
 
@@ -130,22 +136,22 @@ func (s *Server) getImage(e echo.Context) error {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
 	}
 
-	// Generate cache key for this file
-	cacheKey := cache.GenerateFileContentCacheKey(fileId)
-
-	// Try to get the file from cache
-	var cachedFile []byte
-	found, err := s.ccache.GetCache(cacheKey, &cachedFile)
-	if err != nil {
-		// Log the error, but continue to fetch from database
-		log.Printf("Error retrieving from cache: %v\n", err)
-	}
-
-	if found {
-		log.Printf("Serving file from cache: %s\n", cacheKey)
-		return e.Blob(http.StatusOK, http.DetectContentType(cachedFile), cachedFile)
-	}
-
+	// // Generate cache key for this file
+	// cacheKey := cache.GenerateFileContentCacheKey(fileId)
+	//
+	// // Try to get the file from cache
+	// var cachedFile []byte
+	// found, err := s.ccache.GetCache(cacheKey, &cachedFile)
+	// if err != nil {
+	// 	// Log the error, but continue to fetch from database
+	// 	log.Printf("Error retrieving from cache: %v\n", err)
+	// }
+	//
+	// if found {
+	// 	log.Printf("Serving file from cache: %s\n", cacheKey)
+	// 	return e.Blob(http.StatusOK, http.DetectContentType(cachedFile), cachedFile)
+	// }
+	//
 	// If not in cache, fetch from database
 	file, err := s.repo.GetFileByID(fileId)
 	if err != nil {
@@ -161,11 +167,11 @@ func (s *Server) getImage(e echo.Context) error {
 			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read file"})
 		}
 
-		// Cache the file contents
-		if err := s.ccache.SetCache(cacheKey, fileContents); err != nil {
-			// Log the error, but continue to serve the file
-			log.Printf("Error caching file: %v", err)
-		}
+		// // Cache the file contents
+		// if err := s.ccache.SetCache(cacheKey, fileContents); err != nil {
+		// 	// Log the error, but continue to serve the file
+		// 	log.Printf("Error caching file: %v", err)
+		// }
 
 		// Serve the file
 		return e.Blob(http.StatusOK, http.DetectContentType(fileContents), fileContents)
@@ -237,12 +243,12 @@ func (s *Server) toggleFavorite(e echo.Context) error {
 }
 
 func (s *Server) setQueryCache(query *fileQuery, result FilesWithPagination) {
-	cacheKey, paginationKey := cache.GenerateFilesCacheKey(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
-
-	if err := s.ccache.SetCache(cacheKey, result.Files); err != nil {
-		log.Printf("Error caching file: %v", err)
-	}
-	if err := s.ccache.SetCache(paginationKey, result.Pagination); err != nil {
-		log.Printf("Error caching file: %v", err)
-	}
+	// cacheKey, paginationKey := cache.GenerateFilesCacheKey(*query.Page, *query.PageSize, utils.OrderBy(*query.Order), utils.OrderDirection(*query.OrderDir), query.Seed, query.Type)
+	//
+	// if err := s.ccache.SetCache(cacheKey, result.Files); err != nil {
+	// 	log.Printf("Error caching file: %v", err)
+	// }
+	// if err := s.ccache.SetCache(paginationKey, result.Pagination); err != nil {
+	// 	log.Printf("Error caching file: %v", err)
+	// }
 }

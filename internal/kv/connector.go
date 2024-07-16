@@ -2,11 +2,14 @@ package kv
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"picshow/internal/config"
+	"time"
 
-	"github.com/dgraph-io/badger/v3"
+	"github.com/dgraph-io/badger/v2"
+	"github.com/dgraph-io/badger/v2/options"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -16,13 +19,21 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 		return nil, fmt.Errorf("error creating database folder: %w", err)
 	}
 	shouldInitialize := isNewDatabase(config.DBPath)
-	opts := badger.DefaultOptions(config.DBPath).WithValueLogFileSize(1 << 27)
+	opts := badger.DefaultOptions(config.DBPath).
+		WithNumMemtables(1).
+		WithSyncWrites(true).
+		WithNumLevelZeroTables(1).
+		WithNumLevelZeroTablesStall(2).
+		WithValueLogLoadingMode(options.FileIO).
+		WithTableLoadingMode(options.FileIO).
+		WithNumCompactors(2).
+		WithKeepL0InMemory(false).
+		WithCompression(options.None).
+		WithValueLogFileSize(16 << 20) // 16 MB value log file
 	db, err := badger.Open(opts)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open Badger database: %w", err)
 	}
-
-	// Check if the database is new and initialize Stats if necessary
 	if shouldInitialize {
 		err = initializeDB(db)
 		if err != nil {
@@ -30,8 +41,19 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 			return nil, fmt.Errorf("failed to initialize Stats: %w", err)
 		}
 	}
-
+	go runValueLogGC(db)
 	return db, nil
+}
+
+func runValueLogGC(db *badger.DB) {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		err := db.RunValueLogGC(0.7)
+		if err != nil && err != badger.ErrNoRewrite {
+			log.Printf("Error running ValueLogGC: %v", err)
+		}
+	}
 }
 
 func isNewDatabase(dbPath string) bool {
