@@ -1,7 +1,7 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import { useStats } from "@/queries/loaders";
 import useAppState from "@/state";
-import { FaImages, FaVideo, FaFileAlt } from "react-icons/fa";
+import { FaImages, FaVideo, FaFileAlt, FaHeart } from "react-icons/fa";
 
 interface StatsDialogProps {
   isOpen: boolean;
@@ -74,6 +74,11 @@ const StatsDialog = ({ isOpen, onClose }: StatsDialogProps) => {
                 icon={<FaVideo size={24} />}
                 title="Videos"
                 value={stats?.video_count}
+              />
+              <StatCard
+                icon={<FaHeart size={24} />}
+                title="Favorites"
+                value={stats?.favorite_count}
               />
             </div>
           )}

@@ -47,5 +47,6 @@ export const StatsSchema = z.object({
   count: z.number(),
   video_count: z.number(),
   image_count: z.number(),
+  favorite_count: z.number(),
 });
 export type Stats = z.infer<typeof StatsSchema>;

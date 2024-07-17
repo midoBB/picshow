@@ -90,6 +90,22 @@ type FilesWithPagination struct {
 	Pagination *Pagination `json:"pagination"`
 }
 
+type Stats struct {
+	Count         uint64 `json:"count"`
+	ImageCount    uint64 `json:"image_count"`
+	VideoCount    uint64 `json:"video_count"`
+	FavoriteCount uint64 `json:"favorite_count"`
+}
+
+func MapProtoStatsToServerStats(protoStats *pb.Stats) *Stats {
+	return &Stats{
+		Count:         protoStats.Count,
+		ImageCount:    protoStats.ImageCount,
+		VideoCount:    protoStats.VideoCount,
+		FavoriteCount: protoStats.FavoriteCount,
+	}
+}
+
 func MapProtoPaginationToServerPagination(protoPagination *pb.Pagination) *Pagination {
 	serverPagination := &Pagination{
 		TotalRecords: protoPagination.TotalRecords,

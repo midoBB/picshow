@@ -84,7 +84,8 @@ export default function App() {
 
   const [isCurrentlyMobile, setIsCurrentlyMobile] = useState(isMobile());
   const [columnCount, setColumnCount] = useState(0);
-
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const containerRef = useRef<HTMLDivElement>(null);
   const slideShowRef = useRef<SlideshowRef>(null);
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   useEffect(() => {
@@ -94,6 +95,12 @@ export default function App() {
         setColumnCount(1);
       } else {
         setColumnCount(4);
+      }
+      if (containerRef.current) {
+        setContainerSize({
+          width: containerRef.current.offsetWidth,
+          height: containerRef.current.offsetHeight,
+        });
       }
     }, 150);
 
@@ -105,7 +112,18 @@ export default function App() {
       handleResize.cancel();
     };
   }, [isMobile]);
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (containerRef.current) {
+        setContainerSize({
+          width: containerRef.current.offsetWidth,
+          height: containerRef.current.offsetHeight,
+        });
+      }
+    }, 100);
 
+    return () => clearTimeout(timer);
+  }, []);
   const {
     sortDirection,
     sortType,
@@ -211,30 +229,36 @@ export default function App() {
     [data],
   );
 
-  const parentRef = useRef<HTMLDivElement>(null);
-
   const estimateSize = useCallback(
     (index: number) => {
       const file = allFiles[index];
       if (file.Image) {
-        return file.Image.ThumbnailHeight;
+        return (
+          (containerSize.width / columnCount) *
+          (file.Image.ThumbnailHeight / file.Image.ThumbnailWidth)
+        );
       } else if (file.Video) {
-        return file.Video.ThumbnailHeight;
+        return (
+          (containerSize.width / columnCount) *
+          (file.Video.ThumbnailHeight / file.Video.ThumbnailWidth)
+        );
       } else {
         return 300;
       }
     },
-    [allFiles],
+    [allFiles, columnCount, containerSize.width],
   );
 
   const rowVirtualizer = useVirtualizer({
     count: allFiles.length,
-    getScrollElement: () => parentRef.current,
+    getScrollElement: () => containerRef.current,
     estimateSize,
     overscan: isCurrentlyMobile ? 2 : 5,
     lanes: columnCount,
   });
-
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [allFiles, containerSize, rowVirtualizer]);
   const debouncedLoadMoreItems = useMemo(
     () =>
       debounce(() => {
@@ -246,7 +270,7 @@ export default function App() {
   );
 
   useEffect(() => {
-    const scrollElement = parentRef.current;
+    const scrollElement = containerRef.current;
     if (!scrollElement) return;
 
     const handleScroll = () => {
@@ -398,7 +422,7 @@ export default function App() {
       ) : (
         <>
           <div
-            ref={parentRef}
+            ref={containerRef}
             className="w-full p-4 mx-auto flex-grow overflow-auto"
             style={{ height: "100vh " }}
           >
