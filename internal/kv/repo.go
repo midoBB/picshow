@@ -4,13 +4,12 @@ import (
 	"encoding/binary"
 	"fmt"
 	"math"
-	"sync"
-
-	// "picshow/internal/cache"
+	"picshow/internal/cache"
 	"picshow/internal/utils"
 	"slices"
 	"sort"
 	"strconv"
+	"sync"
 
 	"github.com/dgraph-io/badger/v2"
 	"golang.org/x/exp/rand"
@@ -18,15 +17,17 @@ import (
 )
 
 type Repository struct {
-	db *badger.DB
-	// cache *cache.Cache
+	db    *badger.DB
+	cache *cache.Cache
 }
 
 type OP string
 
 const (
-	Create OP = "create"
-	Delete OP = "delete"
+	Create     OP = "create"
+	Delete     OP = "delete"
+	Favorite   OP = "favorite"
+	Unfavorite OP = "unfavorite"
 )
 
 // Keys
@@ -38,17 +39,10 @@ const (
 	allFilesKey   = "allFiles"
 )
 
-var (
-	currentSeed    uint64
-	currentFileIDs []uint64
-	currentOrder   []uint64
-	cacheMutex     sync.Mutex
-)
-
-func NewRepository(db *badger.DB /* , cache *cache.Cache */) *Repository {
+func NewRepository(db *badger.DB, cache *cache.Cache) *Repository {
 	return &Repository{
-		db: db,
-		// cache: cache,
+		db:    db,
+		cache: cache,
 	}
 }
 
@@ -57,7 +51,7 @@ func (r *Repository) Close() error {
 }
 
 func (r *Repository) AddFile(file *File) error {
-	// defer r.cache.Delete(string(cache.FilesCacheKey))
+	defer r.cache.Delete(string(cache.FilesCacheKey))
 	return r.db.Update(func(txn *badger.Txn) error {
 		seq, err := r.db.GetSequence([]byte("file_id_seq"), 100)
 		if err != nil {
@@ -107,7 +101,7 @@ func (r *Repository) AddFile(file *File) error {
 }
 
 func (r *Repository) updateAllFilesFromOP(op OP, file *File) error {
-	// defer r.cache.Delete(string(cache.FilesCacheKey))
+	defer r.cache.Delete(string(cache.FilesCacheKey))
 	fileIds, err := r.GetAllFileIds()
 	if err != nil {
 		return fmt.Errorf("failed to get stats: %w", err)
@@ -144,7 +138,7 @@ func (r *Repository) updateAllFilesFromOP(op OP, file *File) error {
 }
 
 func (r *Repository) updateStatsFromOP(op OP, file *File) error {
-	// defer r.cache.Delete(string(cache.StatsCacheKey))
+	defer r.cache.Delete(string(cache.StatsCacheKey))
 	stats, err := r.GetStats()
 	if err != nil {
 		return fmt.Errorf("failed to get stats: %w", err)
@@ -160,7 +154,7 @@ func (r *Repository) updateStatsFromOP(op OP, file *File) error {
 		if favorite, _ := r.IsFileFavorite(file.Id); favorite {
 			stats.FavoriteCount--
 		}
-	} else {
+	} else if op == Create {
 		stats.Count++
 		switch file.GetMedia().(type) {
 		case *File_Image:
@@ -168,6 +162,30 @@ func (r *Repository) updateStatsFromOP(op OP, file *File) error {
 		case *File_Video:
 			stats.VideoCount++
 		}
+	} else {
+		return nil
+	}
+
+	err = r.UpdateStats(stats)
+	if err != nil {
+		return fmt.Errorf("failed to update stats: %w", err)
+	}
+
+	return nil
+}
+
+func (r *Repository) updateFavoriteStats(op OP) error {
+	defer r.cache.Delete(string(cache.StatsCacheKey))
+	stats, err := r.GetStats()
+	if err != nil {
+		return fmt.Errorf("failed to get stats: %w", err)
+	}
+	if op == Unfavorite {
+		stats.FavoriteCount--
+	} else if op == Favorite {
+		stats.FavoriteCount++
+	} else {
+		return nil
 	}
 
 	err = r.UpdateStats(stats)
@@ -190,6 +208,7 @@ func (r *Repository) IsFileFavorite(fileID uint64) (bool, error) {
 }
 
 func (r *Repository) ToggleFileFavorite(fileID uint64) error {
+	r.clearCache()
 	fileIds, err := r.GetAllFileIds()
 	if err != nil {
 		return fmt.Errorf("failed to get stats: %w", err)
@@ -199,10 +218,18 @@ func (r *Repository) ToggleFileFavorite(fileID uint64) error {
 		return id == fileID
 	})
 	if favorite {
+		err = r.updateFavoriteStats(Unfavorite)
+		if err != nil {
+			return err
+		}
 		fileIds.FavoriteFileIds = slices.DeleteFunc(fileIds.FavoriteFileIds, func(id uint64) bool {
 			return id == fileID
 		})
 	} else {
+		err = r.updateFavoriteStats(Favorite)
+		if err != nil {
+			return err
+		}
 		fileIds.FavoriteFileIds = append(fileIds.FavoriteFileIds, fileID)
 	}
 	return r.UpdateFileLists(fileIds)
@@ -354,7 +381,7 @@ func (r *Repository) GetFiles(
 
 		// Sort file IDs based on order and direction
 		if order == utils.Random {
-			allFileIDs, err = r.getStableRandomOrder(allFileIDs, *seed)
+			allFileIDs, err = r.getStableRandomOrder(allFileIDs, *seed, mimetype)
 			if err != nil {
 				return fmt.Errorf("failed to get stable random order: %w", err)
 			}
@@ -414,16 +441,24 @@ func (r *Repository) GetFiles(
 	return files, pagination, nil
 }
 
-func (r *Repository) getStableRandomOrder(fileIDs []uint64, seed uint64) ([]uint64, error) {
-	cacheMutex.Lock()
-	defer cacheMutex.Unlock()
-
-	// Check if the current seed and file IDs match
-	if seed == currentSeed {
-		return currentOrder, nil
+func (r *Repository) getStableRandomOrder(fileIDs []uint64, seed uint64, mimetype *string) ([]uint64, error) {
+	var mimetypeStr string
+	if mimetype != nil {
+		mimetypeStr = *mimetype
+	} else {
+		mimetypeStr = "all"
+	}
+	cacheKey := fmt.Sprintf("%s:%d:%s", cache.RandomCacheKey, seed, mimetypeStr)
+	var cachedOrder []uint64
+	found, err := r.cache.GetCache(cacheKey, &cachedOrder)
+	if err != nil {
+		return nil, fmt.Errorf("cache error: %w", err)
+	}
+	if found {
+		return cachedOrder, nil
 	}
 
-	// Generate a new order since the seed or file IDs have changed
+	// If not found in cache, generate a new random order
 	newOrder := make([]uint64, len(fileIDs))
 	copy(newOrder, fileIDs)
 	rng := rand.New(rand.NewSource(seed))
@@ -431,11 +466,10 @@ func (r *Repository) getStableRandomOrder(fileIDs []uint64, seed uint64) ([]uint
 		newOrder[i], newOrder[j] = newOrder[j], newOrder[i]
 	})
 
-	// Update the cache with the new order
-	currentSeed = seed
-	currentFileIDs = make([]uint64, len(fileIDs))
-	copy(currentFileIDs, fileIDs)
-	currentOrder = newOrder
+	// Cache the new order
+	if err := r.cache.SetCache(cacheKey, newOrder); err != nil {
+		return nil, fmt.Errorf("failed to set cache: %w", err)
+	}
 
 	return newOrder, nil
 }
@@ -530,7 +564,7 @@ func (r *Repository) GetAllFileIds() (*FileList, error) {
 }
 
 func (r *Repository) UpdateFile(file *File) error {
-	// r.clearCacheByFileID(file.Id)
+	r.clearCacheByFileID(file.Id)
 
 	fileData, err := proto.Marshal(file)
 	if err != nil {
@@ -543,8 +577,8 @@ func (r *Repository) UpdateFile(file *File) error {
 }
 
 func (r *Repository) DeleteFile(id uint64) error {
-	// r.clearCacheByFileID(id)
-	// r.clearCache()
+	r.clearCacheByFileID(id)
+	r.clearCache()
 
 	return r.db.Update(func(txn *badger.Txn) error {
 		item, err := txn.Get(fileKey(id))
@@ -584,10 +618,10 @@ func (r *Repository) DeleteFile(id uint64) error {
 }
 
 func (r *Repository) DeleteFiles(ids []uint64) error {
-	// for _, id := range ids {
-	// 	r.clearCacheByFileID(id)
-	// }
-	// r.clearCache()
+	for _, id := range ids {
+		r.clearCacheByFileID(id)
+	}
+	r.clearCache()
 
 	return r.db.Update(func(txn *badger.Txn) error {
 		for _, id := range ids {
@@ -622,21 +656,22 @@ func fileHashKey(hash string) []byte {
 	return []byte(fmt.Sprintf("%s%s", fileHashIndex, hash))
 }
 
-//	func (r *Repository) clearCacheByFileID(id uint64) {
-//		cacheKey := cache.GenerateFileCacheKey(id)
-//		contentCacheKey := cache.GenerateFileContentCacheKey(id)
-//		// r.cache.Delete(cacheKey)
-//		// r.cache.Delete(contentCacheKey)
-//	}
-//
-//	func (r *Repository) clearCache() {
-//		r.cache.Delete(string(cache.StatsCacheKey))
-//		r.cache.Delete(string(cache.FilesCacheKey))
-//	}
-//
+func (r *Repository) clearCacheByFileID(id uint64) {
+	cacheKey := cache.GenerateFileCacheKey(id)
+	contentCacheKey := cache.GenerateFileContentCacheKey(id)
+	r.cache.Delete(cacheKey)
+	r.cache.Delete(contentCacheKey)
+}
+
+func (r *Repository) clearCache() {
+	r.cache.Delete(string(cache.StatsCacheKey))
+	r.cache.Delete(string(cache.FilesCacheKey))
+	r.cache.Delete(string(cache.RandomCacheKey))
+}
+
 // AddBatch adds multiple files to the repository in a single transaction
 func (r *Repository) AddBatch(files []*File) error {
-	// defer r.cache.Delete(string(cache.FilesCacheKey))
+	defer r.cache.Delete(string(cache.FilesCacheKey))
 	return r.db.Update(func(txn *badger.Txn) error {
 		seq, err := r.db.GetSequence([]byte("file_id_seq"), 100)
 		if err != nil {
@@ -692,10 +727,10 @@ func (r *Repository) AddBatch(files []*File) error {
 
 // UpdateBatch updates multiple files in the repository in a single transaction
 func (r *Repository) UpdateBatch(files []*File) error {
-	// for _, file := range files {
-	// 	r.clearCacheByFileID(file.Id)
-	// }
-	// r.clearCache()
+	for _, file := range files {
+		r.clearCacheByFileID(file.Id)
+	}
+	r.clearCache()
 
 	return r.db.Update(func(txn *badger.Txn) error {
 		for _, file := range files {
@@ -725,4 +760,21 @@ func (r *Repository) UpdateBatch(files []*File) error {
 
 		return nil
 	})
+}
+
+func (r *Repository) UpdateFavoriteCount() {
+	r.clearCache()
+	fileIds, err := r.GetAllFileIds()
+	if err != nil {
+		return
+	}
+	stats, err := r.GetStats()
+	if err != nil {
+		return
+	}
+	stats.FavoriteCount = uint64(len(fileIds.FavoriteFileIds))
+	err = r.UpdateStats(stats)
+	if err != nil {
+		return
+	}
 }

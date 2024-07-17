@@ -3,21 +3,22 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
-
-	// "picshow/internal/cache"
-	"net/http"
-	_ "net/http/pprof"
+	"picshow/internal/cache"
 	"picshow/internal/config"
 	"picshow/internal/files"
-	kvdb "picshow/internal/kv"
 	"picshow/internal/server"
 	"picshow/internal/utils"
 	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
+
+	_ "net/http/pprof"
+
+	kvdb "picshow/internal/kv"
 )
 
 func init() {
@@ -51,10 +52,10 @@ func main() {
 			log.Fatalf("Error loading config after first-run: %v", err)
 		}
 	}
-	// runtimeCache, err := cache.NewCache(runtimeConfig)
-	// if err != nil {
-	// 	log.Fatalf("Error creating cache: %v", err)
-	// }
+	runtimeCache, err := cache.NewCache(runtimeConfig)
+	if err != nil {
+		log.Fatalf("Error creating cache: %v", err)
+	}
 
 	kv, err := kvdb.GetDB(runtimeConfig)
 	if err != nil {
@@ -66,7 +67,7 @@ func main() {
 
 	var wg sync.WaitGroup
 
-	repo := kvdb.NewRepository(kv /* , runtimeCache */)
+	repo := kvdb.NewRepository(kv, runtimeCache)
 	processor := files.NewProcessor(runtimeConfig, repo, runtimeConfig.BatchSize, runtimeConfig.Concurrency, ctx, cancel)
 
 	// Create a channel to signal when to start the shutdown process
@@ -82,11 +83,11 @@ func main() {
 				shutdownChan <- struct{}{}
 			}
 		}()
-		runProcessor(ctx, processor, repo, runtimeConfig.RefreshInterval)
+		runProcessor(ctx, processor, runtimeConfig.RefreshInterval)
 	}()
 
 	// Start the web server
-	srv := server.NewServer(runtimeConfig, repo /* , runtimeCache */)
+	srv := server.NewServer(runtimeConfig, repo, runtimeCache)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -137,7 +138,7 @@ func gracefulShutdown(
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Error shutting down server: %v", err)
 	}
-	processor.Shutdown()
+	processor.Shutdown(shutdownCtx)
 
 	// Close the repository
 	repo.Close()
@@ -156,7 +157,7 @@ func gracefulShutdown(
 	}
 }
 
-func runProcessor(ctx context.Context, processor *files.Processor, repo *kvdb.Repository, refreshInterval int) {
+func runProcessor(ctx context.Context, processor *files.Processor, refreshInterval int) {
 	// Function to run the processor
 
 	runProcessorOnce := func() {

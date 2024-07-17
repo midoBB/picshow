@@ -1,6 +1,7 @@
 package kv
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -50,7 +51,7 @@ func runValueLogGC(db *badger.DB) {
 	defer ticker.Stop()
 	for range ticker.C {
 		err := db.RunValueLogGC(0.7)
-		if err != nil && err != badger.ErrNoRewrite {
+		if err != nil && !errors.Is(err, badger.ErrNoRewrite) {
 			log.Printf("Error running ValueLogGC: %v", err)
 		}
 	}

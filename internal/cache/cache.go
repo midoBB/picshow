@@ -35,6 +35,7 @@ const (
 	StatsCacheKey       CacheKey = "stats"
 	FileCacheKey        CacheKey = "single"
 	FileContentCacheKey CacheKey = "content"
+	RandomCacheKey      CacheKey = "random_order"
 )
 
 // GenerateFilesCacheKey generates a unique key for files query

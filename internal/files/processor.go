@@ -175,6 +175,7 @@ func (p *Processor) Process() error {
 	}
 
 	p.removeNonExistentFiles(existingFilesMap)
+	p.repo.UpdateFavoriteCount()
 	log.Println("completed processing files")
 	return nil
 }
@@ -260,7 +261,7 @@ func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, exi
 	return nil
 }
 
-func (p *Processor) Shutdown() {
+func (p *Processor) Shutdown(ctx context.Context) {
 	log.Println("initiating graceful shutdown of processor")
 	p.cancel()
 
@@ -286,6 +287,8 @@ func (p *Processor) Shutdown() {
 		return true
 	})
 	select {
+	case <-ctx.Done():
+		return
 	case <-p.shutdownChan:
 		log.Println("processor shutdown completed")
 	case <-time.After(utils.SHUTDOWN_TIMER):
