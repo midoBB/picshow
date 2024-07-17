@@ -13,6 +13,7 @@ import (
 	"picshow/internal/kv"
 	"picshow/internal/utils"
 	"strconv"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
@@ -133,28 +134,24 @@ func (s *Server) getImage(e echo.Context) error {
 		return e.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid file id"})
 	}
 
-	// Generate cache key for this file
-	cacheKey := cache.GenerateFileContentCacheKey(fileId)
-
-	// Try to get the file from cache
-	var cachedFile []byte
-	found, err := s.ccache.GetCache(cacheKey, &cachedFile)
-	if err != nil {
-		// Log the error, but continue to fetch from database
-		log.Printf("Error retrieving from cache: %v\n", err)
-	}
-
-	if found {
-		log.Printf("Serving file from cache: %s\n", cacheKey)
-		return e.Blob(http.StatusOK, http.DetectContentType(cachedFile), cachedFile)
-	}
-
 	// If not in cache, fetch from database
 	file, err := s.repo.GetFileByID(fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
 	}
 
+	// Set cache control and last-modified headers
+	e.Response().Header().Set("Cache-Control", "public, max-age=259200")
+	lastModified := time.Unix(file.LastModified, 0).UTC().Format(http.TimeFormat)
+	e.Response().Header().Set("Last-Modified", lastModified)
+
+	// Check if the client has a valid cached version
+	if ifModifiedSince := e.Request().Header.Get("If-Modified-Since"); ifModifiedSince != "" {
+		ifModifiedSinceTime, err := time.Parse(http.TimeFormat, ifModifiedSince)
+		if err == nil && !time.Unix(file.LastModified, 0).After(ifModifiedSinceTime) {
+			return e.NoContent(http.StatusNotModified)
+		}
+	}
 	if file.MimeType == utils.MimeTypeImage.String() {
 		filePath := filepath.Join(s.config.FolderPath, file.Filename)
 
@@ -162,12 +159,6 @@ func (s *Server) getImage(e echo.Context) error {
 		fileContents, err := os.ReadFile(filePath)
 		if err != nil {
 			return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to read file"})
-		}
-
-		// Cache the file contents
-		if err := s.ccache.SetCache(cacheKey, fileContents); err != nil {
-			// Log the error, but continue to serve the file
-			log.Printf("Error caching file: %v", err)
 		}
 
 		// Serve the file
@@ -186,6 +177,17 @@ func (s *Server) streamVideo(e echo.Context) error {
 	file, err := s.repo.GetFileByID(fileId)
 	if err != nil {
 		return e.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to fetch file"})
+	}
+
+	e.Response().Header().Set("Cache-Control", "public, max-age=259200")
+	lastModified := time.Unix(file.LastModified, 0).UTC().Format(http.TimeFormat)
+	e.Response().Header().Set("Last-Modified", lastModified)
+
+	if ifModifiedSince := e.Request().Header.Get("If-Modified-Since"); ifModifiedSince != "" {
+		ifModifiedSinceTime, err := time.Parse(http.TimeFormat, ifModifiedSince)
+		if err == nil && !time.Unix(file.LastModified, 0).After(ifModifiedSinceTime) {
+			return e.NoContent(http.StatusNotModified)
+		}
 	}
 	f, err := os.Open(filepath.Join(s.config.FolderPath, file.Filename))
 	if err != nil {
