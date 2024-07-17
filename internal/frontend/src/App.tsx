@@ -311,20 +311,14 @@ export default function App() {
     (index: number) => {
       const file = allFiles[index];
       if (file.Image) {
-        return (
-          (containerSize.width / columnCount) *
-          (file.Image.ThumbnailHeight / file.Image.ThumbnailWidth)
-        );
+        return file.Image.ThumbnailHeight;
       } else if (file.Video) {
-        return (
-          (containerSize.width / columnCount) *
-          (file.Video.ThumbnailHeight / file.Video.ThumbnailWidth)
-        );
+        return file.Video.ThumbnailHeight;
       } else {
         return 300;
       }
     },
-    [allFiles, columnCount, containerSize.width],
+    [allFiles],
   );
 
   const rowVirtualizer = useVirtualizer({
