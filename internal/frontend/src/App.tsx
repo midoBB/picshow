@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, useMemo, useRef } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useState,
+  useMemo,
+  useRef,
+} from "react";
 import { FaRegPlayCircle } from "react-icons/fa";
 import { LuLoader2, LuX } from "react-icons/lu";
 import { BASE_URL } from "@/queries/api";
@@ -27,6 +33,7 @@ import ConfirmDialog from "@/ConfirmDeleteDialog";
 import KeepAwake from "@/KeepAwake";
 import { LazyLoadImage } from "react-lazy-load-image-component";
 import { debounce } from "lodash";
+
 const PAGE_SIZE = 15;
 
 const FilledHeartIcon = createIcon(
@@ -45,6 +52,74 @@ const EmptyHeartIcon = createIcon(
     strokeWidth="2"
     d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"
   />,
+);
+
+const FileItem = React.memo(
+  ({
+    file,
+    virtualRow,
+    columnCount,
+    onContextMenu,
+    onClick,
+    isSelected,
+  }: any) => {
+    return (
+      <div
+        className={`cursor-pointer group ${isSelected ? "border-2 border-blue-500 rounded-lg" : ""}`}
+        onContextMenu={(e) => onContextMenu(e, file.ID)}
+        onClick={() => onClick(virtualRow.index, file.ID)}
+        style={{
+          position: "absolute",
+          top: 0,
+          left: `${(virtualRow.lane / columnCount) * 100}%`,
+          width: `${100 / columnCount}%`,
+          height: `${virtualRow.size}px`,
+          transform: `translateY(${virtualRow.start}px)`,
+          padding: "8px",
+        }}
+      >
+        <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
+          <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
+            {file.Image && (
+              <LazyLoadImage
+                src={file.Image.ThumbnailBase64}
+                alt={file.Filename}
+                className="w-full h-full object-cover rounded-lg"
+              />
+            )}
+            {file.Video && (
+              <div className="relative w-full h-full">
+                <LazyLoadImage
+                  src={file.Video.ThumbnailBase64}
+                  alt={file.Filename}
+                  className="w-full h-full object-cover rounded-lg"
+                />
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
+                </div>
+              </div>
+            )}
+          </div>
+        </figure>
+        {isSelected && (
+          <div className="absolute top-2 left-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              className="h-4 w-4 text-white"
+              viewBox="0 0 20 20"
+              fill="currentColor"
+            >
+              <path
+                fillRule="evenodd"
+                d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                clipRule="evenodd"
+              />
+            </svg>
+          </div>
+        )}
+      </div>
+    );
+  },
 );
 
 function FavoriteButton() {
@@ -81,7 +156,7 @@ export default function App() {
   const isMobile = useCallback(() => {
     return window.innerWidth < 768; // You can adjust this breakpoint as needed
   }, []);
-
+  const navbarRef = useRef<HTMLDivElement>(null);
   const [isCurrentlyMobile, setIsCurrentlyMobile] = useState(isMobile());
   const [columnCount, setColumnCount] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -149,10 +224,13 @@ export default function App() {
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isShowingControls, setIsShowingControls] = useState(true);
 
-  const openLightbox = (index: number) => {
-    setCurrentIndex(index);
-    setIsOpen(true);
-  };
+  const openLightbox = useCallback(
+    (index: number) => {
+      setCurrentIndex(index);
+      setIsOpen(true);
+    },
+    [setCurrentIndex, setIsOpen],
+  );
 
   const deleteFileMutation = useDeleteFile();
 
@@ -334,32 +412,41 @@ export default function App() {
     [allFiles],
   );
 
-  const handleContextMenu = (event: MouseEvent, id: number) => {
-    event.preventDefault();
-    toggleFileSelection(id);
-  };
-
-  function handleClick(index: number, ID: number): void {
-    if (!isSelectionMode) {
-      openLightbox(index);
-    } else {
-      toggleFileSelection(ID);
-    }
-  }
-  const toggleFileSelection = (id: number) => {
-    setSelectedFiles((prev) => {
-      if (prev.includes(id)) {
-        const newSelection = prev.filter((fileId) => fileId !== id);
-        if (newSelection.length === 0) {
-          setIsSelectionMode(false);
+  const toggleFileSelection = useCallback(
+    (id: number) => {
+      setSelectedFiles((prev) => {
+        if (prev.includes(id)) {
+          const newSelection = prev.filter((fileId) => fileId !== id);
+          if (newSelection.length === 0) {
+            setIsSelectionMode(false);
+          }
+          return newSelection;
+        } else {
+          setIsSelectionMode(true);
+          return [...prev, id];
         }
-        return newSelection;
+      });
+    },
+    [setIsSelectionMode, setSelectedFiles],
+  );
+  const handleContextMenu = useCallback(
+    (event: React.MouseEvent, id: number) => {
+      event.preventDefault();
+      toggleFileSelection(id);
+    },
+    [toggleFileSelection],
+  );
+
+  const handleClick = useCallback(
+    (index: number, ID: number) => {
+      if (!isSelectionMode) {
+        openLightbox(index);
       } else {
-        setIsSelectionMode(true);
-        return [...prev, id];
+        toggleFileSelection(ID);
       }
-    });
-  };
+    },
+    [isSelectionMode, openLightbox, toggleFileSelection],
+  );
 
   const selectedFileObjects = useMemo(() => {
     if (isSelectionMode) {
@@ -377,7 +464,9 @@ export default function App() {
       className={`flex flex-col h-full ${isDarkMode ? "bg-slate-800" : "bg-white"}`}
     >
       <KeepAwake isActive={isSlideshowPlaying} />
-      <Navbar onDelete={handleDelete} />
+      <div ref={navbarRef}>
+        <Navbar onDelete={handleDelete} />
+      </div>
       <Lightbox
         open={isOpen}
         close={() => setIsOpen(false)}
@@ -424,7 +513,9 @@ export default function App() {
           <div
             ref={containerRef}
             className="w-full p-4 mx-auto flex-grow overflow-auto"
-            style={{ height: "100vh " }}
+            style={{
+              height: `calc(100vh - ${navbarRef.current?.clientHeight}px)`,
+            }}
           >
             <div
               style={{
@@ -435,63 +526,16 @@ export default function App() {
             >
               {rowVirtualizer.getVirtualItems().map((virtualRow) => {
                 const file = allFiles[virtualRow.index];
-
                 return (
-                  <div
+                  <FileItem
                     key={virtualRow.index}
-                    className={`cursor-pointer group ${selectedFiles.includes(file.ID) ? "border-2 border-blue-500 rounded-lg" : ""}`}
-                    onContextMenu={(e) => handleContextMenu(e, file.ID)}
-                    onClick={() => handleClick(virtualRow.index, file.ID)}
-                    style={{
-                      position: "absolute",
-                      top: 0,
-                      left: `${(virtualRow.lane / columnCount) * 100}%`,
-                      width: `${100 / columnCount}%`,
-                      height: `${virtualRow.size}px`,
-                      transform: `translateY(${virtualRow.start}px)`,
-                      padding: "8px",
-                    }}
-                  >
-                    <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
-                      <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
-                        {file.Image && (
-                          <LazyLoadImage
-                            src={file.Image.ThumbnailBase64}
-                            alt={file.Filename}
-                            className="w-full h-full object-cover rounded-lg"
-                          />
-                        )}
-                        {file.Video && (
-                          <div className="relative w-full h-full">
-                            <LazyLoadImage
-                              src={file.Video.ThumbnailBase64}
-                              alt={file.Filename}
-                              className="w-full h-full object-cover rounded-lg"
-                            />
-                            <div className="absolute inset-0 flex items-center justify-center">
-                              <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </figure>
-                    {selectedFiles.includes(file.ID) && (
-                      <div className="absolute top-2 left-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
-                        <svg
-                          xmlns="http://www.w3.org/2000/svg"
-                          className="h-4 w-4 text-white"
-                          viewBox="0 0 20 20"
-                          fill="currentColor"
-                        >
-                          <path
-                            fillRule="evenodd"
-                            d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
-                            clipRule="evenodd"
-                          />
-                        </svg>
-                      </div>
-                    )}
-                  </div>
+                    file={file}
+                    virtualRow={virtualRow}
+                    columnCount={columnCount}
+                    onContextMenu={handleContextMenu}
+                    onClick={handleClick}
+                    isSelected={selectedFiles.includes(file.ID)}
+                  />
                 );
               })}
             </div>
