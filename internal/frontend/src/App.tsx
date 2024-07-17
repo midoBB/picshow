@@ -25,7 +25,10 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
 import KeepAwake from "@/KeepAwake";
+import { LazyLoadImage } from "react-lazy-load-image-component";
+import { debounce } from "lodash";
 const PAGE_SIZE = 15;
+
 const FilledHeartIcon = createIcon(
   "FilledHeartIcon",
   <path
@@ -44,7 +47,7 @@ const EmptyHeartIcon = createIcon(
   />,
 );
 
-function MyButton() {
+function FavoriteButton() {
   const { currentSlide } = useLightboxState();
   const toggleFavoriteMutation = useToggleFavorite();
   const { data: isFavorite, isLoading } = useGetIsFavorite(
@@ -75,26 +78,33 @@ const CustomSlide = ({ slide }: any) => {
 };
 
 export default function App() {
+  const isMobile = useCallback(() => {
+    return window.innerWidth < 768; // You can adjust this breakpoint as needed
+  }, []);
+
+  const [isCurrentlyMobile, setIsCurrentlyMobile] = useState(isMobile());
   const [columnCount, setColumnCount] = useState(0);
 
   const slideShowRef = useRef<SlideshowRef>(null);
   const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
   useEffect(() => {
-    function handleResize() {
-      if (window.innerWidth < 640) {
-        setColumnCount(2);
-      } else if (window.innerWidth >= 640 && window.innerWidth < 768) {
-        setColumnCount(3);
+    const handleResize = debounce(() => {
+      setIsCurrentlyMobile(isMobile());
+      if (isMobile()) {
+        setColumnCount(1);
       } else {
         setColumnCount(4);
       }
-    }
+    }, 150);
 
     window.addEventListener("resize", handleResize);
     handleResize();
 
-    return () => window.removeEventListener("resize", handleResize);
-  }, []);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      handleResize.cancel();
+    };
+  }, [isMobile]);
 
   const {
     sortDirection,
@@ -221,15 +231,19 @@ export default function App() {
     count: allFiles.length,
     getScrollElement: () => parentRef.current,
     estimateSize,
-    overscan: 5,
+    overscan: isCurrentlyMobile ? 2 : 5,
     lanes: columnCount,
   });
 
-  const loadMoreItems = useCallback(() => {
-    if (hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
+  const debouncedLoadMoreItems = useMemo(
+    () =>
+      debounce(() => {
+        if (hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      }, 200),
+    [fetchNextPage, hasNextPage, isFetchingNextPage],
+  );
 
   useEffect(() => {
     const scrollElement = parentRef.current;
@@ -240,13 +254,16 @@ export default function App() {
         scrollElement.scrollTop + scrollElement.clientHeight >=
         scrollElement.scrollHeight - 300
       ) {
-        loadMoreItems();
+        debouncedLoadMoreItems();
       }
     };
 
     scrollElement.addEventListener("scroll", handleScroll);
-    return () => scrollElement.removeEventListener("scroll", handleScroll);
-  }, [loadMoreItems]);
+    return () => {
+      scrollElement.removeEventListener("scroll", handleScroll);
+      debouncedLoadMoreItems.cancel();
+    };
+  }, [debouncedLoadMoreItems]);
 
   const slides = useMemo(
     () =>
@@ -347,7 +364,7 @@ export default function App() {
         plugins={[Thumbnails, Fullscreen, Slideshow]}
         thumbnails={{ showToggle: true, hidden: true }}
         toolbar={{
-          buttons: [<MyButton key="my-button" />, "close"],
+          buttons: [<FavoriteButton key="my-button" />, "close"],
         }}
         render={{
           slide: CustomSlide,
@@ -414,7 +431,7 @@ export default function App() {
                     <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
                       <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
                         {file.Image && (
-                          <img
+                          <LazyLoadImage
                             src={file.Image.ThumbnailBase64}
                             alt={file.Filename}
                             className="w-full h-full object-cover rounded-lg"
@@ -422,7 +439,7 @@ export default function App() {
                         )}
                         {file.Video && (
                           <div className="relative w-full h-full">
-                            <img
+                            <LazyLoadImage
                               src={file.Video.ThumbnailBase64}
                               alt={file.Filename}
                               className="w-full h-full object-cover rounded-lg"
