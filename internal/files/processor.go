@@ -19,38 +19,144 @@ import (
 )
 
 type Processor struct {
-	repo         *kv.Repository
-	config       *config.Config
-	handler      *handler
-	batchSize    int
-	concurrency  int
-	ctx          context.Context
-	cancel       context.CancelFunc
-	shutdownChan chan struct{}
-	processes    *sync.Map
-	tempFiles    *sync.Map
+	repo        *kv.Repository
+	config      *config.Config
+	handler     *handler
+	processes   *sync.Map
+	tempFiles   *sync.Map
+	batchSize   int
+	concurrency int
 }
 
 func NewProcessor(
 	config *config.Config,
 	repo *kv.Repository,
 	batchSize, concurrency int,
-	ctx context.Context,
-	cancel context.CancelFunc,
 ) *Processor {
 	log.Println("Creating new Processor instance")
 	return &Processor{
-		repo:         repo,
-		config:       config,
-		handler:      newHandler(config),
-		batchSize:    batchSize,
-		concurrency:  concurrency,
-		ctx:          ctx,
-		cancel:       cancel,
-		shutdownChan: make(chan struct{}),
-		processes:    &sync.Map{},
-		tempFiles:    &sync.Map{},
+		repo:        repo,
+		config:      config,
+		handler:     newHandler(config),
+		batchSize:   batchSize,
+		concurrency: concurrency,
+		processes:   &sync.Map{},
+		tempFiles:   &sync.Map{},
 	}
+}
+
+func (p *Processor) Process(ctx context.Context) error {
+	log.Println("starting processing files")
+
+	// Create a new context that we can cancel
+	processCtx, cancelProcess := context.WithCancel(ctx)
+	defer cancelProcess()
+
+	// Start a goroutine to handle cancellation
+	go func() {
+		select {
+		case <-ctx.Done():
+			log.Println("Received cancellation signal, initiating shutdown")
+			cancelProcess()
+			p.Shutdown(ctx)
+		case <-processCtx.Done():
+			return
+		}
+	}()
+
+	existingFilesMap, existingFilesHashesMap, err := p.repo.FindAllFiles()
+	if err != nil {
+		log.Printf("error fetching existing files from repository: %v", err)
+		return fmt.Errorf("error fetching existing files: %w", err)
+	}
+	log.Println("fetched existing files from repository")
+
+	processedHashes := &sync.Map{}
+	fileChan := make(chan string, p.concurrency)
+	errChan := make(chan error, p.concurrency)
+	var wg sync.WaitGroup
+	var processedFiles int64
+
+	// Start a goroutine to log the number of processed files every 10 seconds
+	go func() {
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ticker.C:
+				processed := atomic.LoadInt64(&processedFiles)
+				log.Printf("Processed %d files in the last 10 seconds", processed)
+				atomic.StoreInt64(&processedFiles, 0)
+			case <-processCtx.Done():
+				processed := atomic.LoadInt64(&processedFiles)
+				log.Printf("Processed %d files in the last 10 seconds", processed)
+				return
+			}
+		}
+	}()
+
+	// Start worker goroutines
+	for i := 0; i < p.concurrency; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for filePath := range fileChan {
+				if err := p.processFile(filePath, existingFilesMap, existingFilesHashesMap, processedHashes); err != nil {
+					errChan <- fmt.Errorf("error processing file %s: %w", filePath, err)
+				}
+				atomic.AddInt64(&processedFiles, 1)
+			}
+		}()
+	}
+
+	fdCommand, err := findFdCommand()
+	if err != nil {
+		return fmt.Errorf("error finding fd command: %w", err)
+	}
+	log.Printf("Using %s command for file discovery", fdCommand)
+
+	// Use fd to stream files
+	cmd := exec.CommandContext(processCtx, fdCommand, ".", "-t", "f", "-d", "1", p.config.FolderPath)
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("error creating stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("error starting %s command: %w", fdCommand, err)
+	}
+
+	scanner := bufio.NewScanner(stdout)
+	for scanner.Scan() {
+		select {
+		case <-processCtx.Done():
+			return processCtx.Err()
+		case fileChan <- scanner.Text():
+		}
+	}
+
+	if err := scanner.Err(); err != nil {
+		log.Printf("error reading %s output: %v", fdCommand, err)
+	}
+
+	if err := cmd.Wait(); err != nil {
+		log.Printf("%s command finished with error: %v", fdCommand, err)
+	}
+
+	close(fileChan)
+	wg.Wait()
+	close(errChan)
+
+	// Check for any errors during processing
+	for err := range errChan {
+		log.Println(err)
+	}
+
+	p.removeNonExistentFiles(existingFilesMap)
+	p.repo.UpdateFavoriteCount()
+	log.Println("completed processing files")
+	return nil
 }
 
 func findFdCommand() (string, error) {
@@ -78,106 +184,6 @@ func (p *Processor) handleDuplicateFile(filePath, filename string) {
 	if err := os.Rename(filePath, duplicatePath); err != nil {
 		log.Printf("error moving duplicate file %s: %v", filename, err)
 	}
-}
-
-func (p *Processor) Process() error {
-	log.Println("starting processing files")
-	defer close(p.shutdownChan)
-	defer p.cancel()
-
-	existingFilesMap, existingFilesHashesMap, err := p.repo.FindAllFiles()
-	if err != nil {
-		log.Printf("error fetching existing files from repository: %v", err)
-		return fmt.Errorf("error fetching existing files: %w", err)
-	}
-	log.Println("fetched existing files from repository")
-
-	processedHashes := &sync.Map{}
-	fileChan := make(chan string, p.concurrency)
-	errChan := make(chan error, p.concurrency)
-	var wg sync.WaitGroup
-	// Add a counter for processed files
-	var processedFiles int64
-
-	// Start a goroutine to log the number of processed files every 10 seconds
-	go func() {
-		ticker := time.NewTicker(10 * time.Second)
-		defer ticker.Stop()
-
-		for {
-			select {
-			case <-ticker.C:
-				processed := atomic.LoadInt64(&processedFiles)
-				log.Printf("Processed %d files in the last 10 seconds", processed)
-				atomic.StoreInt64(&processedFiles, 0)
-			case <-p.ctx.Done():
-				processed := atomic.LoadInt64(&processedFiles)
-				log.Printf("Processed %d files in the last 10 seconds", processed)
-				return
-			}
-		}
-	}()
-	// Start worker goroutines
-	for i := 0; i < p.concurrency; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for filePath := range fileChan {
-				if err := p.processFile(filePath, existingFilesMap, existingFilesHashesMap, processedHashes); err != nil {
-					errChan <- fmt.Errorf("error processing file %s: %w", filePath, err)
-				}
-				atomic.AddInt64(&processedFiles, 1)
-			}
-		}()
-	}
-	fdCommand, err := findFdCommand()
-	if err != nil {
-		return fmt.Errorf("error finding fd command: %w", err)
-	}
-	log.Printf("Using %s command for file discovery", fdCommand)
-	// Walk the directory and send files to the channel
-	// Use fd to stream files
-	cmd := exec.CommandContext(p.ctx, fdCommand, ".", "-t", "f", "-d", "1", p.config.FolderPath)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("error creating stdout pipe: %w", err)
-	}
-
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("error starting %s command: %w", fdCommand, err)
-	}
-
-	scanner := bufio.NewScanner(stdout)
-	for scanner.Scan() {
-		select {
-		case <-p.ctx.Done():
-			return p.ctx.Err()
-		case fileChan <- scanner.Text():
-
-		}
-	}
-
-	if err := scanner.Err(); err != nil {
-		log.Printf("error reading %s output: %v", fdCommand, err)
-	}
-
-	if err := cmd.Wait(); err != nil {
-		log.Printf("%s command finished with error: %v", fdCommand, err)
-	}
-
-	close(fileChan)
-	wg.Wait()
-	close(errChan)
-
-	// Check for any errors during processing
-	for err := range errChan {
-		log.Println(err)
-	}
-
-	p.removeNonExistentFiles(existingFilesMap)
-	p.repo.UpdateFavoriteCount()
-	log.Println("completed processing files")
-	return nil
 }
 
 func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, existingFilesHashesMap *sync.Map, processedHashes *sync.Map) error {
@@ -263,7 +269,6 @@ func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, exi
 
 func (p *Processor) Shutdown(ctx context.Context) {
 	log.Println("initiating graceful shutdown of processor")
-	p.cancel()
 
 	// Terminate external processes
 	p.processes.Range(func(key, value interface{}) bool {
@@ -286,14 +291,14 @@ func (p *Processor) Shutdown(ctx context.Context) {
 		}
 		return true
 	})
+
 	select {
 	case <-ctx.Done():
-		return
-	case <-p.shutdownChan:
-		log.Println("processor shutdown completed")
+		log.Println("shutdown context cancelled")
 	case <-time.After(utils.SHUTDOWN_TIMER):
 		log.Println("processor shutdown timed out")
 	}
+	log.Println("processor shutdown completed")
 }
 
 func (p *Processor) processNewFile(filePath string, newFile *kv.File, mimeType utils.MimeType) error {

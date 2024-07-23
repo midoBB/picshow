@@ -68,7 +68,6 @@ func main() {
 	var wg sync.WaitGroup
 
 	repo := kvdb.NewRepository(kv, runtimeCache)
-	processor := files.NewProcessor(runtimeConfig, repo, runtimeConfig.BatchSize, runtimeConfig.Concurrency, ctx, cancel)
 
 	// Create a channel to signal when to start the shutdown process
 	shutdownChan := make(chan struct{})
@@ -83,7 +82,7 @@ func main() {
 				shutdownChan <- struct{}{}
 			}
 		}()
-		runProcessor(ctx, processor, runtimeConfig.RefreshInterval)
+		runProcessor(ctx, runtimeConfig, repo, runtimeConfig.RefreshInterval)
 	}()
 
 	// Start the web server
@@ -116,14 +115,13 @@ func main() {
 	}
 
 	// Start the graceful shutdown process
-	gracefulShutdown(cancel, srv, repo, processor, &wg)
+	gracefulShutdown(cancel, srv, repo, &wg)
 }
 
 func gracefulShutdown(
 	cancel context.CancelFunc,
 	srv *server.Server,
 	repo *kvdb.Repository,
-	processor *files.Processor,
 	wg *sync.WaitGroup,
 ) {
 	log.Println("Starting graceful shutdown...")
@@ -138,7 +136,6 @@ func gracefulShutdown(
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("Error shutting down server: %v", err)
 	}
-	processor.Shutdown(shutdownCtx)
 
 	// Close the repository
 	repo.Close()
@@ -157,12 +154,12 @@ func gracefulShutdown(
 	}
 }
 
-func runProcessor(ctx context.Context, processor *files.Processor, refreshInterval int) {
-	// Function to run the processor
-
+func runProcessor(ctx context.Context, runtimeConfig *config.Config, repo *kvdb.Repository, refreshInterval int) {
 	runProcessorOnce := func() {
 		log.Println("Starting file processing...")
-		err := processor.Process()
+
+		processor := files.NewProcessor(runtimeConfig, repo, runtimeConfig.BatchSize, runtimeConfig.Concurrency)
+		err := processor.Process(ctx)
 		if err != nil {
 			if err == context.Canceled {
 				log.Println("File processing canceled.")
@@ -180,25 +177,12 @@ func runProcessor(ctx context.Context, processor *files.Processor, refreshInterv
 	ticker := time.NewTicker(time.Duration(refreshInterval) * time.Hour)
 	defer ticker.Stop()
 
-	processingInProgress := false
-	var processingMutex sync.Mutex
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			processingMutex.Lock()
-			if !processingInProgress {
-				processingInProgress = true
-				processingMutex.Unlock()
-
-				runProcessorOnce()
-
-				processingMutex.Lock()
-				processingInProgress = false
-			}
-			processingMutex.Unlock()
+			runProcessorOnce()
 		}
 	}
 }
