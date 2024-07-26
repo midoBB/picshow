@@ -464,6 +464,7 @@ export default function App() {
       <Lightbox
         open={isOpen}
         close={() => setIsOpen(false)}
+        carousel={{ finite: true }}
         index={currentIndex}
         slides={slides}
         fullscreen={{ auto: true }}
@@ -535,9 +536,8 @@ export default function App() {
             </div>
             {isFetchingNextPage && (
               <div
-                className={`text-center py-4 ${
-                  isDarkMode ? "text-white" : "text-gray-900"
-                } flex justify-center items-center`}
+                className={`text-center py-4 ${isDarkMode ? "text-white" : "text-gray-900"
+                  } flex justify-center items-center`}
               >
                 <span className="inline-flex">
                   <span className="animate-bounce">.</span>
@@ -548,9 +548,8 @@ export default function App() {
             )}
             {!hasNextPage && allFiles.length > 0 && (
               <div
-                className={`text-center py-4 ${
-                  isDarkMode ? "text-gray-400" : "text-gray-500"
-                } flex justify-center items-center`}
+                className={`text-center py-4 ${isDarkMode ? "text-gray-400" : "text-gray-500"
+                  } flex justify-center items-center`}
               >
                 <LuX className="w-6 h-6" />
               </div>
