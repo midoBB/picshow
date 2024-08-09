@@ -295,17 +295,25 @@ export default function App() {
     seed: sortType === "random" ? seed : null,
   });
 
-  const allFiles = useMemo(
-    () =>
-      data?.pages.flatMap((page, pageIndex) =>
-        page.files.map((file, fileIndex) => ({
-          ...file,
-          pageIndex,
-          fileIndex,
-        })),
-      ) || [],
-    [data],
-  );
+  const allFiles = useMemo(() => {
+    if (!data?.pages) return [];
+
+    const uniqueFiles = [];
+    const seenIds = new Set<number>();
+
+    for (let pageIndex = 0; pageIndex < data.pages.length; pageIndex++) {
+      const page = data.pages[pageIndex];
+      for (let fileIndex = 0; fileIndex < page.files.length; fileIndex++) {
+        const file = page.files[fileIndex];
+        if (!seenIds.has(file.ID)) {
+          seenIds.add(file.ID);
+          uniqueFiles.push({ ...file, pageIndex, fileIndex });
+        }
+      }
+    }
+
+    return uniqueFiles;
+  }, [data]);
 
   const estimateSize = useCallback(
     (index: number) => {
