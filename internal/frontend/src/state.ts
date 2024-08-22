@@ -8,7 +8,7 @@ type AppState = {
   selectedCategory: string;
   selectedCount: () => number;
   isSortDirectionDisabled: boolean;
-  seed: number | null;
+  seed: number;
   dontAskAgainForDelete: boolean;
   isDarkMode: boolean;
   setDontAskAgainForDelete: (value: boolean) => void;
@@ -28,10 +28,10 @@ const useAppState = create<AppState>((set, get) => ({
   selectedCount: () => get().selectedFiles.length,
   isSelectionMode: false,
   sortDirection: "desc",
-  sortType: "created_at",
+  sortType: "random",
   selectedCategory: "all",
-  isSortDirectionDisabled: false,
-  seed: null,
+  isSortDirectionDisabled: true,
+  seed: Math.floor(Date.now() / 1000),
   dontAskAgainForDelete: false,
   isDarkMode: true,
   setIsSelectionMode: (isSelectionMode) => set({ isSelectionMode }),

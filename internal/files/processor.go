@@ -91,6 +91,7 @@ func (p *Processor) Process(ctx context.Context) error {
 			case <-processCtx.Done():
 				processed := atomic.LoadInt64(&processedFiles)
 				log.Printf("Processed %d files in the last 10 seconds", processed)
+				ticker.Stop()
 				return
 			}
 		}
