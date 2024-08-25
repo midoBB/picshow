@@ -35,3 +35,4 @@ internal/firstrun/.build_timestamp
 internal/frontend/.build_timestamp
 picshow_arm
 picshow_x64
+deploy.sh

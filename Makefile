@@ -1,7 +1,7 @@
 # Makefile
 
 # Phony targets
-.PHONY: all build-x64 build-arm dev clean build-frontends
+.PHONY: all build-x64 build-arm dev clean build-frontends deploy
 
 # Variables
 GO = go
@@ -54,3 +54,6 @@ clean:
 	rm -f $(EXECUTABLE)_x64 $(EXECUTABLE)_arm
 	rm -rf $(FRONTEND_DIR)/dist $(FIRSTRUN_DIR)/dist
 	rm -f $(FRONTEND_TIMESTAMP) $(FIRSTRUN_TIMESTAMP)
+
+deploy: build-arm
+	./deploy.sh
