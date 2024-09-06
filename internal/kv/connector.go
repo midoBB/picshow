@@ -3,11 +3,12 @@ package kv
 import (
 	"errors"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
 	"picshow/internal/config"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 
 	"github.com/dgraph-io/badger/v2"
 	"github.com/dgraph-io/badger/v2/options"
@@ -20,6 +21,9 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 		return nil, fmt.Errorf("error creating database folder: %w", err)
 	}
 	shouldInitialize := isNewDatabase(config.DBPath)
+	log.WithFields(log.Fields{
+		"dbPath": config.DBPath,
+	}).Info("Opening Badger database")
 	opts := badger.DefaultOptions(config.DBPath).
 		WithNumMemtables(1).
 		WithSyncWrites(true).
@@ -33,15 +37,18 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 		WithValueLogFileSize(16 << 20) // 16 MB value log file
 	db, err := badger.Open(opts)
 	if err != nil {
+		log.WithError(err).Error("Failed to open Badger database")
 		return nil, fmt.Errorf("failed to open Badger database: %w", err)
 	}
 	if shouldInitialize {
 		err = initializeDB(db)
 		if err != nil {
+			log.WithError(err).Error("Failed to initialize Stats")
 			db.Close()
 			return nil, fmt.Errorf("failed to initialize Stats: %w", err)
 		}
 	}
+	log.Info("Successfully opened Badger database")
 	go runValueLogGC(db)
 	return db, nil
 }
@@ -52,7 +59,7 @@ func runValueLogGC(db *badger.DB) {
 	for range ticker.C {
 		err := db.RunValueLogGC(0.7)
 		if err != nil && !errors.Is(err, badger.ErrNoRewrite) {
-			log.Printf("Error running ValueLogGC: %v", err)
+			log.WithError(err).Error("Error running ValueLogGC")
 		}
 	}
 }
@@ -63,7 +70,11 @@ func isNewDatabase(dbPath string) bool {
 	return os.IsNotExist(err)
 }
 
+
+
+
 func initializeDB(db *badger.DB) error {
+	log.Debug("Initializing database")
 	stats := &Stats{
 		Count:         0,
 		ImageCount:    0,
@@ -73,6 +84,7 @@ func initializeDB(db *badger.DB) error {
 
 	statsData, err := proto.Marshal(stats)
 	if err != nil {
+		log.WithError(err).Error("Failed to marshal initial Stats")
 		return fmt.Errorf("failed to marshal initial Stats: %w", err)
 	}
 
@@ -80,6 +92,7 @@ func initializeDB(db *badger.DB) error {
 		return txn.Set([]byte(statsKey), statsData)
 	})
 	if err != nil {
+		log.WithError(err).Error("Failed to set initial Stats in database")
 		return fmt.Errorf("failed to set initial Stats in database: %w", err)
 	}
 	fileIds := &FileList{
@@ -89,6 +102,7 @@ func initializeDB(db *badger.DB) error {
 	}
 	fileIdsData, err := proto.Marshal(fileIds)
 	if err != nil {
+		log.WithError(err).Error("Failed to marshal initial FileList")
 		return fmt.Errorf("failed to marshal initial FileList: %w", err)
 	}
 
@@ -96,6 +110,7 @@ func initializeDB(db *badger.DB) error {
 		return txn.Set([]byte(allFilesKey), fileIdsData)
 	})
 	if err != nil {
+		log.WithError(err).Error("Failed to set initial FileList in database")
 		return fmt.Errorf("failed to set initial FileList in database: %w", err)
 	}
 	return nil

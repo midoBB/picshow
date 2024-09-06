@@ -13,6 +13,10 @@ import (
 	"picshow/internal/utils"
 	"strconv"
 	"strings"
+
+	"io"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type handler struct {
@@ -27,6 +31,7 @@ func getFullMimeType(filePath string) string {
 	cmd := exec.Command("file", "--mime-type", filePath)
 	output, err := cmd.Output()
 	if err != nil {
+		log.WithError(err).Error("Error getting file mimetype")
 		return ""
 	}
 
@@ -50,69 +55,104 @@ func getFileMimeType(filePath string) (utils.MimeType, error) {
 }
 
 // generateFileKey creates a unique key for a file based on its size and content hash
-// generateFileKey creates a unique key for a file based on its size and content hash
 func (h *handler) generateFileKey(filePath string) (string, error) {
 	fileInfo, err := os.Stat(filePath)
 	if err != nil {
+		log.WithError(err).Error("Error getting file info")
 		return "", fmt.Errorf("error getting file info: %w", err)
 	}
 	fileSize := fileInfo.Size()
 
 	var contentHash string
 	if fileSize <= 5*1024*1024 { // 5MB
+		log.Debugf("Hashing file %s using xxhsum", filePath)
 		// Use xxhsum to hash the entire file for files 5MB or smaller
 		cmd := exec.Command("xxhsum", filePath)
 		output, err := cmd.Output()
 		if err != nil {
+			log.WithError(err).Errorf("Error executing xxhsum on %s", filePath)
 			return "", fmt.Errorf("error executing xxhsum: %w", err)
 		}
 
 		// Parse the xxhsum output
 		parts := strings.Fields(string(output))
 		if len(parts) < 2 {
+			log.Errorf("Unexpected xxhsum output format: %s", string(output))
 			return "", fmt.Errorf("unexpected xxhsum output format")
 		}
 		contentHash = parts[0]
 	} else {
+		log.Debugf("Hashing file %s using xxhsum with dd", filePath)
+
 		// Use dd to read the first 5MB of the file and pipe it to xxhsum for larger files
 		ddCmd := exec.Command("dd", "if="+filePath, fmt.Sprintf("bs=%dK", h.config.HashSize), "count=1")
 		xxhsumCmd := exec.Command("xxhsum")
 
-		xxhsumCmd.Stdin, _ = ddCmd.StdoutPipe()
+		// Create a pipe to connect dd's stdout to xxhsum's stdin
+		ddStdout, err := ddCmd.StdoutPipe()
+		if err != nil {
+			log.WithError(err).Errorf("Error creating stdout pipe for dd on %s", filePath)
+			return "", fmt.Errorf("error creating stdout pipe for dd: %w", err)
+		}
+		xxhsumCmd.Stdin = ddStdout
+
+		// Get xxhsum's stdout pipe
 		xxhsumOutput, err := xxhsumCmd.StdoutPipe()
 		if err != nil {
-			return "", fmt.Errorf("error creating pipe: %w", err)
+			log.WithError(err).Errorf("Error creating stdout pipe for xxhsum on %s", filePath)
+			return "", fmt.Errorf("error creating stdout pipe for xxhsum: %w", err)
 		}
 
+		// Start both commands
 		if err := xxhsumCmd.Start(); err != nil {
+			log.WithError(err).Errorf("Error starting xxhsum on %s", filePath)
 			return "", fmt.Errorf("error starting xxhsum: %w", err)
 		}
-		if err := ddCmd.Run(); err != nil {
+
+		if err := ddCmd.Start(); err != nil {
+			log.WithError(err).Errorf("Error starting dd on %s", filePath)
+			return "", fmt.Errorf("error starting dd: %w", err)
+		}
+
+		// Wait for dd to finish
+		if err := ddCmd.Wait(); err != nil {
+			log.WithError(err).Errorf("Error running dd on %s", filePath)
 			return "", fmt.Errorf("error running dd: %w", err)
 		}
 
-		hashOutput := make([]byte, 64)
-		n, err := xxhsumOutput.Read(hashOutput)
+		// Close dd's stdout to signal EOF to xxhsum
+		ddStdout.Close()
+
+		// Read xxhsum output
+		hashOutput, err := io.ReadAll(io.Reader(xxhsumOutput))
 		if err != nil {
+			log.WithError(err).Errorf("Error reading xxhsum output on %s", filePath)
 			return "", fmt.Errorf("error reading xxhsum output: %w", err)
 		}
 
+		// Wait for xxhsum to finish
 		if err := xxhsumCmd.Wait(); err != nil {
+			log.WithError(err).Errorf("Error waiting for xxhsum on %s", filePath)
 			return "", fmt.Errorf("error waiting for xxhsum: %w", err)
 		}
 
-		parts := strings.Fields(string(hashOutput[:n]))
+		parts := strings.Fields(string(hashOutput))
 		if len(parts) == 0 {
+			log.Errorf("Unexpected xxhsum output format: %s", string(hashOutput))
 			return "", fmt.Errorf("unexpected xxhsum output format")
 		}
+
 		contentHash = parts[0]
 	}
+
+	log.Debugf("Generated file key %s for %s", contentHash, filePath)
 
 	key := fmt.Sprintf("%d_%s", fileSize, contentHash)
 	return key, nil
 }
 
 func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, error) {
+	log.Debugf("Processing new image: %s", filePath)
 	// Get the file extension to handle GIFs separately
 	ext := strings.ToLower(filepath.Ext(filePath))
 
@@ -126,6 +166,7 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 	output, err := cmdIdentify.Output()
 	if err != nil {
 		p.processes.Delete(identifyCmdKey)
+		log.WithError(err).Errorf("Error executing ImageMagick identify command on %s", filePath)
 		return nil, fmt.Errorf("error executing ImageMagick identify command: %w", err)
 	}
 	p.processes.Delete(identifyCmdKey)
@@ -133,6 +174,7 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 	var width, height int
 	_, err = fmt.Sscanf(string(output), "%dx%d", &width, &height)
 	if err != nil {
+		log.WithError(err).Errorf("Error parsing image dimensions from %s", string(output))
 		return nil, fmt.Errorf("error parsing image dimensions: %w", err)
 	}
 
@@ -147,7 +189,9 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 	}
 
 	// Generate temporary file path for thumbnail
+	// Generate temporary file path for thumbnail
 	tempFile := filepath.Join(os.TempDir(), strconv.FormatUint(uint64(thumbWidth), 10)+"x"+strconv.FormatUint(uint64(thumbHeight), 10)+".jpg")
+	log.Debugf("Generating thumbnail for %s at %s", filePath, tempFile)
 	// Construct and execute ImageMagick convert command
 	cmd := exec.Command(
 		"convert",
@@ -163,6 +207,7 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 	err = cmd.Run()
 	if err != nil {
 		p.processes.Delete(convCmdKey)
+		log.WithError(err).Errorf("Error executing ImageMagick convert command on %s", filePath)
 		return nil, fmt.Errorf("error executing ImageMagick convert command: %w", err)
 	}
 	p.processes.Delete(convCmdKey)
@@ -172,8 +217,11 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 	// Read thumbnail file into memory
 	thumbnailData, err := os.ReadFile(tempFile)
 	if err != nil {
+		log.WithError(err).Errorf("Error reading thumbnail file %s", tempFile)
 		return nil, fmt.Errorf("error reading thumbnail file: %w", err)
 	}
+
+	log.Debugf("Generated thumbnail for %s", filePath)
 
 	image := &kv.Image{
 		FullMimeType:    getFullMimeType(filePath),
@@ -188,6 +236,7 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 }
 
 func (h *handler) handleNewVideo(p *Processor, filePath string) (*kv.Video, error) {
+	log.Debugf("Processing new video: %s", filePath)
 	// Run ffprobe as an external command
 	cmd := exec.Command("ffprobe",
 		"-v", "quiet",
@@ -204,6 +253,7 @@ func (h *handler) handleNewVideo(p *Processor, filePath string) (*kv.Video, erro
 	err := cmd.Run()
 	if err != nil {
 		p.processes.Delete(ffprobeCmdKey)
+		log.WithError(err).Errorf("Error running ffprobe on %s\nstderr: %s", filePath, stderr.String())
 		return nil, fmt.Errorf("error running ffprobe: %w\nstderr: %s", err, stderr.String())
 	}
 	p.processes.Delete(ffprobeCmdKey)
@@ -221,6 +271,7 @@ func (h *handler) handleNewVideo(p *Processor, filePath string) (*kv.Video, erro
 	}
 
 	if err := json.Unmarshal(stdout.Bytes(), &probeResult); err != nil {
+		log.WithError(err).Errorf("Error parsing ffprobe output for %s", filePath)
 		return nil, fmt.Errorf("error parsing ffprobe output: %w", err)
 	}
 
@@ -236,8 +287,11 @@ func (h *handler) handleNewVideo(p *Processor, filePath string) (*kv.Video, erro
 
 	duration, err := strconv.ParseFloat(probeResult.Format.Duration, 64)
 	if err != nil {
+		log.WithError(err).Errorf("Error parsing video duration from %s", probeResult.Format.Duration)
 		return nil, fmt.Errorf("error parsing video duration: %w", err)
 	}
+
+	log.Debugf("Generating thumbnail for video %s", filePath)
 
 	screenshotAt := math.Floor(duration * 0.33)
 
@@ -254,6 +308,7 @@ func (h *handler) handleNewVideo(p *Processor, filePath string) (*kv.Video, erro
 	// Create temporary file for the thumbnail
 	thumbnailFile, err := os.CreateTemp("", "video_thumbnail_*.jpg")
 	if err != nil {
+		log.WithError(err).Error("Error creating temporary file for video thumbnail")
 		return nil, fmt.Errorf("error creating temporary file for video thumbnail: %w", err)
 	}
 	p.tempFiles.Store(thumbnailFile.Name(), thumbnailFile.Name())
@@ -277,14 +332,18 @@ func (h *handler) handleNewVideo(p *Processor, filePath string) (*kv.Video, erro
 	p.processes.Store(ffmpegCmdKey, ffmpegCmd)
 	if err := ffmpegCmd.Run(); err != nil {
 		p.processes.Delete(ffmpegCmdKey)
+		log.WithError(err).Errorf("Error processing video %s with FFmpeg", filePath)
 		return nil, fmt.Errorf("error processing video with FFmpeg: %w", err)
 	}
 	p.processes.Delete(ffmpegCmdKey)
 	// Read the generated thumbnail file into memory
 	thumbnailData, err := os.ReadFile(thumbnailFile.Name())
 	if err != nil {
+		log.WithError(err).Errorf("Error reading thumbnail file %s", thumbnailFile.Name())
 		return nil, fmt.Errorf("error reading thumbnail file: %w", err)
 	}
+
+	log.Debugf("Generated thumbnail for %s", filePath)
 
 	video := &kv.Video{
 		FullMimeType:    getFullMimeType(filePath),

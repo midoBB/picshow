@@ -39,6 +39,10 @@ type fileQuery struct {
 	Type     *string `query:"type"`
 }
 
+func (fq *fileQuery) String() string {
+	return "page: " + strconv.Itoa(*fq.Page) + ", page_size: " + strconv.Itoa(*fq.PageSize) + ", order: " + *fq.Order + ", direction: " + *fq.OrderDir
+}
+
 type deleteRequest struct {
 	IDs string `json:"ids"`
 }

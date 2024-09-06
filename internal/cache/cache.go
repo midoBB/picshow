@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"picshow/internal/config"
-	"picshow/internal/utils"
 	"strings"
 	"time"
+
+	log "github.com/sirupsen/logrus"
+
+	"picshow/internal/utils"
 
 	"github.com/maypok86/otter"
 )
@@ -71,23 +74,29 @@ func GenerateFileContentCacheKey(id uint64) string {
 func (c *Cache) SetCache(key string, value interface{}) error {
 	data, err := json.Marshal(value)
 	if err != nil {
+		log.WithFields(log.Fields{"key": key, "value": value}).Debug("Failed to marshal value")
 		return err
 	}
 	c.cache.Set(key, data)
+	log.WithFields(log.Fields{"key": key, "size": len(data)}).Debug("Setting cache")
 	return nil
 }
 
 // GetCache retrieves a value from the cache
 func (c *Cache) GetCache(key string, value interface{}) (bool, error) {
+	log.WithFields(log.Fields{"key": key}).Debug("Checking cache")
 	data, found := c.cache.Get(key)
 	if !found {
+		log.WithFields(log.Fields{"key": key}).Debug("Cache miss")
 		return false, nil
 	}
+	log.WithFields(log.Fields{"key": key, "size": len(data)}).Debug("Cache hit")
 	return true, json.Unmarshal(data, value)
 }
 
 func (c *Cache) Delete(key string) {
 	c.cache.DeleteByFunc(func(cacheKey string, value []byte) bool {
+		log.WithFields(log.Fields{"key": cacheKey}).Debug("Deleting from cache")
 		return strings.Contains(cacheKey, key)
 	})
 }

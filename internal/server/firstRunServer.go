@@ -3,7 +3,6 @@ package server
 import (
 	"context"
 	"fmt"
-	"log"
 	"net"
 	"net/http"
 	"picshow/internal/config"
@@ -12,6 +11,7 @@ import (
 
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
+	log "github.com/sirupsen/logrus"
 )
 
 type FirstRunServer struct {
@@ -43,7 +43,7 @@ func (s *FirstRunServer) Start() error {
 	go func() {
 		logURLs(config.GetPort())
 		if err := s.e.Start(fmt.Sprintf(":%d", config.GetPort())); err != nil && err != http.ErrServerClosed {
-			log.Printf("First-run server error: %v", err)
+			log.Error("First-run server error: ", err)
 		}
 	}()
 
@@ -74,21 +74,21 @@ func (s *FirstRunServer) shutdown() {
 	defer cancel()
 
 	if err := s.e.Shutdown(ctx); err != nil {
-		log.Printf("Error during server shutdown: %v", err)
+		log.Error("Error during server shutdown: ", err)
 	}
 
-	log.Println("First-run server has been shut down")
+	log.Info("First-run server has been shut down")
 	s.done <- true
 }
 
 func logURLs(port int) {
 	// Log the local URL
-	log.Printf("Local: http://localhost:%d/", port)
+	log.Infof("Local: http://localhost:%d/", port)
 
 	// Get all network interfaces
 	interfaces, err := net.Interfaces()
 	if err != nil {
-		log.Fatalf("Failed to get network interfaces: %v", err)
+		log.Fatal("Failed to get network interfaces: ", err)
 	}
 
 	for _, iface := range interfaces {
@@ -109,7 +109,7 @@ func logURLs(port int) {
 
 			// Log only IPv4 addresses
 			if ipv4 := ip.To4(); ipv4 != nil {
-				log.Printf("Network: http://%s:%d/", ipv4, port)
+				log.Infof("Network: http://%s:%d/", ipv4, port)
 			}
 		}
 	}

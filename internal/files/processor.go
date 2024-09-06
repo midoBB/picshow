@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"context"
 	"fmt"
-	"log"
+	log "github.com/sirupsen/logrus"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -33,7 +33,7 @@ func NewProcessor(
 	repo *kv.Repository,
 	batchSize, concurrency int,
 ) *Processor {
-	log.Println("Creating new Processor instance")
+	log.Debug("Creating new Processor instance")
 	return &Processor{
 		repo:        repo,
 		config:      config,
@@ -46,7 +46,7 @@ func NewProcessor(
 }
 
 func (p *Processor) Process(ctx context.Context) error {
-	log.Println("starting processing files")
+	log.Info("Starting processing files")
 
 	// Create a new context that we can cancel
 	processCtx, cancelProcess := context.WithCancel(ctx)
@@ -56,7 +56,7 @@ func (p *Processor) Process(ctx context.Context) error {
 	go func() {
 		select {
 		case <-ctx.Done():
-			log.Println("Received cancellation signal, initiating shutdown")
+			log.Info("Received cancellation signal, initiating shutdown")
 			cancelProcess()
 			p.Shutdown(ctx)
 		case <-processCtx.Done():
@@ -66,10 +66,10 @@ func (p *Processor) Process(ctx context.Context) error {
 
 	existingFilesMap, existingFilesHashesMap, err := p.repo.FindAllFiles()
 	if err != nil {
-		log.Printf("error fetching existing files from repository: %v", err)
+		log.Errorf("Error fetching existing files from repository: %v", err)
 		return fmt.Errorf("error fetching existing files: %w", err)
 	}
-	log.Println("fetched existing files from repository")
+	log.Debug("Fetched existing files from repository")
 
 	processedHashes := &sync.Map{}
 	fileChan := make(chan string, p.concurrency)
@@ -86,11 +86,11 @@ func (p *Processor) Process(ctx context.Context) error {
 			select {
 			case <-ticker.C:
 				processed := atomic.LoadInt64(&processedFiles)
-				log.Printf("Processed %d files in the last 10 seconds", processed)
+				log.Infof("Processed %d files in the last 10 seconds", processed)
 				atomic.StoreInt64(&processedFiles, 0)
 			case <-processCtx.Done():
 				processed := atomic.LoadInt64(&processedFiles)
-				log.Printf("Processed %d files in the last 10 seconds", processed)
+				log.Infof("Processed %d files in the last 10 seconds", processed)
 				ticker.Stop()
 				return
 			}
@@ -115,7 +115,7 @@ func (p *Processor) Process(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("error finding fd command: %w", err)
 	}
-	log.Printf("Using %s command for file discovery", fdCommand)
+	log.Infof("Using %s command for file discovery", fdCommand)
 
 	// Use fd to stream files
 	cmd := exec.CommandContext(processCtx, fdCommand, ".", "-t", "f", "-d", "1", p.config.FolderPath)
@@ -138,11 +138,11 @@ func (p *Processor) Process(ctx context.Context) error {
 	}
 
 	if err := scanner.Err(); err != nil {
-		log.Printf("error reading %s output: %v", fdCommand, err)
+		log.Errorf("Error reading %s output: %v", fdCommand, err)
 	}
 
 	if err := cmd.Wait(); err != nil {
-		log.Printf("%s command finished with error: %v", fdCommand, err)
+		log.Errorf("%s command finished with error: %v", fdCommand, err)
 	}
 
 	close(fileChan)
@@ -151,12 +151,12 @@ func (p *Processor) Process(ctx context.Context) error {
 
 	// Check for any errors during processing
 	for err := range errChan {
-		log.Println(err)
+		log.Error(err)
 	}
 
 	p.removeNonExistentFiles(existingFilesMap)
 	p.repo.UpdateFavoriteCount()
-	log.Println("completed processing files")
+	log.Info("Completed processing files")
 	return nil
 }
 
@@ -173,17 +173,17 @@ func findFdCommand() (string, error) {
 }
 
 func (p *Processor) handleDuplicateFile(filePath, filename string) {
-	log.Printf("duplicate hash detected for %s", filename)
+	log.Warnf("Duplicate hash detected for %s", filename)
 
 	duplicatesDir := filepath.Join(filepath.Dir(p.config.FolderPath), "duplicates")
 	if err := os.MkdirAll(duplicatesDir, 0755); err != nil {
-		log.Printf("error creating duplicates directory: %v", err)
+		log.Errorf("Error creating duplicates directory: %v", err)
 		return
 	}
 
 	duplicatePath := filepath.Join(duplicatesDir, filename)
 	if err := os.Rename(filePath, duplicatePath); err != nil {
-		log.Printf("error moving duplicate file %s: %v", filename, err)
+		log.Errorf("Error moving duplicate file %s: %v", filename, err)
 	}
 }
 
@@ -209,7 +209,7 @@ func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, exi
 			return fmt.Errorf("error fetching file %s: %v", filename, err)
 		}
 		if existingFile.LastModified >= lastModified {
-			log.Printf("file %s has not been modified since last processing, skipping", filename)
+			log.Debugf("File %s has not been modified since last processing, skipping", filename)
 			processedHashes.Store(existingFile.Hash, true)
 			existingFilesMap.Delete(filename)
 			return nil
@@ -222,7 +222,7 @@ func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, exi
 	}
 
 	if _, alreadyProcessed := processedHashes.Load(hash); alreadyProcessed {
-		log.Printf("found duplicate file: %s (hash: %s)", filename, hash)
+		log.Warnf("Found duplicate file: %s (hash: %s)", filename, hash)
 		p.handleDuplicateFile(filePath, filename)
 		return nil
 	}
@@ -237,7 +237,7 @@ func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, exi
 		if err != nil {
 			return fmt.Errorf("error fetching file %s: %v", filename, err)
 		}
-		log.Printf("updating existing file record for %s", filename)
+		log.Debugf("Updating existing file record for %s", filename)
 		existingFile.Filename = filename
 		existingFile.LastModified = lastModified
 		if err := p.repo.UpdateFile(existingFile); err != nil {
@@ -245,7 +245,7 @@ func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, exi
 		}
 		existingFilesMap.Delete(existingFile.Filename)
 	} else {
-		log.Printf("processing new file %s", filename)
+		log.Debugf("Processing new file %s", filename)
 		mimeType, err := getFileMimeType(filePath)
 		if err != nil {
 			return fmt.Errorf("error detecting mime type for %s: %v", filename, err)
@@ -269,15 +269,15 @@ func (p *Processor) processFile(filePath string, existingFilesMap *sync.Map, exi
 }
 
 func (p *Processor) Shutdown(ctx context.Context) {
-	log.Println("initiating graceful shutdown of processor")
+	log.Info("Initiating graceful shutdown of processor")
 
 	// Terminate external processes
 	p.processes.Range(func(key, value interface{}) bool {
 		cmd := value.(*exec.Cmd)
 		if cmd.Process != nil {
-			log.Printf("terminating process: %v", cmd.Args)
+			log.Debugf("Terminating process: %v", cmd.Args)
 			if err := cmd.Process.Kill(); err != nil {
-				log.Printf("error killing process: %v", err)
+				log.Errorf("Error killing process: %v", err)
 			}
 		}
 		return true
@@ -286,20 +286,20 @@ func (p *Processor) Shutdown(ctx context.Context) {
 	// Clean up temporary files
 	p.tempFiles.Range(func(key, value interface{}) bool {
 		filePath := value.(string)
-		log.Printf("removing temporary file: %s", filePath)
+		log.Debugf("Removing temporary file: %s", filePath)
 		if err := os.Remove(filePath); err != nil {
-			log.Printf("error removing temporary file: %v", err)
+			log.Errorf("Error removing temporary file: %v", err)
 		}
 		return true
 	})
 
 	select {
 	case <-ctx.Done():
-		log.Println("shutdown context cancelled")
+		log.Warn("Shutdown context cancelled")
 	case <-time.After(utils.SHUTDOWN_TIMER):
-		log.Println("processor shutdown timed out")
+		log.Error("Processor shutdown timed out")
 	}
-	log.Println("processor shutdown completed")
+	log.Info("Processor shutdown completed")
 }
 
 func (p *Processor) processNewFile(filePath string, newFile *kv.File, mimeType utils.MimeType) error {
@@ -323,12 +323,12 @@ func (p *Processor) processNewFile(filePath string, newFile *kv.File, mimeType u
 }
 
 func (p *Processor) removeNonExistentFiles(existingFilesMap *sync.Map) {
-	log.Println("removing non-existent files from repository")
+	log.Info("Removing non-existent files from repository")
 	existingFilesMap.Range(func(key, value interface{}) bool {
 		filename, _ := key.(string)
 		fileID, _ := value.(uint64)
 		if err := p.repo.DeleteFile(fileID); err != nil {
-			log.Printf("error deleting file %s: %v", filename, err)
+			log.Errorf("Error deleting file %s: %v", filename, err)
 		}
 		return true
 	})

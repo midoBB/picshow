@@ -17,6 +17,7 @@ type Config struct {
 	PORT             int
 	RefreshInterval  int
 	CacheSizeMB      int
+	LogLevel         string
 }
 
 const DefaultPort = 8281
@@ -24,6 +25,7 @@ const DefaultPort = 8281
 func GetPort() int {
 	v := viper.New()
 	v.SetDefault("PORT", DefaultPort)
+	v.SetDefault("LogLevel", "debug")
 	v.AutomaticEnv()
 	return v.GetInt("PORT")
 }
@@ -31,6 +33,7 @@ func GetPort() int {
 func LoadConfig() (*Config, error) {
 	v := viper.New()
 	v.SetDefault("PORT", GetPort())
+	v.SetDefault("LogLevel", "debug")
 	v.SetConfigName("config")
 	v.SetConfigType("toml")
 	var configPath string
@@ -76,5 +79,6 @@ func (c *Config) Save() error {
 	v.Set("DBPath", c.DBPath)
 	v.Set("BatchSize", c.BatchSize)
 	v.Set("Concurrency", c.Concurrency)
+	v.Set("LogLevel", c.LogLevel)
 	return v.SafeWriteConfig()
 }

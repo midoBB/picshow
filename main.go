@@ -2,29 +2,33 @@ package main
 
 import (
 	"context"
-	"log"
+	"flag"
 	"net/http"
 	"os"
 	"os/signal"
-	"picshow/internal/cache"
-	"picshow/internal/config"
-	"picshow/internal/files"
-	"picshow/internal/server"
-	"picshow/internal/utils"
 	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
 
+	log "github.com/sirupsen/logrus"
+
 	_ "net/http/pprof"
 
+	"picshow/internal/cache"
+	"picshow/internal/config"
+	"picshow/internal/files"
+	"picshow/internal/server"
+	"picshow/internal/utils"
 	kvdb "picshow/internal/kv"
 )
 
 func init() {
-	log.SetFlags(log.LstdFlags | log.Lshortfile)
+	log.SetFormatter(&log.TextFormatter{
+		FullTimestamp: true,
+	})
 	go func() {
-		log.Println(http.ListenAndServe("localhost:6060", nil))
+		log.Debugln(http.ListenAndServe("localhost:6060", nil))
 	}()
 }
 
@@ -32,15 +36,49 @@ func main() {
 	// Defer panic recovery
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("Panic recovered: %v\n%s", r, debug.Stack())
+			log.Errorf("Panic recovered: %v\n%s", r, debug.Stack())
 			os.Exit(1)
 		}
 	}()
 
+	logLevel := flag.String("LOG", "", "Log level (debug, info, warning, error, fatal, panic)")
+	flag.Parse()
+
 	runtimeConfig, err := config.LoadConfig()
 	if err != nil {
-		log.Printf("Error loading config: %v", err)
-		log.Println("Starting first-run server...")
+		log.Errorf("Error loading config: %v", err)
+		log.Info("Starting first-run server...")
+
+		firstRunServer := server.NewFirstRunServer()
+		if err := firstRunServer.Start(); err != nil {
+			log.Fatalf("Error starting first-run server: %v", err)
+		}
+
+		runtimeConfig, err = config.LoadConfig()
+		if err != nil {
+			log.Fatalf("Error loading config after first-run: %v", err)
+		}
+	}
+
+	// prioritize the loglevel from the flag passed to the app
+	// over that from the config so if the flag is set ignore
+	// that of the config
+	if *logLevel != "" {
+		lvl, err := log.ParseLevel(*logLevel)
+		if err != nil {
+			log.Fatalf("Invalid log level: %v", err)
+		}
+		log.SetLevel(lvl)
+	} else {
+		lvl, err := log.ParseLevel(runtimeConfig.LogLevel)
+		if err != nil {
+			log.Fatalf("Invalid log level: %v", err)
+		}
+		log.SetLevel(lvl)
+	}
+	if err != nil {
+		log.Errorf("Error loading config: %v", err)
+		log.Info("Starting first-run server...")
 
 		firstRunServer := server.NewFirstRunServer()
 		if err := firstRunServer.Start(); err != nil {
@@ -78,7 +116,7 @@ func main() {
 		defer wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Panic in file processor: %v\n%s", r, debug.Stack())
+				log.Errorf("Panic in file processor: %v\n%s", r, debug.Stack())
 				shutdownChan <- struct{}{}
 			}
 		}()
@@ -92,12 +130,12 @@ func main() {
 		defer wg.Done()
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("Panic in web server: %v\n%s", r, debug.Stack())
+				log.Errorf("Panic in web server: %v\n%s", r, debug.Stack())
 				shutdownChan <- struct{}{}
 			}
 		}()
 		if err := srv.Start(); err != nil {
-			log.Printf("Error starting server: %v", err)
+			log.Errorf("Error starting server: %v", err)
 			shutdownChan <- struct{}{}
 		}
 	}()
@@ -109,9 +147,9 @@ func main() {
 	// Wait for termination signal or panic
 	select {
 	case <-sigChan:
-		log.Println("Received termination signal.")
+		log.Info("Received termination signal.")
 	case <-shutdownChan:
-		log.Println("Initiating shutdown due to panic or error.")
+		log.Info("Initiating shutdown due to panic or error.")
 	}
 
 	// Start the graceful shutdown process
@@ -124,7 +162,7 @@ func gracefulShutdown(
 	repo *kvdb.Repository,
 	wg *sync.WaitGroup,
 ) {
-	log.Println("Starting graceful shutdown...")
+	log.Info("Starting graceful shutdown...")
 	// Cancel the context to stop ongoing operations
 	cancel()
 
@@ -134,7 +172,7 @@ func gracefulShutdown(
 
 	// Shutdown the server
 	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Printf("Error shutting down server: %v", err)
+		log.Errorf("Error shutting down server: %v", err)
 	}
 
 	// Close the repository
@@ -148,26 +186,26 @@ func gracefulShutdown(
 
 	select {
 	case <-done:
-		log.Println("Graceful shutdown completed")
+		log.Info("Graceful shutdown completed")
 	case <-shutdownCtx.Done():
-		log.Println("Shutdown timed out")
+		log.Warn("Shutdown timed out")
 	}
 }
 
 func runProcessor(ctx context.Context, runtimeConfig *config.Config, repo *kvdb.Repository, refreshInterval int) {
 	runProcessorOnce := func() {
-		log.Println("Starting file processing...")
+		log.Info("Starting file processing...")
 
 		processor := files.NewProcessor(runtimeConfig, repo, runtimeConfig.BatchSize, runtimeConfig.Concurrency)
 		err := processor.Process(ctx)
 		if err != nil {
 			if err == context.Canceled {
-				log.Println("File processing canceled.")
+				log.Info("File processing canceled.")
 			} else {
-				log.Printf("Error processing files: %v", err)
+				log.Errorf("Error processing files: %v", err)
 			}
 		} else {
-			log.Println("File processing completed successfully.")
+			log.Info("File processing completed successfully.")
 		}
 	}
 
