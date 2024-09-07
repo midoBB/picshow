@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [2.1.3] - 2024-09-07
+
+### 🚀 Features
+
+- Added new config option for backup folder path and for log level
+- Implement database backup/restore functionality
+- Implement a backup deletion policy
+
+### 🐛 Bug Fixes
+
+- Restart server after backup/restore
+
+### ⚙️ Miscellaneous Tasks
+
+- *(make)* Added a task to deploy the project using a script
+- Upgrade to sirupsen/logrus for better logging
+
 ## [2.1.2] - 2024-08-22
 
 ### 🚀 Features

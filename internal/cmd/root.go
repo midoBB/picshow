@@ -27,8 +27,8 @@ func init() {
 
 func initLogging() {
 	level, err := log.ParseLevel(logLevelStr)
-	if err != nil {
-		log.Warnf("Invalid log level: %s", logLevelStr)
+	if logLevelStr != "" && err != nil {
+		log.Infof("Invalid log level: %s", logLevelStr)
 	}
 	log.SetLevel(level)
 	logLevel = &level

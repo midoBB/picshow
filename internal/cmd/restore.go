@@ -18,7 +18,15 @@ var restoreCmd = &cobra.Command{
 	Run: func(cmd *cobra.Command, args []string) {
 		restoreFilePath := args[0]
 
-		log.Trace("Testing log levels")
+		// Load the configuration
+		cfg, err := config.LoadConfig()
+		if err != nil {
+			log.WithError(err).Error("Failed to load config")
+			log.Fatal("You must run picshow once to generate the config file or you can restore it manually if you have a backup file.")
+		}
+
+		setLoggingFromConfig(cfg)
+
 		// Ensure the file exists
 		if _, err := os.Stat(restoreFilePath); os.IsNotExist(err) {
 			log.WithError(err).Fatal("Restore file does not exist")
@@ -29,13 +37,13 @@ var restoreCmd = &cobra.Command{
 			log.Warn("Restore file must have a .bak extension")
 		}
 
-		// Load the configuration
-		cfg, err := config.LoadConfig()
-		if err != nil {
-			log.WithError(err).Error("Failed to load config")
-			log.Fatal("You must run picshow once to generate the config file or you can restore it manually if you have a backup file.")
+		serverRunning := checkServerRunning(cfg.PORT)
+		if serverRunning {
+			log.Info("Server is running. Stopping it before restore.")
+			if err := stopServer(cfg.PORT); err != nil {
+				log.WithError(err).Fatal("Failed to stop the server")
+			}
 		}
-
 		// Call RestoreDB to perform the restore
 		err = kv.RestoreDB(restoreFilePath, cfg)
 		if err != nil {
@@ -44,6 +52,13 @@ var restoreCmd = &cobra.Command{
 
 		// Successful restoration
 		log.Infof("Database restored successfully from %s\n", restoreFilePath)
+
+		if serverRunning {
+			log.Info("Restarting the server.")
+			if err := startServer(cfg.PORT); err != nil {
+				log.WithError(err).Fatal("Failed to restart the server")
+			}
+		}
 	},
 }
 

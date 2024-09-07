@@ -59,17 +59,7 @@ func serve() {
 		}
 	}
 
-	// prioritize the loglevel from the flag passed to the app
-	// over that from the config so if the flag is set ignore
-	// that of the config
-	if logLevel != nil {
-		lvl, err := log.ParseLevel(runtimeConfig.LogLevel)
-		if err != nil {
-			log.Fatalf("Invalid log level: %v", err)
-		}
-		log.SetLevel(lvl)
-
-	}
+	setLoggingFromConfig(runtimeConfig)
 	if err != nil {
 		log.Errorf("Error loading config: %v", err)
 		log.Info("Starting first-run server...")
@@ -99,7 +89,7 @@ func serve() {
 
 	var wg sync.WaitGroup
 
-	repo := kvdb.NewRepository(kv, runtimeCache)
+	repo := kvdb.NewRepository(kv, runtimeCache, runtimeConfig)
 
 	// Create a channel to signal when to start the shutdown process
 	shutdownChan := make(chan struct{})
@@ -148,6 +138,19 @@ func serve() {
 
 	// Start the graceful shutdown process
 	gracefulShutdown(cancel, srv, repo, &wg)
+}
+
+// prioritize the loglevel from the flag passed to the app
+// over that from the config so if the flag is set ignore
+// that of the config
+func setLoggingFromConfig(runtimeConfig *config.Config) {
+	if logLevel != nil {
+		lvl, err := log.ParseLevel(runtimeConfig.LogLevel)
+		if err != nil {
+			log.Fatalf("Invalid log level: %v", err)
+		}
+		log.SetLevel(lvl)
+	}
 }
 
 func gracefulShutdown(

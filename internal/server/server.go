@@ -61,10 +61,24 @@ func (s *Server) Start() error {
 	api.GET("/image/:id", s.getImage)
 	api.GET("/video/:id", s.streamVideo)
 	api.GET("/stats", s.getStats)
+	api.GET("/internal/stop", s.stopDB)
+	api.GET("/internal/resume", s.resumeDB)
 
 	logURLs(s.config.PORT)
 	s.e = e
 	return e.Start(fmt.Sprintf(":%d", s.config.PORT))
+}
+
+func (s *Server) stopDB(c echo.Context) error {
+	log.Info("Stopping database")
+	s.repo.Close()
+	return c.NoContent(http.StatusNoContent)
+}
+
+func (s *Server) resumeDB(c echo.Context) error {
+	log.Info("Resuming database")
+	s.repo.Open()
+	return c.NoContent(http.StatusNoContent)
 }
 
 func (s *Server) Shutdown(ctx context.Context) error {

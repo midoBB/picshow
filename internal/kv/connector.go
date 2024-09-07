@@ -14,6 +14,7 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+
 func GetDB(config *config.Config) (*badger.DB, error) {
 	err := os.MkdirAll(config.DBPath, 0755)
 	if err != nil {
@@ -23,19 +24,7 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 	log.WithFields(log.Fields{
 		"dbPath": config.DBPath,
 	}).Debug("Opening Badger database")
-	opts := badger.DefaultOptions(config.DBPath).
-		WithNumMemtables(1).
-		WithSyncWrites(true).
-		WithLogger(log.StandardLogger()).
-		WithLoggingLevel(badger.WARNING).
-		WithNumLevelZeroTables(1).
-		WithNumLevelZeroTablesStall(2).
-		WithValueLogLoadingMode(options.FileIO).
-		WithTableLoadingMode(options.FileIO).
-		WithNumCompactors(2).
-		WithKeepL0InMemory(false).
-		WithCompression(options.None).
-		WithValueLogFileSize(16 << 20) // 16 MB value log file
+	opts := getDBOpts(config) // 16 MB value log file
 	db, err := badger.Open(opts)
 	if err != nil {
 		log.WithError(err).Error("Failed to open Badger database")
@@ -51,6 +40,23 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 	}
 	log.Info("Successfully opened Badger database")
 	return db, nil
+}
+
+func getDBOpts(config *config.Config) badger.Options {
+	opts := badger.DefaultOptions(config.DBPath).
+		WithNumMemtables(1).
+		WithSyncWrites(true).
+		WithLogger(log.StandardLogger()).
+		WithLoggingLevel(badger.WARNING).
+		WithNumLevelZeroTables(1).
+		WithNumLevelZeroTablesStall(2).
+		WithValueLogLoadingMode(options.FileIO).
+		WithTableLoadingMode(options.FileIO).
+		WithNumCompactors(2).
+		WithKeepL0InMemory(false).
+		WithCompression(options.None).
+		WithValueLogFileSize(16 << 20)
+	return opts
 }
 
 func isNewDatabase(dbPath string) bool {
@@ -156,19 +162,7 @@ func RestoreDB(restoreFilePath string, config *config.Config) error {
 	defer f.Close()
 
 	// Create a new DB instance with the same options as in GetDB
-	opts := badger.DefaultOptions(config.DBPath).
-		WithNumMemtables(1).
-		WithSyncWrites(true).
-		WithNumLevelZeroTables(1).
-		WithNumLevelZeroTablesStall(2).
-		WithValueLogLoadingMode(options.FileIO).
-		WithTableLoadingMode(options.FileIO).
-		WithNumCompactors(2).
-		WithKeepL0InMemory(false).
-		WithCompression(options.None).
-		WithValueLogFileSize(16 << 20) // 16 MB value log file
-
-	// Open a new DB instance
+	opts := getDBOpts(config)
 	db, err := badger.Open(opts)
 	if err != nil {
 		return fmt.Errorf("failed to open new DB for restore: %w", err)

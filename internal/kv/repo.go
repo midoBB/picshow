@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"picshow/internal/cache"
+	"picshow/internal/config"
 	"picshow/internal/utils"
 	"slices"
 	"sort"
@@ -12,14 +13,15 @@ import (
 	"sync"
 
 	"github.com/dgraph-io/badger/v2"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/exp/rand"
 	"google.golang.org/protobuf/proto"
-	log "github.com/sirupsen/logrus"
 )
 
 type Repository struct {
 	db    *badger.DB
 	cache *cache.Cache
+	config *config.Config
 }
 
 type OP string
@@ -41,17 +43,29 @@ const (
 )
 
 
-func NewRepository(db *badger.DB, cache *cache.Cache) *Repository {
+func NewRepository(db *badger.DB, cache *cache.Cache, config *config.Config) *Repository {
 	log.Info("Creating new KV repository")
 	return &Repository{
 		db:    db,
 		cache: cache,
+		config: config,
 	}
 }
 
 func (r *Repository) Close() error {
 	log.Info("Closing KV repository")
 	return r.db.Close()
+}
+
+func (r *Repository) Open() error {
+	log.Info("Opening KV repository")
+	db , err := GetDB(r.config)
+	if err != nil {
+		log.Errorf("Failed to open database: %v", err)
+		return err
+	}
+	r.db = db
+	return nil
 }
 
 func (r *Repository) AddFile(file *File) error {
