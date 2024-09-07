@@ -37,7 +37,17 @@ func NewServer(
 func (s *Server) Start() error {
 	e := echo.New()
 	e.HideBanner = true
-
+	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
+		LogURI:    true,
+		LogStatus: true,
+		LogValuesFunc: func(c echo.Context, values middleware.RequestLoggerValues) error {
+			log.WithFields(log.Fields{
+				"URI":    values.URI,
+				"status": values.Status,
+			}).Info("request")
+			return nil
+		},
+	}))
 	e.Use(middleware.Gzip())
 	e.Use(middleware.CORS())
 

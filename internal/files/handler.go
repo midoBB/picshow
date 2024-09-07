@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"math/rand"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"picshow/internal/utils"
 	"strconv"
 	"strings"
+	"time"
 
 	"io"
 
@@ -188,9 +190,10 @@ func (h *handler) handleNewImage(p *Processor, filePath string) (*kv.Image, erro
 		thumbWidth = uint(float64(width) * float64(h.config.MaxThumbnailSize) / float64(height))
 	}
 
+	// generate 5 random letters as fileName prefix
+	fileName := rand.New(rand.NewSource(time.Now().UnixNano())).Intn(100000)
 	// Generate temporary file path for thumbnail
-	// Generate temporary file path for thumbnail
-	tempFile := filepath.Join(os.TempDir(), strconv.FormatUint(uint64(thumbWidth), 10)+"x"+strconv.FormatUint(uint64(thumbHeight), 10)+".jpg")
+	tempFile := filepath.Join(os.TempDir(), strconv.FormatInt(int64(fileName), 10)+strconv.FormatUint(uint64(thumbWidth), 10)+"x"+strconv.FormatUint(uint64(thumbHeight), 10)+".jpg")
 	log.Debugf("Generating thumbnail for %s at %s", filePath, tempFile)
 	// Construct and execute ImageMagick convert command
 	cmd := exec.Command(

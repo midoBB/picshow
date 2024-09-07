@@ -1,7 +1,6 @@
 package kv
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -23,10 +22,12 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 	shouldInitialize := isNewDatabase(config.DBPath)
 	log.WithFields(log.Fields{
 		"dbPath": config.DBPath,
-	}).Info("Opening Badger database")
+	}).Debug("Opening Badger database")
 	opts := badger.DefaultOptions(config.DBPath).
 		WithNumMemtables(1).
 		WithSyncWrites(true).
+		WithLogger(log.StandardLogger()).
+		WithLoggingLevel(badger.WARNING).
 		WithNumLevelZeroTables(1).
 		WithNumLevelZeroTablesStall(2).
 		WithValueLogLoadingMode(options.FileIO).
@@ -49,19 +50,7 @@ func GetDB(config *config.Config) (*badger.DB, error) {
 		}
 	}
 	log.Info("Successfully opened Badger database")
-	go runValueLogGC(db)
 	return db, nil
-}
-
-func runValueLogGC(db *badger.DB) {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-	for range ticker.C {
-		err := db.RunValueLogGC(0.7)
-		if err != nil && !errors.Is(err, badger.ErrNoRewrite) {
-			log.WithError(err).Error("Error running ValueLogGC")
-		}
-	}
 }
 
 func isNewDatabase(dbPath string) bool {
@@ -69,9 +58,6 @@ func isNewDatabase(dbPath string) bool {
 	_, err := os.Stat(filepath.Join(dbPath, "MANIFEST"))
 	return os.IsNotExist(err)
 }
-
-
-
 
 func initializeDB(db *badger.DB) error {
 	log.Debug("Initializing database")
@@ -113,5 +99,78 @@ func initializeDB(db *badger.DB) error {
 		log.WithError(err).Error("Failed to set initial FileList in database")
 		return fmt.Errorf("failed to set initial FileList in database: %w", err)
 	}
+	return nil
+}
+
+func BackupDB(db *badger.DB, config *config.Config) error {
+	backupPath := config.BackupFolderPath
+	if err := os.MkdirAll(backupPath, 0755); err != nil {
+		log.WithError(err).Error("Failed to create backup folder")
+		return fmt.Errorf("failed to create backup folder: %w", err)
+	}
+	timestamp := time.Now().Format("2006-01-02")
+	backupFile := filepath.Join(backupPath, fmt.Sprintf("backup_%s.bak", timestamp))
+
+	// Open the backup file
+	f, err := os.Create(backupFile)
+	if err != nil {
+		return fmt.Errorf("failed to create backup file: %w", err)
+	}
+	defer f.Close()
+	_, err = db.Backup(f, 0)
+	if err != nil {
+		log.WithError(err).Error("Failed to backup database")
+		return fmt.Errorf("failed to backup database: %w", err)
+	}
+
+	log.WithFields(log.Fields{
+		"backupFile": backupFile,
+	}).Info("Database backup completed successfully")
+	return nil
+}
+
+func RestoreDB(restoreFilePath string, config *config.Config) error {
+	// Ensure the restore file exists
+	if _, err := os.Stat(restoreFilePath); os.IsNotExist(err) {
+		return fmt.Errorf("restore file does not exist: %w", err)
+	}
+
+	// Open the restore file
+	f, err := os.Open(restoreFilePath)
+	if err != nil {
+		return fmt.Errorf("failed to open restore file: %w", err)
+	}
+	defer f.Close()
+
+	// Create a new DB instance with the same options as in GetDB
+	opts := badger.DefaultOptions(config.DBPath).
+		WithNumMemtables(1).
+		WithSyncWrites(true).
+		WithNumLevelZeroTables(1).
+		WithNumLevelZeroTablesStall(2).
+		WithValueLogLoadingMode(options.FileIO).
+		WithTableLoadingMode(options.FileIO).
+		WithNumCompactors(2).
+		WithKeepL0InMemory(false).
+		WithCompression(options.None).
+		WithValueLogFileSize(16 << 20) // 16 MB value log file
+
+	// Open a new DB instance
+	db, err := badger.Open(opts)
+	if err != nil {
+		return fmt.Errorf("failed to open new DB for restore: %w", err)
+	}
+	defer db.Close()
+
+	// Perform the restore
+	err = db.Load(f, 16)
+	if err != nil {
+		return fmt.Errorf("failed to restore database: %w", err)
+	}
+
+	log.WithFields(log.Fields{
+		"restoreFile": restoreFilePath,
+	}).Info("Database restore completed successfully")
+
 	return nil
 }
