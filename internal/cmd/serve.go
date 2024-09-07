@@ -3,12 +3,12 @@ package cmd
 import (
 	"context"
 	"errors"
-	log "github.com/sirupsen/logrus"
 	"os"
 	"os/signal"
 	"picshow/internal/cache"
 	"picshow/internal/config"
 	"picshow/internal/files"
+	"picshow/internal/kv"
 	kvdb "picshow/internal/kv"
 	"picshow/internal/server"
 	"picshow/internal/utils"
@@ -16,7 +16,23 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/dgraph-io/badger/v2"
+	log "github.com/sirupsen/logrus"
+	"github.com/spf13/cobra"
 )
+
+func init() {
+	rootCmd.AddCommand(serveCmd)
+}
+
+var serveCmd = &cobra.Command{
+	Use:   "serve",
+	Short: "Serve the application",
+	Run: func(cmd *cobra.Command, args []string) {
+		serve()
+	},
+}
 
 func serve() {
 	// Defer panic recovery
@@ -98,7 +114,7 @@ func serve() {
 				shutdownChan <- struct{}{}
 			}
 		}()
-		runProcessor(ctx, runtimeConfig, repo, runtimeConfig.RefreshInterval)
+		runProcessor(ctx, runtimeConfig, repo, runtimeConfig.RefreshInterval, kv)
 	}()
 
 	// Start the web server
@@ -172,7 +188,7 @@ func gracefulShutdown(
 	}
 }
 
-func runProcessor(ctx context.Context, runtimeConfig *config.Config, repo *kvdb.Repository, refreshInterval int) {
+func runProcessor(ctx context.Context, runtimeConfig *config.Config, repo *kvdb.Repository, refreshInterval int, db *badger.DB) {
 	runProcessorOnce := func() {
 		log.Info("Starting file processing...")
 
@@ -186,6 +202,8 @@ func runProcessor(ctx context.Context, runtimeConfig *config.Config, repo *kvdb.
 			}
 		} else {
 			log.Info("File processing completed successfully.")
+			kv.BackupDB(db, runtimeConfig, true)
+			log.Info("Database backup completed successfully.")
 		}
 	}
 

@@ -102,13 +102,13 @@ func initializeDB(db *badger.DB) error {
 	return nil
 }
 
-func BackupDB(db *badger.DB, config *config.Config) error {
+func BackupDB(db *badger.DB, config *config.Config, deleteOld bool) error {
 	backupPath := config.BackupFolderPath
 	if err := os.MkdirAll(backupPath, 0755); err != nil {
 		log.WithError(err).Error("Failed to create backup folder")
 		return fmt.Errorf("failed to create backup folder: %w", err)
 	}
-	timestamp := time.Now().Format("2006-01-02")
+	timestamp := time.Now().Format(time.DateOnly)
 	backupFile := filepath.Join(backupPath, fmt.Sprintf("backup_%s.bak", timestamp))
 
 	// Open the backup file
@@ -122,10 +122,23 @@ func BackupDB(db *badger.DB, config *config.Config) error {
 		log.WithError(err).Error("Failed to backup database")
 		return fmt.Errorf("failed to backup database: %w", err)
 	}
-
 	log.WithFields(log.Fields{
 		"backupFile": backupFile,
 	}).Info("Database backup completed successfully")
+	if deleteOld {
+		// delete the old backup files
+		backupFiles, err := filepath.Glob(filepath.Join(backupPath, "backup_*.bak"))
+		if err != nil {
+			log.WithError(err).Warn("Failed to find old backup files")
+		}
+		for _, file := range backupFiles {
+			if file != backupFile {
+				if err := os.Remove(file); err != nil {
+					log.WithError(err).Warn("Failed to delete old backup file")
+				}
+			}
+		}
+	}
 	return nil
 }
 

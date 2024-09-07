@@ -8,8 +8,11 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var backupDestination string
+
 func init() {
 	rootCmd.AddCommand(backupCmd)
+	backupCmd.Flags().StringVarP(&backupDestination, "destination", "d", "", "Specify the backup destination path")
 }
 
 var backupCmd = &cobra.Command{
@@ -27,8 +30,10 @@ var backupCmd = &cobra.Command{
 			log.WithError(err).Fatal("Failed to open database")
 		}
 		defer db.Close()
-
-		err = kv.BackupDB(db, cfg)
+		if backupDestination != "" {
+			cfg.BackupFolderPath = backupDestination
+		}
+		err = kv.BackupDB(db, cfg, false)
 		if err != nil {
 			log.WithError(err).Fatal("Failed to backup database")
 		}
