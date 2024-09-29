@@ -1,7 +1,7 @@
 # Makefile
 
 # Phony targets
-.PHONY: all build-x64 build-arm dev clean build-frontends deploy
+.PHONY: all build-x64 build-arm dev clean build-frontends deploy run-frontend run-firstrun run-backend
 
 # Variables
 GO = go
@@ -49,6 +49,15 @@ build-x64: $(FRONTEND_TIMESTAMP) $(FIRSTRUN_TIMESTAMP) $(GO_FILES)
 
 dev:
 	air
+
+run-frontend:
+	cd $(FRONTEND_DIR) && pnpm dev
+
+run-firstrun:
+	cd $(FIRSTRUN_DIR) && pnpm dev
+
+run-backend:
+	$(GO) run .
 
 clean:
 	rm -f $(EXECUTABLE)_x64 $(EXECUTABLE)_arm
