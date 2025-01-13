@@ -1,0 +1,19 @@
+- [X] Implement a file server for the FE
+- [X] Start working on the API servers
+- [X] Add file size and mime types to the db table on the main media files.
+- [X] Finish porting all the APIs
+- [X] Implement first run website if the configuration doesn't exist.
+- [X] Implement caching
+- [X] Use reqwest to sync backup and restore with the serve function if it is running
+- [X] Implement the backup/restore functionality
+- [X] Fix caching errors (some APIs aren't being updated when an operation happens e.g. Delete/Update)
+- [ ] Add links to required stuff to the readme RUN curl -L https://musl.cc/arm-linux-musleabihf-cross.tgz | tar -xz -C /opt
+
+Future:
+- [ ] Add a graceful shutdown for the file processor
+- [ ] Add PHash to allow to detect similar files (look into stashapp)
+- [ ] Queue write commands that were sent during backup/restore
+- [ ] Add multiple root folders on db and allow them to be selected on first run
+- [ ] Add capability to run the configuration app after the first time
+- [ ] Add a way to explore folders in the first run app
+- [ ] Add a way to batch all write operations

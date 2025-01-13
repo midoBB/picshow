@@ -1,0 +1,8 @@
+[env]
+LIBSQLITE3_FLAGS = "-DSQLITE_ENABLE_MATH_FUNCTIONS"
+CC_armv7_unknown_linux_musleabihf = "arm-linux-musleabihf-gcc"
+
+
+[target.armv7-unknown-linux-musleabihf]
+linker = "arm-linux-musleabihf-gcc"
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=-static"]

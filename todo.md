@@ -1,8 +1,0 @@
-- Check out a way to stop slideshow when showing videos
-- Add phash for images
-- Add listing of dependencies to the README
-  - imagemagick
-  - ffmpeg
-  - xxhash
-  - file
-  - fd-find

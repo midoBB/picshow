@@ -1,0 +1,35 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Serve",
+            "preLaunchTask": "rust: cargo build",
+            "console": "integratedTerminal",
+            "program": "${workspaceFolder}/target/debug/picshow",
+            "args": ["serve", "-l", "debug"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Backup",
+            "preLaunchTask": "rust: cargo build",
+            "console": "integratedTerminal",
+            "program": "${workspaceFolder}/target/debug/picshow",
+            "args": ["backup", "-l", "debug"],
+            "cwd": "${workspaceFolder}"
+        },
+        {
+            "type": "lldb",
+            "request": "launch",
+            "name": "Debug Restore",
+            "preLaunchTask": "rust: cargo build",
+            "console": "integratedTerminal",
+            "program": "${workspaceFolder}/target/debug/picshow",
+            "args": ["restore", "-l", "debug" , "picshow.bak"],
+            "cwd": "${workspaceFolder}"
+        }
+    ]
+}

@@ -10,42 +10,103 @@ jobs:
   build-and-upload:
     name: Build and upload
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - os: linux
-            arch: amd64
-          - os: linux
-            arch: arm
-
     steps:
       - name: Checkout
         uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v3
+        with:
+          version: 9
+      - name: Get pnpm store directory
+        id: pnpm-cache
+        shell: bash
+        run: |
+          echo "STORE_PATH=$(pnpm store path | tr -d '\n')" >> $GITHUB_OUTPUT
 
-      - name: Install asdf & tools
-        uses: asdf-vm/actions/install@v3
+      - name: Setup pnpm cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.pnpm-cache.outputs.STORE_PATH }}
+          key: ${{ runner.os }}-pnpm-store-${{ hashFiles('**/pnpm-lock.yaml') }}
+          restore-keys: |
+            ${{ runner.os }}-pnpm-store-
 
       - name: Build frontend
         run: |
-          cd internal/frontend
+          cd app_frontend
           pnpm install
           pnpm build
           cd -
 
       - name: Build firstrun
         run: |
-          cd internal/firstrun
+          cd first_run_frontend
           pnpm install
           pnpm build
           cd -
 
-      - name: Build binary
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+      - name: Add ARMv7 target
+        run: rustup target add armv7-unknown-linux-musleabihf
+      - name: Add x86-64 MUSL target
+        run: rustup target add x86_64-unknown-linux-musl
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/bin/
+            ~/.cargo/registry/index/
+            ~/.cargo/registry/cache/
+            ~/.cargo/git/db/
+            backend/target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+      - name: Add multiverse repository
         run: |
-          GOOS=${{ matrix.os }} GOARCH=${{ matrix.arch }} CGO_ENABLED=0 go build -a -ldflags '-extldflags "-static" -s -w' -o picshow-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }} .
-
-      - name: Upload
+          sudo add-apt-repository universe
+          sudo add-apt-repository multiverse
+          sudo apt-get update
+      - name: Install dependencies for ARMv7
+        run: |
+          sudo apt-get update && sudo apt-get install -y curl \
+            gcc \
+            make \
+            build-essential \
+            musl-tools \
+            pkg-config \
+            git \
+            llvm \
+            clang \
+            libclang-dev \
+            crossbuild-essential-armhf
+      - name: Download ARMv7 toolchain
+        run: curl -L https://musl.cc/arm-linux-musleabihf-cross.tgz | sudo tar -xz -C /opt
+      - name: Build Rust app for ARMv7
+        run: |
+          PATH="/opt/arm-linux-musleabihf-cross/bin:${PATH}" cargo build --target armv7-unknown-linux-musleabihf --release
+          mv target/armv7-unknown-linux-musleabihf/release/picshow picshow_arm
+          echo 'Built ARMv7 target'
+      - name: Build Rust app for x86-64
+        run: |
+          cargo build --target x86_64-unknown-linux-musl --release
+          mv target/x86_64-unknown-linux-musl/release/picshow picshow_x86
+      - name: Upload ARMv7 binary
         uses: svenstaro/upload-release-action@v2
         with:
           repo_token: ${{ secrets.GITHUB_TOKEN }}
-          file: picshow-${{ github.ref_name }}-${{ matrix.os }}-${{ matrix.arch }}
+          file: picshow_arm
+          asset_name: picshow-${{ github.ref_name }}-linux-armv7
+          tag: ${{ github.ref }}
+      - name: Upload x86-64 binary
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: picshow_x86
+          asset_name: picshow-${{ github.ref_name }}-linux-x86_64
           tag: ${{ github.ref }}
