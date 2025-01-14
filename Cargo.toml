@@ -62,3 +62,8 @@ axum = { version = "0.7", features = ["http2"] }
 moka = { version = "0.12", features = ["future"] }
 local-ip-address = "0.6"
 reqwest = { version = "0.12", default-features = false }
+
+#Phash dependencies
+image = "0.25"
+fast_image_resize = "5.1"
+rustdct = "0.7"

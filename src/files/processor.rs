@@ -183,11 +183,30 @@ impl Processor {
             mime_type: None,
             is_favorite: false,
         };
-        let file = match mime {
-            MediaType::Image => self.handler.clone().handle_new_image(file, file_path).await,
-            MediaType::Video => self.handler.clone().handle_new_video(file, file_path).await,
-        }?;
+        let (file, phash) = match mime {
+            MediaType::Image => {
+                let (file, phash) = self
+                    .handler
+                    .clone()
+                    .handle_new_image(file, file_path)
+                    .await?;
+                (file, Some(phash))
+            }
+            MediaType::Video => {
+                let file = self
+                    .handler
+                    .clone()
+                    .handle_new_video(file, file_path)
+                    .await?;
+                (file, None)
+            }
+        };
         self.repository.insert_file(file.clone()).await?;
+        if phash.is_some() {
+            self.repository
+                .insert_phash(file.id, phash.unwrap())
+                .await?;
+        }
         processed_hashes.insert(key);
         Ok(file)
     }

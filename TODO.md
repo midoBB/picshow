@@ -7,11 +7,11 @@
 - [X] Use reqwest to sync backup and restore with the serve function if it is running
 - [X] Implement the backup/restore functionality
 - [X] Fix caching errors (some APIs aren't being updated when an operation happens e.g. Delete/Update)
-- [ ] Add links to required stuff to the readme RUN curl -L https://musl.cc/arm-linux-musleabihf-cross.tgz | tar -xz -C /opt
+- [X] Add links to required stuff to the readme RUN curl -L https://musl.cc/arm-linux-musleabihf-cross.tgz | tar -xz -C /opt
+- [ ] Add PHash to allow to detect similar files (look into stashapp)
 
 Future:
 - [ ] Add a graceful shutdown for the file processor
-- [ ] Add PHash to allow to detect similar files (look into stashapp)
 - [ ] Queue write commands that were sent during backup/restore
 - [ ] Add multiple root folders on db and allow them to be selected on first run
 - [ ] Add capability to run the configuration app after the first time

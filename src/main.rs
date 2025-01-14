@@ -1,3 +1,6 @@
+use std::path::Path;
+use std::sync::Arc;
+
 use anyhow::Result;
 use clap::{CommandFactory, Parser};
 use picshow::cmd::backup::handle_backup;
@@ -5,8 +8,11 @@ use picshow::cmd::restore::handle_restore;
 use picshow::cmd::serve::handle_serve;
 use picshow::cmd::{Cli, Commands};
 use picshow::config::AppConfig;
+use picshow::data::repository::MediaRepository;
+use picshow::data::UnfilledMediaFile;
 use picshow::logging;
 use picshow::server::first_run;
+use tokio::fs;
 use tracing::{error, warn};
 
 #[tokio::main]
@@ -49,6 +55,30 @@ async fn main() -> Result<()> {
             }
 
             Commands::Serve { port } => handle_serve(&config, port).await?,
+            Commands::Duplicates {distance} => {
+                let db_path = format!("{}picshow.db", &config.db_path);
+                tracing::info!("DB path: {}", db_path);
+                let repository = Arc::new(
+                    MediaRepository::new(db_path.as_str(), picshow::cache::AppCache::new(0))
+                        .await?,
+                );
+                let hashes = repository.get_all_phashes().await?;
+                let duplicates = MediaRepository::find_duplicates_kdtree_refined(hashes, distance).await;
+                for (i, bucket) in duplicates.iter().enumerate() {
+                    let folder_path = format!("{}{}/", &config.folder_path, i);
+                    let path = Path::new(&folder_path);
+                    if !path.exists() {
+                        fs::create_dir_all(path).await?;
+                    }
+                    for file_id in bucket {
+                        let file = UnfilledMediaFile::from(repository.get_file_by_id(*file_id, false).await?);
+
+                        let file_path = format!("{}{}", &config.folder_path, file.filename);
+                        let new_file_path = format!("{}{}", &folder_path, file.filename);
+                        fs::copy(file_path, new_file_path).await?;
+                    }
+                }
+            }
         }
     } else {
         Cli::command().print_long_help().unwrap();

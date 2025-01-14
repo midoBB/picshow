@@ -1,6 +1,7 @@
 use anyhow::Result;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::borrow::Borrow;
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::str::FromStr as _;
 use std::time::Duration;
 use std::{path::Path, sync::Arc};
@@ -374,6 +375,202 @@ impl MediaRepository {
         self.cache.invalidate_files_cache();
         Ok(())
     }
+    pub async fn insert_phash(&self, file_id: Uuid, phash: u64) -> Result<()> {
+        let bytes: [u8; 8] = phash.to_le_bytes();
+        let phash: &[u8] = &bytes;
+        let mut tx = self.get_write_conn().await.begin().await?;
+        sqlx::query("INSERT INTO phashes (hash_id, media_id, phash) VALUES (?,?, ?)")
+            .bind(Uuid::new_v4())
+            .bind(file_id)
+            .bind(phash)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+    pub async fn get_all_phashes(&self) -> Result<Vec<Phash>> {
+        let query = r#"
+        SELECT media_files.id as id,
+        phashes.phash as  phash
+        FROM media_files
+        INNER JOIN phashes ON (media_files.id = phashes.media_id)
+        ORDER BY media_files.size DESC;
+        "#;
+        #[derive(FromRow)]
+        struct PhashRepr {
+            id: Uuid,
+            phash: Vec<u8>,
+        }
+        let rows = sqlx::query_as::<_, PhashRepr>(query)
+            .fetch_all(self.get_read_conn())
+            .await?;
+        Ok(rows
+            .into_iter()
+            .map(|r| Phash {
+                id: r.id,
+                hash: u64::from_le_bytes(r.phash.as_slice().try_into().unwrap()),
+                neighbour_ids: vec![],
+                bucket: -1,
+            })
+            .collect())
+    }
+    pub async fn find_duplicates(hashes: Vec<Phash>, dupe_distance: u32) -> Vec<Vec<Uuid>> {
+        // Step 1: Build a graph representation
+        let mut adjacency_list: HashMap<Uuid, Vec<Uuid>> = HashMap::new();
+
+        for (i, phash1) in hashes.iter().enumerate() {
+            for phash2 in &hashes[i + 1..] {
+                if distance(phash1.hash, phash2.hash) <= dupe_distance {
+                    adjacency_list.entry(phash1.id).or_default().push(phash2.id);
+                    adjacency_list.entry(phash2.id).or_default().push(phash1.id);
+                }
+            }
+        }
+
+        // Step 2: Find connected components
+        let mut visited = HashSet::new();
+        let mut clusters = Vec::new();
+
+        for phash in &hashes {
+            if visited.contains(&phash.id) {
+                continue;
+            }
+
+            let mut queue = VecDeque::new();
+            let mut cluster = Vec::new();
+
+            queue.push_back(phash.id);
+            visited.insert(phash.id);
+
+            while let Some(current) = queue.pop_front() {
+                cluster.push(current);
+
+                if let Some(neighbours) = adjacency_list.get(&current) {
+                    for &neighbour in neighbours {
+                        if !visited.contains(&neighbour) {
+                            visited.insert(neighbour);
+                            queue.push_back(neighbour);
+                        }
+                    }
+                }
+            }
+
+            if cluster.len() > 1 {
+                clusters.push(cluster);
+            }
+        }
+
+        clusters
+    }
+    pub async fn find_duplicates_refined(hashes: Vec<Phash>, dupe_distance: u32) -> Vec<Vec<Uuid>> {
+        // Helper function to calculate centroid hash
+        fn calculate_centroid(bucket: &[usize], hashes: &[Phash]) -> u64 {
+            if bucket.is_empty() {
+                return 0;
+            }
+
+            // Convert each hash to a vector of bits
+            let bits: Vec<Vec<bool>> = bucket
+                .iter()
+                .map(|&idx| {
+                    let mut bits = Vec::with_capacity(64);
+                    let hash = hashes[idx].hash;
+                    for i in 0..64 {
+                        bits.push(((hash >> i) & 1) == 1);
+                    }
+                    bits
+                })
+                .collect();
+
+            // Calculate the majority value for each bit position
+            let mut centroid = 0u64;
+            for bit_pos in 0..64 {
+                let ones = bits.iter().filter(|hash_bits| hash_bits[bit_pos]).count();
+                if ones > bucket.len() / 2 {
+                    centroid |= 1 << bit_pos;
+                }
+            }
+
+            centroid
+        }
+        // First, create initial clusters using DBSCAN-style approach
+        let mut initial_buckets: Vec<Vec<usize>> = Vec::new();
+        let mut processed = vec![false; hashes.len()];
+
+        // Step 1: Create initial clusters
+        for i in 0..hashes.len() {
+            if processed[i] {
+                continue;
+            }
+
+            let mut current_bucket = Vec::new();
+            let mut to_check = vec![i];
+            processed[i] = true;
+
+            while let Some(current_idx) = to_check.pop() {
+                current_bucket.push(current_idx);
+
+                for j in 0..hashes.len() {
+                    if !processed[j]
+                        && distance(hashes[current_idx].hash, hashes[j].hash) <= dupe_distance
+                    {
+                        processed[j] = true;
+                        to_check.push(j);
+                    }
+                }
+            }
+
+            if current_bucket.len() > 1 {
+                initial_buckets.push(current_bucket);
+            }
+        }
+
+        // Step 2: Refine each cluster
+        let mut final_buckets: Vec<Vec<Uuid>> = Vec::new();
+
+        for bucket in initial_buckets {
+            // Calculate centroid (average hash)
+            let centroid_hash = calculate_centroid(&bucket, &hashes);
+
+            // Create vec of (index, distance_to_centroid) pairs
+            let mut distances: Vec<(usize, u32)> = bucket
+                .iter()
+                .map(|&idx| (idx, distance(hashes[idx].hash, centroid_hash)))
+                .collect();
+
+            // Sort by distance to centroid
+            distances.sort_by_key(|&(_, dist)| dist);
+
+            // Find significant gaps in distances
+            let mut sub_clusters: Vec<Vec<usize>> = Vec::new();
+            let mut current_cluster = vec![distances[0].0];
+            let mut prev_distance = distances[0].1;
+
+            for &(idx, dist) in distances.iter().skip(1) {
+                // If there's a significant gap (e.g., more than half the original threshold)
+                if dist - prev_distance > dupe_distance / 2 {
+                    if current_cluster.len() > 1 {
+                        sub_clusters.push(current_cluster);
+                    }
+                    current_cluster = Vec::new();
+                }
+                current_cluster.push(idx);
+                prev_distance = dist;
+            }
+
+            if current_cluster.len() > 1 {
+                sub_clusters.push(current_cluster);
+            }
+
+            // Convert refined clusters to UUID buckets
+            for cluster in sub_clusters {
+                let uuid_cluster: Vec<Uuid> = cluster.iter().map(|&idx| hashes[idx].id).collect();
+                final_buckets.push(uuid_cluster);
+            }
+        }
+
+        final_buckets
+    }
 
     pub async fn insert_file(&self, media_file: FilledMediaFile) -> Result<()> {
         let clone = media_file.clone();
@@ -708,4 +905,15 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
         )?;
     }
     Ok(())
+}
+
+#[derive(FromRow, Clone)]
+pub struct Phash {
+    pub id: Uuid,
+    pub hash: u64,
+    pub neighbour_ids: Vec<Uuid>,
+    pub bucket: i32,
+}
+fn distance(lhash: u64, rhash: u64) -> u32 {
+    (lhash ^ rhash).count_ones()
 }

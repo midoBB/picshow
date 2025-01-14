@@ -55,7 +55,7 @@ impl Handler {
         &self,
         file: UnfilledMediaFile,
         path: &str,
-    ) -> Result<FilledMediaFile> {
+    ) -> Result<(FilledMediaFile, u64)> {
         debug!("Processing new image {}", file.filename);
         let full_mime = get_mime(path).await?;
         let mut filename = file.filename.clone();
@@ -139,7 +139,9 @@ impl Handler {
             full_mime,
         );
         drop(convert_perm);
-        Ok(with_image)
+        let phash = self.calculate_phash(path.to_string()).await?;
+
+        Ok((with_image, phash))
     }
     pub async fn handle_new_video(
         &self,
@@ -266,6 +268,114 @@ impl Handler {
         );
         drop(ffmpeg_perm);
         Ok(with_video)
+    }
+
+    pub async fn calculate_phash(&self, path: String) -> Result<u64> {
+        use fast_image_resize as fr;
+        use image::{DynamicImage, ImageBuffer};
+        use rustdct::DctPlanner;
+
+        fn load_image(path: String) -> Result<DynamicImage> {
+            image::open(Path::new(&path)).map_err(|e| anyhow!(e.to_string()))
+        }
+        fn resize_image(
+            img: &DynamicImage,
+            size: u32,
+        ) -> Result<ImageBuffer<image::Rgb<u8>, Vec<u8>>> {
+            println!("Resizing image");
+            let width = size;
+            let height = size;
+
+            // Create resizer
+            let src_image = fast_image_resize::images::Image::from_vec_u8(
+                img.width(),
+                img.height(),
+                img.to_rgb8().into_raw(),
+                fr::PixelType::U8x3,
+            )
+            .map_err(|e| anyhow!(e.to_string()))?;
+
+            // Create destination buffer
+            let mut dst_image =
+                fast_image_resize::images::Image::new(width, height, fr::PixelType::U8x3);
+
+            // Create resize algorithm
+            let mut resizer = fast_image_resize::Resizer::new();
+
+            let mut options = fast_image_resize::ResizeOptions::new();
+            options.algorithm =
+                fast_image_resize::ResizeAlg::Convolution(fast_image_resize::FilterType::Bilinear);
+            let options = Some(options);
+            // Perform resize
+            resizer
+                .resize(&src_image, &mut dst_image, &options)
+                .map_err(|e| anyhow!(e.to_string()))?;
+
+            // Convert back to image buffer
+            ImageBuffer::from_raw(width, height, dst_image.into_vec())
+                .ok_or_else(|| anyhow!("Failed to create image buffer".to_string()))
+        }
+
+        #[inline(always)]
+        fn to_grayscale_f64(img: &ImageBuffer<image::Rgb<u8>, Vec<u8>>) -> Vec<f64> {
+            println!("Converting to grayscale");
+            img.pixels()
+                .map(|p| {
+                    let [r, g, b] = p.0;
+                    // Using same coefficients as original: 0.299, 0.587, 0.114
+                    0.299 * f64::from(r) + 0.587 * f64::from(g) + 0.114 * f64::from(b)
+                })
+                .collect()
+        }
+        fn apply_dct(pixels: &[f64]) -> Vec<f64> {
+            println!("Applying DCT");
+            let mut planner = DctPlanner::new();
+            let dct = planner.plan_dct2(4096);
+            let mut output = pixels.to_vec();
+            dct.process_dct2(&mut output);
+            output
+        }
+
+        fn compute_median(values: &[f64]) -> f64 {
+            println!("Computing median");
+            let mut sorted = values.to_vec();
+            sorted.sort_by(|a, b| a.partial_cmp(b).unwrap());
+
+            let mid = values.len() / 2;
+            if values.len() % 2 == 0 {
+                (sorted[mid - 1] + sorted[mid]) / 2.0
+            } else {
+                sorted[mid]
+            }
+        }
+        println!("Starting perception hash");
+        const SIZE: u32 = 64;
+        tokio::task::spawn_blocking(move || {
+            println!("Loading image");
+            let img = load_image(path).unwrap();
+            println!("Loaded image");
+            // Resize to 64x64
+            let resized = resize_image(&img, SIZE)?;
+
+            // Convert to grayscale and get pixels as f64
+            let pixels = to_grayscale_f64(&resized);
+
+            // Apply DCT
+            let dct_result = apply_dct(&pixels);
+
+            // Calculate median of DCT coefficients
+            let median = compute_median(&dct_result);
+
+            // Generate hash based on whether values are above median
+            let mut hash = 0u64;
+            for (i, &value) in dct_result.iter().take(64).enumerate() {
+                if value > median {
+                    hash |= 1u64 << i;
+                }
+            }
+            Ok::<u64, anyhow::Error>(hash)
+        })
+        .await?
     }
 
     fn calculate_thumb_size(&self, width: u32, height: u32) -> (u32, u32) {

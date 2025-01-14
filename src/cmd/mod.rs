@@ -58,6 +58,15 @@ pub enum Commands {
         )]
         port: Option<u16>,
     },
+    #[command(about="Finds duplicate images")]
+    Duplicates {
+        #[arg(
+            short,
+            long,
+            help = "The distance to use when finding duplicates. This is optional and will default to the one specified in the config file."
+        )]
+        distance: u32,
+    },
 }
 
 pub(crate) enum InternalOP {
