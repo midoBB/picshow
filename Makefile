@@ -87,6 +87,10 @@ clean:
 run:
 	@cargo run -- serve -l debug
 
+.PHONY: run-front
+run-front:
+	@cd $(FRONTEND_DIR) && pnpm start
+
 gen-docs: Cargo.toml Cargo.lock
 	@cargo doc --no-deps
 

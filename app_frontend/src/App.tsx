@@ -33,6 +33,12 @@ import ConfirmDialog from "@/ConfirmDeleteDialog";
 import KeepAwake from "@/KeepAwake";
 import { LazyLoadImage } from "react-lazy-load-image-component";
 import { debounce } from "lodash";
+import {
+  useQueryState,
+  parseAsBoolean,
+  parseAsInteger,
+  parseAsStringLiteral,
+} from "nuqs";
 
 const PAGE_SIZE = 15;
 
@@ -162,7 +168,11 @@ export default function App() {
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const containerRef = useRef<HTMLDivElement>(null);
   const slideShowRef = useRef<SlideshowRef>(null);
-  const [isSlideshowPlaying, setIsSlideshowPlaying] = useState(false);
+  const [isSlideshowPlaying, setIsSlideshowPlaying] = useQueryState(
+    "isSlideshowPlaying",
+    parseAsBoolean.withDefault(false),
+  );
+  const [seed, setSeed] = useQueryState("seed", parseAsInteger);
   useEffect(() => {
     const handleResize = debounce(() => {
       setIsCurrentlyMobile(isMobile());
@@ -200,11 +210,6 @@ export default function App() {
     return () => clearTimeout(timer);
   }, []);
   const {
-    sortDirection,
-    sortType,
-    selectedCategory,
-    seed,
-    setSeed,
     dontAskAgainForDelete,
     setDontAskAgainForDelete,
     setIsSelectionMode,
@@ -220,8 +225,14 @@ export default function App() {
     }
   }, [seed, setSeed]);
 
-  const [isOpen, setIsOpen] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const [isOpen, setIsOpen] = useQueryState(
+    "isOpen",
+    parseAsBoolean.withDefault(false),
+  );
+  const [currentIndex, setCurrentIndex] = useQueryState(
+    "currentIndex",
+    parseAsInteger.withDefault(0),
+  );
   const [isShowingControls, setIsShowingControls] = useState(true);
 
   const openLightbox = useCallback(
@@ -280,7 +291,26 @@ export default function App() {
     },
     [setIsSelectionMode, setSelectedFiles],
   );
-
+  const sortDirectionOptions = ["asc", "desc"] as const;
+  const [sortDirection, setSortDirection] = useQueryState(
+    "sortDirection",
+    parseAsStringLiteral(sortDirectionOptions).withDefault("desc"),
+  );
+  const sortTypeOptions = ["created_at", "random"] as const;
+  const [sortType, setSortType] = useQueryState(
+    "sortType",
+    parseAsStringLiteral(sortTypeOptions).withDefault("random"),
+  );
+  const selectedCategoryOptions = [
+    "all",
+    "video",
+    "image",
+    "favorite",
+  ] as const;
+  const [selectedCategory, setSelectedCategory] = useQueryState(
+    "selectedCategory",
+    parseAsStringLiteral(selectedCategoryOptions).withDefault("all"),
+  );
   const {
     data,
     fetchNextPage,
@@ -459,7 +489,7 @@ export default function App() {
   }, [allFiles, isSelectionMode, selectedFiles]);
   useEffect(() => {
     setIsSlideshowPlaying(!!slideShowRef.current?.playing);
-  }, [slideShowRef.current?.playing]);
+  }, [slideShowRef.current?.playing, setIsSlideshowPlaying]);
 
   return (
     <div
@@ -467,7 +497,16 @@ export default function App() {
     >
       <KeepAwake isActive={isSlideshowPlaying} />
       <div ref={navbarRef}>
-        <Navbar onDelete={handleDelete} />
+        <Navbar
+          onDelete={handleDelete}
+          setSeed={setSeed}
+          setSortType={setSortType}
+          setSortDirection={setSortDirection}
+          setSelectedCategory={setSelectedCategory}
+          sortDirection={sortDirection}
+          sortType={sortType}
+          selectedCategory={selectedCategory}
+        />
       </div>
       <Lightbox
         open={isOpen}

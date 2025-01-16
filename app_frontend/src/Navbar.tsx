@@ -16,18 +16,57 @@ import {
 } from "react-icons/fa";
 import { FaShuffle } from "react-icons/fa6";
 import useAppState from "@/state";
+import { Options } from "nuqs";
 
-const Navbar = ({ onDelete }: { onDelete: () => void }) => {
+const Navbar = ({
+  onDelete,
+  setSeed,
+  setSelectedCategory,
+  setSortDirection,
+  setSortType,
+  sortDirection,
+  sortType,
+  selectedCategory,
+}: {
+  onDelete: () => void;
+  setSeed: (
+    value: number | ((old: number | null) => number | null) | null,
+    options?: Options,
+  ) => Promise<URLSearchParams>;
+  setSelectedCategory: (
+    value:
+      | "video"
+      | "image"
+      | "all"
+      | "favorite"
+      | ((
+          old: "video" | "image" | "all" | "favorite",
+        ) => ("video" | "image" | "all" | "favorite") | null)
+      | null,
+    options?: Options,
+  ) => Promise<URLSearchParams>;
+  setSortDirection: (
+    value:
+      | "desc"
+      | "asc"
+      | ((old: "desc" | "asc") => ("desc" | "asc") | null)
+      | null,
+    options?: Options,
+  ) => Promise<URLSearchParams>;
+  setSortType: (
+    value:
+      | "created_at"
+      | "random"
+      | ((old: "created_at" | "random") => ("created_at" | "random") | null)
+      | null,
+    options?: Options,
+  ) => Promise<URLSearchParams>;
+  sortDirection: "asc" | "desc";
+  sortType: "created_at" | "random";
+  selectedCategory: "all" | "video" | "image" | "favorite";
+}) => {
   const [isStatsOpen, setIsStatsOpen] = useState(false);
   const {
-    sortDirection,
-    sortType,
-    selectedCategory,
-    isSortDirectionDisabled,
-    toggleSortDirection,
-    toggleSortType,
-    setSelectedCategory,
-    setSeed,
     isSelectionMode,
     selectedCount,
     setIsSelectionMode,
@@ -36,6 +75,17 @@ const Navbar = ({ onDelete }: { onDelete: () => void }) => {
     toggleDarkMode,
   } = useAppState();
 
+  const toggleSortDirection = () => {
+    setSortDirection(sortDirection === "desc" ? "asc" : "desc");
+  };
+
+  const [isSortDirectionDisabled, setIsSortDirectionDisabled] = useState(true);
+  const toggleSortType = () => {
+    const newType = sortType === "created_at" ? "random" : "created_at";
+    setSortType(newType);
+    setIsSortDirectionDisabled(newType === "random");
+    setSortDirection(newType === "random" ? "desc" : sortDirection);
+  };
   const handleReseed = () => {
     const randomOffset = Math.floor(Math.random() * 1000); // Random number between 0 and 999
     const randomMultiplier = Math.random() + 0.5; // Random multiplier between 0.5 and 1.5
