@@ -56,7 +56,7 @@ fn serve_static_file<T>(uri: &Uri) -> impl IntoResponse
 where
     T: RustEmbed,
 {
-    let uri_path = format!("{}", uri);
+    let uri_path = uri.path().to_string();
     let path = match uri_path
         .strip_prefix('/')
         .ok_or_else(|| anyhow::anyhow!("Invalid path"))
