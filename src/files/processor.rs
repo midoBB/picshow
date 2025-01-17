@@ -43,7 +43,10 @@ impl Processor {
             ),
         }
     }
-    pub async fn process(self) -> Result<usize> {
+    pub async fn process(
+        &self,
+        shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<(u32, Option<()>)> {
         info!("Starting processing files");
         info!("Folder path: {}", self.config.folder_path);
         info!(
@@ -52,6 +55,7 @@ impl Processor {
         );
         ensure_duplicate_path(self.duplicate_path.clone()).await?;
         let processed_hashes: Arc<DashSet<String>> = Arc::new(DashSet::new());
+        let final_processed_hashes = processed_hashes.clone();
         let folder = PathBuf::from(self.config.clone().folder_path.as_str());
         let concurrency_max = self.config.concurrency as usize;
         let semaphore = Arc::new(Semaphore::new(concurrency_max));
@@ -64,7 +68,7 @@ impl Processor {
         let progress_counter = Arc::new(AtomicUsize::new(0));
         let last_update = Arc::new(Mutex::new(Instant::now()));
 
-        let media_files = futures::stream::iter(entries)
+        let mut media_stream = futures::stream::iter(entries)
             .map(|entry| {
                 let semaphore_clone = semaphore.clone();
                 let self_clone = self.clone();
@@ -96,14 +100,32 @@ impl Processor {
                     res
                 }
             })
-            .buffer_unordered(concurrency_max)
-            .filter_map(|r| async move { r.ok() })
-            .count()
-            .await;
-
-        self.handle_non_exsiting_files(processed_hashes).await?;
+            .buffer_unordered(concurrency_max);
+        let mut media_files = 0u32;
+        let exit_option: Option<()>;
+        loop {
+            tokio::select! {
+                next = media_stream.next() => {
+                    if let Some(result) = next {
+                        if result.is_ok() {
+                            media_files += 1;
+                        }
+                    } else {
+                        exit_option = None;
+                        break;
+                    }
+                },
+                Ok(()) = shutdown_rx.recv() => {
+                    debug!("Received shutdown signal, stopping file processing");
+                    exit_option = Some(());
+                    break;
+                }
+            }
+        }
+        self.handle_non_exsiting_files(final_processed_hashes)
+            .await?;
         info!("Finished processing files");
-        Ok(media_files)
+        Ok((media_files, exit_option))
     }
     async fn process_file(
         &self,

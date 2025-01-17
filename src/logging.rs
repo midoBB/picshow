@@ -42,6 +42,7 @@ pub fn init_logging(cli_log_level: Option<LogLevel>, config_log_level: Option<Lo
         cli_log_level.unwrap_or(config_log_level.unwrap_or(AppConfig::default().log_level));
     let timer = ChronoLocal::new("%Y-%m-%d %H:%M:%S%.3f".to_string());
     tracing_subscriber::fmt()
+        .with_target(false)
         .with_timer(timer)
         .with_env_filter(EnvFilter::new(format!("neli=warn,{}", log_level)))
         .with_span_events(FmtSpan::ACTIVE)
