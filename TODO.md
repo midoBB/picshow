@@ -12,6 +12,8 @@
 
 Future:
 - [ ] Add PHash to allow to detect similar files (look into stashapp)
+- [ ] Add facial clustering functionality a la Google Photos/Samsung Gallery
+- [ ] Add fd-find | ws -l command to lookup how many files are in a folder
 - [ ] Queue write commands that were sent during backup/restore
 - [ ] Add multiple root folders on db and allow them to be selected on first run
 - [ ] Add capability to run the configuration app after the first time
