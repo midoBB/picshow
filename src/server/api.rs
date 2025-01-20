@@ -3,6 +3,8 @@ use std::{path::PathBuf, sync::Arc};
 use crate::{
     config::AppConfig,
     data::{repository::MediaRepository, FilledMediaFile},
+    files::processor::DeleteMode,
+    ipc::{ProcessorCommand, ProcessorStatus},
     logging,
     server::{middlewares, serve_static_file, MediaFileDTOVec, PaginationDTO},
 };
@@ -20,7 +22,7 @@ use axum::{
 use chrono::DateTime;
 use local_ip_address::list_afinet_netifas;
 use serde_json::json;
-use tokio::fs::File;
+use tokio::{fs::File, sync::broadcast};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -36,14 +38,23 @@ pub struct FrontendAssets;
 struct AppState {
     config: Arc<AppConfig>,
     repo: Arc<MediaRepository>,
+    command_tx: broadcast::Sender<ProcessorCommand>,
+    _status_rx: broadcast::Receiver<ProcessorStatus>,
 }
 
 pub async fn run_server(
     config: Arc<AppConfig>,
     repo: Arc<MediaRepository>,
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
+    command_tx: broadcast::Sender<ProcessorCommand>,
+    status_rx: broadcast::Receiver<ProcessorStatus>,
 ) -> Result<()> {
-    let state = Arc::new(AppState { config, repo });
+    let state = Arc::new(AppState {
+        config,
+        repo,
+        command_tx,
+        _status_rx: status_rx,
+    });
     let api_routes = axum::Router::new()
         .route("/", delete(delete_files))
         .route("/", get(get_files))
@@ -245,8 +256,25 @@ async fn delete_files(
             .into_response();
     }
 
-    match state.clone().repo.batch_delete_files(ids).await {
-        Ok(_) => (StatusCode::NO_CONTENT).into_response(),
+    let command = ProcessorCommand::DeleteFiles {
+        ids: ids.clone(),
+        mode: DeleteMode::MoveToTrash,
+    };
+    match state.command_tx.send(command.clone()) {
+        Ok(_) => {
+            info!("Sent {:?} command to processor", command)
+        }
+        Err(e) => {
+            tracing::error!("Failed to send command to processor: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(json!({"error": "Failed to send command to processor"})),
+            )
+                .into_response();
+        }
+    };
+    match state.repo.batch_delete_files(ids).await {
+        Ok(_) => (StatusCode::OK).into_response(),
         Err(e) => {
             tracing::error!("Failed to delete files: {:?}", e);
             (

@@ -11,6 +11,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::cache::{self, AppCache};
+use crate::config::AppConfig;
 use crate::server::{FileQueryType, FilledFileQuery};
 
 #[derive(Clone, Debug)]
@@ -24,18 +25,15 @@ pub struct MediaRepository {
 }
 
 impl MediaRepository {
-    pub async fn new(db_path: &str, cache: AppCache) -> Result<Self> {
-        ensure_dir(db_path).await?;
+    pub async fn new(cache: AppCache, config: Arc<AppConfig>) -> Result<Self> {
+        let db_path = format!("{}picshow.db", &config.db_path);
+        ensure_dir(db_path.as_str()).await?;
         let url_db_path = &format!("sqlite://{}", db_path);
         let read_options = SqliteConnectOptions::from_str(&format!("{}?mode=ro", url_db_path))?
             .pragma("journal_mode", "WAL")
-            .pragma("foreign_keys", "ON")
-            .pragma("synchronous", "NORMAL")
             .busy_timeout(Duration::from_secs(10));
         let write_options = SqliteConnectOptions::from_str(url_db_path)?
-            .pragma("synchronous", "FULL")
             .pragma("journal_mode", "WAL")
-            .pragma("foreign_keys", "ON")
             .busy_timeout(Duration::from_secs(10));
         let read_pool = SqlitePoolOptions::new()
             .max_connections(10)
@@ -61,7 +59,7 @@ impl MediaRepository {
             write_semaphore: Arc::new(RwLock::new(Semaphore::new(1))),
             lock_semaphore: Arc::new(Semaphore::new(1)),
             cache,
-            db_path: db_path.to_string(),
+            db_path,
         };
 
         repo.init_schema().await?;
@@ -81,6 +79,15 @@ impl MediaRepository {
         sqlx::migrate!("./migrations")
             .run(self.get_write_conn().await.borrow())
             .await?;
+        sqlx::query(
+            r#"
+                PRAGMA foreign_keys = ON;
+                PRAGMA journal_mode = WAL;
+                PRAGMA synchronous = FULL;
+        "#,
+        )
+        .execute(self.get_write_conn().await.borrow())
+        .await?;
         Ok(())
     }
     pub(crate) async fn cleanup(&self) -> Result<()> {
@@ -94,7 +101,7 @@ impl MediaRepository {
         if Arc::strong_count(&self.write_pool) == 1 {
             info!("Closing write connection pool...");
             let mut conn = self.write_pool.acquire().await?;
-            sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            sqlx::query("PRAGMA jounal_mode = DELETE")
                 .execute(&mut *conn)
                 .await?;
             drop(conn);
@@ -112,7 +119,6 @@ impl MediaRepository {
             debug!("Write pool still has other references, skipping write pool cleanup");
         }
 
-        // Close the read pool
         info!("Closing read connection pool...");
         self.read_pool.close().await;
         info!("Database cleanup completed");
@@ -129,7 +135,7 @@ impl MediaRepository {
         // Force reset the write semaphore
         self.write_semaphore.write().await.close();
         let mut conn = self.write_pool.acquire().await?;
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        sqlx::query("PRAGMA jounal_mode = DELETE")
             .execute(&mut *conn)
             .await?;
         drop(conn);
@@ -315,13 +321,13 @@ impl MediaRepository {
         let mut tx = self.get_write_conn().await.begin().await?;
         let placeholders = ["?"].repeat(file_ids.len()).join(",");
         let query = format!(
-            "SELECT id, media_type, is_favorite FROM media_files WHERE id IN ({})",
+            "SELECT id, media_type, is_favorite, filename FROM media_files WHERE id IN ({})",
             placeholders
         );
         let data = file_ids
             .iter()
             .fold(
-                sqlx::query_as::<_, (Uuid, MediaType, bool)>(&query),
+                sqlx::query_as::<_, (Uuid, MediaType, bool, String)>(&query),
                 |builder, id| builder.bind(id),
             )
             .fetch_all(&mut *tx)
@@ -330,13 +336,13 @@ impl MediaRepository {
         let count = data.len();
         let img_count = data
             .iter()
-            .filter(|(_, t, _)| *t == MediaType::Image)
+            .filter(|(_, t, _, _)| *t == MediaType::Image)
             .count();
         let vid_count = data
             .iter()
-            .filter(|(_, t, _)| *t == MediaType::Video)
+            .filter(|(_, t, _, _)| *t == MediaType::Video)
             .count();
-        let fav_count = data.iter().filter(|(_, _, f)| *f).count();
+        let fav_count = data.iter().filter(|(_, _, f, _)| *f).count();
         let delete_query = format!("DELETE FROM media_files WHERE id IN ({})", placeholders);
         file_ids
             .iter()
@@ -365,7 +371,7 @@ impl MediaRepository {
         sqlx::query(&stats_query).execute(&mut *tx).await?;
         tx.commit().await?;
         self.cache.invalidate_stats_cache();
-        for (file_id, media_type, _) in &data {
+        for (file_id, media_type, _, _) in &data {
             self.cache.invalidate_file_cache(file_id);
             self.cache
                 .invalidate_img_vid_thumb_cache(file_id, media_type);
