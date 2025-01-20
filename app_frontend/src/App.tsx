@@ -33,11 +33,7 @@ import ConfirmDialog from "@/ConfirmDeleteDialog";
 import KeepAwake from "@/KeepAwake";
 import { LazyLoadImage } from "react-lazy-load-image-component";
 import { debounce } from "lodash";
-import {
-  useQueryState,
-  parseAsInteger,
-  parseAsStringLiteral,
-} from "nuqs";
+import { useQueryState, parseAsInteger, parseAsStringLiteral } from "nuqs";
 
 const PAGE_SIZE = 15;
 

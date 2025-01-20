@@ -27,7 +27,9 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     let db_path = format!("{}picshow.db", &config.db_path);
     let repository = Arc::new(MediaRepository::new(db_path.as_str(), cache.clone()).await?);
     let processor = Processor::new(config.clone(), repository.clone());
-    let processor_tick = time::interval(Duration::from_secs(config.refresh_interval as u64 * 60 * 60));
+    let processor_tick = time::interval(Duration::from_secs(
+        config.refresh_interval as u64 * 60 * 60,
+    ));
     let processor_semaphore = Semaphore::new(1);
     let processorer_handle = tokio::spawn(async move {
         let mut shutdown_rx = processor_shutdown;
