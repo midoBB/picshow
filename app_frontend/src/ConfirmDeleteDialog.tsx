@@ -1,6 +1,9 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Checkbox from "@radix-ui/react-checkbox";
 import useAppState from "@/state";
+import { useQueries } from "@tanstack/react-query";
+import { fetchThumbnail } from "./queries/api";
+import { useMemo } from "react";
 
 interface ConfirmDialogProps {
   isOpen: boolean;
@@ -11,8 +14,6 @@ interface ConfirmDialogProps {
   files: Array<{
     Id: string;
     MimeType: string;
-    Image?: { ThumbnailBase64: string };
-    Video?: { ThumbnailBase64: string };
   }>;
 }
 
@@ -25,7 +26,29 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   files,
 }) => {
   const { isDarkMode } = useAppState();
-
+  const thumbnailQueries = useQueries({
+    queries: files.map((file) => ({
+      queryKey: ["thumbnail", file.Id],
+      queryFn: () => fetchThumbnail(file.Id),
+      staleTime: Infinity,
+      cacheTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+    })),
+  });
+  const thumbnailMap = useMemo(() => {
+    return thumbnailQueries.reduce(
+      (acc, query, index) => {
+        const fileId = files[index].Id;
+        if (query.data) {
+          acc[fileId] = query.data;
+        }
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+  }, [thumbnailQueries, files]);
   return (
     <Dialog.Root open={isOpen} onOpenChange={onOpenChange}>
       <Dialog.Portal>
@@ -42,35 +65,34 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
           </Dialog.Description>
           <div className="max-h-[300px] overflow-y-auto mb-5">
             <div className="grid grid-cols-4 gap-2">
-              {files.map((file) => (
-                <div key={file.Id} className="relative w-full pt-[100%]">
-                  <img
-                    src={
-                      file.MimeType === "video"
-                        ? file.Video?.ThumbnailBase64
-                        : file.Image?.ThumbnailBase64
-                    }
-                    alt={`File ${file.Id}`}
-                    className="absolute top-0 left-0 w-full h-full object-cover rounded-md"
-                  />
-                  {file.MimeType === "video" && (
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <svg
-                        xmlns="http://www.w3.org/2000/svg"
-                        className="h-8 w-8 text-white opacity-75"
-                        viewBox="0 0 20 20"
-                        fill="currentColor"
-                      >
-                        <path
-                          fillRule="evenodd"
-                          d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
-                          clipRule="evenodd"
-                        />
-                      </svg>
-                    </div>
-                  )}
-                </div>
-              ))}
+              {files.map((file) => {
+                const thumbnailUrl = thumbnailMap[file.Id];
+                return (
+                  <div key={file.Id} className="relative w-full pt-[100%]">
+                    <img
+                      src={thumbnailUrl}
+                      alt={`File ${file.Id}`}
+                      className="absolute top-0 left-0 w-full h-full object-cover rounded-md"
+                    />
+                    {file.MimeType === "video" && (
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <svg
+                          xmlns="http://www.w3.org/2000/svg"
+                          className="h-8 w-8 text-white opacity-75"
+                          viewBox="0 0 20 20"
+                          fill="currentColor"
+                        >
+                          <path
+                            fillRule="evenodd"
+                            d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z"
+                            clipRule="evenodd"
+                          />
+                        </svg>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           </div>
           <div className="flex items-center space-x-2 mb-5">
