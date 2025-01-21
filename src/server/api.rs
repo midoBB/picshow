@@ -84,7 +84,7 @@ pub async fn run_server(
     axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             shutdown_rx.recv().await.ok();
-            info!("Shutting down...");
+            debug!("Shutting down API server");
         })
         .await?;
     Ok(())

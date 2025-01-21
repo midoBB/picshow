@@ -6,7 +6,7 @@ use std::time::Duration;
 use std::{path::Path, sync::Arc};
 use tokio::fs;
 use tokio::sync::{RwLock, Semaphore};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 use uuid::Uuid;
 
 use super::*;
@@ -31,9 +31,13 @@ impl MediaRepository {
         let url_db_path = &format!("sqlite://{}", db_path);
         let read_options = SqliteConnectOptions::from_str(&format!("{}?mode=ro", url_db_path))?
             .pragma("journal_mode", "WAL")
+            .pragma("synchronous", "FULL")
+            .pragma("foreign_keys", "ON")
             .busy_timeout(Duration::from_secs(10));
         let write_options = SqliteConnectOptions::from_str(url_db_path)?
             .pragma("journal_mode", "WAL")
+            .pragma("synchronous", "FULL")
+            .pragma("foreign_keys", "ON")
             .busy_timeout(Duration::from_secs(10));
         let read_pool = SqlitePoolOptions::new()
             .max_connections(10)
@@ -79,15 +83,6 @@ impl MediaRepository {
         sqlx::migrate!("./migrations")
             .run(self.get_write_conn().await.borrow())
             .await?;
-        sqlx::query(
-            r#"
-                PRAGMA foreign_keys = ON;
-                PRAGMA journal_mode = WAL;
-                PRAGMA synchronous = FULL;
-        "#,
-        )
-        .execute(self.get_write_conn().await.borrow())
-        .await?;
         Ok(())
     }
     pub(crate) async fn cleanup(&self) -> Result<()> {
@@ -95,37 +90,35 @@ impl MediaRepository {
         {
             let semaphore = self.write_semaphore.read().await;
             let _write_lock = semaphore.acquire().await?;
-            info!("Acquired write lock for cleanup");
+            trace!("Acquired write lock for cleanup");
         }
 
-        if Arc::strong_count(&self.write_pool) == 1 {
-            info!("Closing write connection pool...");
-            let mut conn = self.write_pool.acquire().await?;
-            sqlx::query("PRAGMA jounal_mode = DELETE")
-                .execute(&mut *conn)
-                .await?;
-            drop(conn);
-            let wal_path = format!("{}-wal", self.db_path);
-            let shm_path = format!("{}-shm", self.db_path);
-
-            // Attempt to remove WAL and SHM files
-            for path in [&wal_path, &shm_path] {
-                if tokio::fs::remove_file(path).await.is_ok() {
-                    debug!("Removed WAL / SHM file {}", path);
-                }
-            }
-            self.write_pool.close().await;
-        } else {
-            debug!("Write pool still has other references, skipping write pool cleanup");
-        }
-
-        info!("Closing read connection pool...");
+        trace!("Closing read connection pool...");
         self.read_pool.close().await;
-        info!("Database cleanup completed");
+        loop {
+            if Arc::strong_count(&self.write_pool) == 1 {
+                self.write_pool.close().await;
+                let wal_path = format!("{}-wal", self.db_path);
+                let shm_path = format!("{}-shm", self.db_path);
+
+                // Attempt to remove WAL and SHM files
+                for path in [&wal_path, &shm_path] {
+                    if tokio::fs::remove_file(path).await.is_ok() {
+                        trace!("Removed WAL / SHM file {}", path);
+                    }
+                }
+                break;
+            } else {
+                trace!("Write pool still has other references, skipping write pool cleanup");
+                continue;
+            }
+        }
+
+        debug!("Database cleanup completed");
         Ok(())
     }
     pub async fn lock_writes(&self) -> Result<()> {
-        info!("Locking writes");
+        trace!("Locking writes");
         // Force acquire the lock semaphore first
         let _lock = self.lock_semaphore.acquire().await.unwrap();
 
@@ -135,7 +128,7 @@ impl MediaRepository {
         // Force reset the write semaphore
         self.write_semaphore.write().await.close();
         let mut conn = self.write_pool.acquire().await?;
-        sqlx::query("PRAGMA jounal_mode = DELETE")
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
             .execute(&mut *conn)
             .await?;
         drop(conn);
@@ -145,7 +138,7 @@ impl MediaRepository {
     pub async fn unlock_writes(&self) -> Result<()> {
         info!("Unlocking writes");
         let mut conn = self.write_pool.acquire().await?;
-        sqlx::query("PRAGMA journal_mode = WAL")
+        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
             .execute(&mut *conn)
             .await?;
         drop(conn);

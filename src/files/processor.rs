@@ -34,10 +34,7 @@ pub struct Processor {
 }
 
 impl Processor {
-    pub fn new(
-        config: Arc<AppConfig>,
-        repository: Arc<MediaRepository>,
-    ) -> Self {
+    pub fn new(config: Arc<AppConfig>, repository: Arc<MediaRepository>) -> Self {
         Self {
             config: config.clone(),
             handler: Handler::new(config.clone()),

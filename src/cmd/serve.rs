@@ -8,8 +8,12 @@ use tokio::{
 use tracing::{debug, info};
 
 use crate::{
-    cache::AppCache, config::AppConfig, data::repository::MediaRepository,
-    files::{command_handler::CommandHandler, processor::Processor}, ipc::CommandChannels, server::api,
+    cache::AppCache,
+    config::AppConfig,
+    data::repository::MediaRepository,
+    files::{command_handler::CommandHandler, processor::Processor},
+    ipc::CommandChannels,
+    server::api,
 };
 
 pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<()> {
@@ -27,11 +31,13 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     let api_shutdown = shutdown_tx.subscribe();
     let cache = AppCache::new(config.cache_size_mb as u64);
     let repository = Arc::new(MediaRepository::new(cache.clone(), config.clone()).await?);
-    let mut command_handler = CommandHandler::new(config.clone(), repository.clone(), channels.command_rx, channels.status_tx);
-    let processor = Processor::new(
+    let mut command_handler = CommandHandler::new(
         config.clone(),
         repository.clone(),
+        channels.command_rx,
+        channels.status_tx,
     );
+    let processor = Processor::new(config.clone(), repository.clone());
 
     let processor_tick = time::interval(Duration::from_secs(
         config.refresh_interval as u64 * 60 * 60,
@@ -73,15 +79,22 @@ async fn process_files(
     shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
 ) -> Result<()> {
     loop {
-        tick.tick().await;
-        let _permit = semaphore.acquire().await;
-        if _permit.is_err() {
-            continue;
-        }
-        let (media_files_count, exit_option) = processor.process(shutdown_rx).await?;
-        info!("Found {} files", media_files_count);
-        if exit_option.is_some() {
-            break Ok(());
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                debug!("Shutting down processor");
+                break Ok(());
+            }
+            _ = tick.tick() => {
+                let _permit = semaphore.acquire().await;
+                if _permit.is_err() {
+                    continue;
+                }
+                let (media_files_count, exit_option) = processor.process(shutdown_rx).await?;
+                info!("Found {} files", media_files_count);
+                if exit_option.is_some() {
+                    break Ok(());
+                }
+            }
         }
     }
 }

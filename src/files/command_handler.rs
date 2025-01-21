@@ -75,7 +75,7 @@ impl CommandHandler {
         loop {
             tokio::select! {
                 _ = shutdown_rx.recv() => {
-                    debug!("Received shutdown signal, stopping file processing");
+                    debug!("Received shutdown signal, stopping command handling");
                     break;
                 }
                 command = self.command_rx.recv() => {
