@@ -63,8 +63,9 @@ impl Processor {
         let semaphore = Arc::new(Semaphore::new(concurrency_max));
 
         let entries = WalkDir::new(folder.clone())
+            .max_depth(1)
             .into_iter()
-            .filter_entry(|e| !is_hidden(e) && !is_duplicate_path(e, &folder.join("duplicates")))
+            .filter_entry(|e| !is_hidden(e))
             .filter_map(|e| e.ok())
             .filter(|e| e.file_type().is_file());
         let progress_counter = Arc::new(AtomicUsize::new(0));
@@ -253,10 +254,6 @@ fn is_hidden(entry: &DirEntry) -> bool {
         .to_str()
         .map(|s| s.starts_with("."))
         .unwrap_or(false)
-}
-
-fn is_duplicate_path(entry: &DirEntry, duplicate_path: &PathBuf) -> bool {
-    entry.file_type().is_dir() && entry.path() == duplicate_path
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
