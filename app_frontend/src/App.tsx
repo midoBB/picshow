@@ -26,14 +26,12 @@ import {
   useToggleFavorite,
   useGetIsFavorite,
   useThumbnail,
-  useThumbnailCleanup,
 } from "@/queries/loaders";
 import useAppState from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import VideoSlide from "@/VideoSlide";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
 import KeepAwake from "@/KeepAwake";
-import { LazyLoadImage } from "react-lazy-load-image-component";
 import { debounce } from "lodash";
 import { useQueryState, parseAsInteger, parseAsStringLiteral } from "nuqs";
 import { useQueries } from "@tanstack/react-query";
@@ -206,7 +204,6 @@ export default function App() {
     return window.innerWidth < 768; // You can adjust this breakpoint as needed
   }, []);
   const navbarRef = useRef<HTMLDivElement>(null);
-  useThumbnailCleanup();
   const [isCurrentlyMobile, setIsCurrentlyMobile] = useState(isMobile());
   const [columnCount, setColumnCount] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });

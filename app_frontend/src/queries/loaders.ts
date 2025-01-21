@@ -123,35 +123,16 @@ export const useThumbnail = (fileId: string) => {
     queryKey: ["thumbnail", fileId],
     queryFn: () => fetchThumbnail(fileId),
     enabled,
-    staleTime: Infinity, // Since we're relying on HTTP cache headers
+    staleTime: Infinity,
     refetchOnWindowFocus: false,
     refetchOnReconnect: false,
     refetchOnMount: false,
-    // Clean up the object URL when the data is no longer needed
     gcTime: 1000 * 60 * 60, // 1 hour
     onSuccess: (data) => {
-      // Store a reference to clean up later
       const existingUrl = queryClient.getQueryData(["thumbnail", fileId]);
       if (existingUrl && typeof existingUrl === "string") {
         URL.revokeObjectURL(existingUrl);
       }
     },
   });
-};
-
-// Add cleanup on unmount
-export const useThumbnailCleanup = () => {
-  const queryClient = useQueryClient();
-
-  useEffect(() => {
-    return () => {
-      // Clean up all object URLs when component unmounts
-      const thumbnailQueries = queryClient.getQueriesData(["thumbnail"]);
-      thumbnailQueries.forEach(([_, url]) => {
-        if (typeof url === "string") {
-          URL.revokeObjectURL(url);
-        }
-      });
-    };
-  }, [queryClient]);
 };
