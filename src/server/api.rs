@@ -2,7 +2,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use crate::{
     config::AppConfig,
-    data::{repository::MediaRepository, FilledMediaFile},
+    data::{repository::MediaRepository, FilledMediaFile, Media},
     files::processor::DeleteMode,
     ipc::{ProcessorCommand, ProcessorStatus},
     logging,
@@ -63,6 +63,7 @@ pub async fn run_server(
         .route("/:id/favorite", patch(toggle_favorite))
         .route("/image/:id", get(get_image))
         .route("/video/:id", get(stream_video))
+        .route("/thumbnail/:id", get(get_thumbnail))
         .route("/internal/lock/:secret", get(lock))
         .route("/internal/unlock/:secret", get(unlock));
     let app = axum::Router::new()
@@ -114,6 +115,60 @@ async fn stream_video(
     headers: HeaderMap,
 ) -> impl IntoResponse {
     get_media_file(state, id, headers).await
+}
+
+async fn get_thumbnail(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    let file_id = match Uuid::parse_str(&id) {
+        Ok(id) => id,
+        Err(e) => {
+            tracing::error!("Failed to parse file id: {:?}", e);
+            return (
+                axum::http::StatusCode::BAD_REQUEST,
+                axum::response::Json(json!({"error": "Invalid file id"})),
+            )
+                .into_response();
+        }
+    };
+    let media_file = match state.repo.get_file_by_id(file_id, true).await {
+        Ok(file) => FilledMediaFile::try_from(file).unwrap(),
+        Err(e) => {
+            tracing::error!("Failed to get file: {:?}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Json(json!({"error": "Failed to get file"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Check If-Modified-Since header
+    if headers
+        .get(header::IF_MODIFIED_SINCE)
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| DateTime::parse_from_rfc2822(s).ok())
+        .is_some_and(|if_modified_since| media_file.last_modified <= if_modified_since)
+    {
+        debug!("Returning 304 Not Modified");
+        return StatusCode::NOT_MODIFIED.into_response();
+    }
+
+    (
+        StatusCode::OK,
+        [
+            (header::CONTENT_TYPE, "image/jpeg".to_string()),
+            (header::LAST_MODIFIED, media_file.last_modified.to_rfc2822()),
+            (header::CACHE_CONTROL, "public, max-age=12".to_string()),
+        ],
+        match media_file.media {
+            Media::Image(image) => image.thumbnail.data,
+            Media::Video(video) => video.thumbnail.data,
+        },
+    )
+        .into_response()
 }
 
 async fn get_media_file(state: Arc<AppState>, id: String, headers: HeaderMap) -> impl IntoResponse {

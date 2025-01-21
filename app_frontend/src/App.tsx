@@ -7,7 +7,7 @@ import React, {
 } from "react";
 import { FaRegPlayCircle } from "react-icons/fa";
 import { LuLoader2, LuX } from "react-icons/lu";
-import { BASE_URL } from "@/queries/api";
+import { BASE_URL, fetchThumbnail } from "@/queries/api";
 import Navbar from "@/Navbar";
 import Lightbox, {
   SlideshowRef,
@@ -25,6 +25,8 @@ import {
   useDeleteFile,
   useToggleFavorite,
   useGetIsFavorite,
+  useThumbnail,
+  useThumbnailCleanup,
 } from "@/queries/loaders";
 import useAppState from "@/state";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -34,6 +36,7 @@ import KeepAwake from "@/KeepAwake";
 import { LazyLoadImage } from "react-lazy-load-image-component";
 import { debounce } from "lodash";
 import { useQueryState, parseAsInteger, parseAsStringLiteral } from "nuqs";
+import { useQueries } from "@tanstack/react-query";
 
 const PAGE_SIZE = 15;
 
@@ -64,8 +67,48 @@ const FileItem = React.memo(
     onClick,
     isSelected,
   }: any) => {
+    const ref = useRef<HTMLDivElement>(null);
+    const [isIntersecting, setIsIntersecting] = React.useState(false);
+
+    useEffect(() => {
+      const observer = new IntersectionObserver(
+        (entries) => {
+          entries.forEach((entry) => {
+            if (entry.isIntersecting) {
+              setIsIntersecting(true);
+              observer.unobserve(entry.target);
+            }
+          });
+        },
+        {
+          rootMargin: "50px", // Start loading slightly before the item comes into view
+        },
+      );
+
+      if (ref.current) {
+        observer.observe(ref.current);
+      }
+
+      return () => {
+        if (ref.current) {
+          observer.unobserve(ref.current);
+        }
+      };
+    }, []);
+
+    const { data: thumbnailUrl, isLoading } = useThumbnail(
+      isIntersecting ? file.Id : "", // Only fetch when in view
+    );
+
+    const aspectRatio = file.Image
+      ? file.Image.ThumbnailWidth / file.Image.ThumbnailHeight
+      : file.Video
+        ? file.Video.ThumbnailWidth / file.Video.ThumbnailHeight
+        : 1;
+
     return (
       <div
+        ref={ref}
         className={`cursor-pointer group ${isSelected ? "border-2 border-blue-500 rounded-lg" : ""}`}
         onContextMenu={(e) => onContextMenu(e, file.Id)}
         onClick={() => onClick(virtualRow.index, file.Id)}
@@ -80,28 +123,33 @@ const FileItem = React.memo(
         }}
       >
         <figure className="relative w-full h-full overflow-hidden rounded-lg transform group-hover:shadow transition duration-300 ease-out">
-          <div className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out">
-            {file.Image && (
-              <LazyLoadImage
-                src={file.Image.ThumbnailBase64}
-                alt={file.Filename}
-                className="w-full h-full object-cover rounded-lg"
-              />
+          <div
+            className="absolute w-full h-full object-cover rounded-lg transform group-hover:scale-105 transition duration-300 ease-out"
+            style={{ aspectRatio }}
+          >
+            {isLoading && (
+              <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800">
+                <LuLoader2 className="w-8 h-8 animate-spin text-blue-500" />
+              </div>
             )}
-            {file.Video && (
-              <div className="relative w-full h-full">
-                <LazyLoadImage
-                  src={file.Video.ThumbnailBase64}
+
+            {thumbnailUrl && (
+              <>
+                <img
+                  src={thumbnailUrl}
                   alt={file.Filename}
                   className="w-full h-full object-cover rounded-lg"
                 />
-                <div className="absolute inset-0 flex items-center justify-center">
-                  <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
-                </div>
-              </div>
+                {file.Video && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <FaRegPlayCircle className="text-white h-16 w-16 text-4xl opacity-70" />
+                  </div>
+                )}
+              </>
             )}
           </div>
         </figure>
+
         {isSelected && (
           <div className="absolute top-2 left-2 w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center">
             <svg
@@ -158,6 +206,7 @@ export default function App() {
     return window.innerWidth < 768; // You can adjust this breakpoint as needed
   }, []);
   const navbarRef = useRef<HTMLDivElement>(null);
+  useThumbnailCleanup();
   const [isCurrentlyMobile, setIsCurrentlyMobile] = useState(isMobile());
   const [columnCount, setColumnCount] = useState(0);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
@@ -330,7 +379,38 @@ export default function App() {
 
     return uniqueFiles;
   }, [data]);
+  const slideFiles = useMemo(
+    () =>
+      allFiles.map((file) => ({
+        id: file.Id,
+        type: file.MediaType,
+      })),
+    [allFiles],
+  );
 
+  const thumbnailQueries = useQueries({
+    queries: slideFiles.map((file) => ({
+      queryKey: ["thumbnail", file.id],
+      queryFn: () => fetchThumbnail(file.id),
+      staleTime: Infinity,
+      cacheTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      refetchOnMount: false,
+    })),
+  });
+  const thumbnailMap = useMemo(() => {
+    return thumbnailQueries.reduce(
+      (acc, query, index) => {
+        const fileId = slideFiles[index].id;
+        if (query.data) {
+          acc[fileId] = query.data;
+        }
+        return acc;
+      },
+      {} as Record<string, string>,
+    );
+  }, [thumbnailQueries, slideFiles]);
   const estimateSize = useCallback(
     (index: number) => {
       const file = allFiles[index];
@@ -388,12 +468,13 @@ export default function App() {
   const slides = useMemo(
     () =>
       allFiles.map((file) => {
+        const thumbnailUrl = thumbnailMap[file.Id];
         if (file.MediaType === "video") {
           return {
             type: "video",
             width: file.Video?.Width,
             height: file.Video?.Height,
-            poster: file.Video?.ThumbnailBase64,
+            poster: thumbnailUrl,
             sources: [
               {
                 src: `${BASE_URL}/video/${file.Id}`,
@@ -411,7 +492,7 @@ export default function App() {
             height: file.Image?.Height,
             srcSet: [
               {
-                src: file.Image?.ThumbnailBase64,
+                src: thumbnailUrl,
                 width: file.Image?.ThumbnailWidth,
                 height: file.Image?.ThumbnailHeight,
               },
@@ -427,7 +508,7 @@ export default function App() {
           };
         }
       }),
-    [allFiles],
+    [allFiles, thumbnailMap],
   );
 
   const toggleFileSelection = useCallback(

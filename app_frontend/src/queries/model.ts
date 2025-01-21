@@ -8,7 +8,7 @@ export const ImageSchema = z.object({
   Height: z.number(),
   ThumbnailWidth: z.number(),
   ThumbnailHeight: z.number(),
-  ThumbnailBase64: z.string(),
+  // ThumbnailBase64: z.string(),
   Length: z.number().optional(),
 });
 export type Image = z.infer<typeof ImageSchema>;

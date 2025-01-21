@@ -59,3 +59,10 @@ export const fetchStats = async (): Promise<Stats> => {
   const { data } = await api.get<Stats>("/stats");
   return data;
 };
+
+export const fetchThumbnail = async (fileId: string): Promise<string> => {
+  const response = await api.get(`/thumbnail/${fileId}`, {
+    responseType: "blob",
+  });
+  return URL.createObjectURL(response.data);
+};

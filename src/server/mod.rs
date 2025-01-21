@@ -141,6 +141,7 @@ pub struct MediaDTO {
     pub height: u32,
     pub thumbnail_width: u32,
     pub thumbnail_height: u32,
+    #[serde(skip)]
     pub thumbnail_base64: String,
     pub length: Option<u32>,
 }
