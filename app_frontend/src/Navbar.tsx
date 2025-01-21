@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import StatsDialog from "@/StatsDialog";
 import * as Select from "@radix-ui/react-select";
 import * as Tooltip from "@radix-ui/react-tooltip";
@@ -80,10 +80,12 @@ const Navbar = ({
   };
 
   const [isSortDirectionDisabled, setIsSortDirectionDisabled] = useState(true);
+  useEffect(() => {
+    setIsSortDirectionDisabled(sortType === "random");
+  }, [sortType]);
   const toggleSortType = () => {
     const newType = sortType === "created_at" ? "random" : "created_at";
     setSortType(newType);
-    setIsSortDirectionDisabled(newType === "random");
     setSortDirection(newType === "random" ? "desc" : sortDirection);
   };
   const handleReseed = () => {
