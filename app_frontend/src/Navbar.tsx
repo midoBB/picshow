@@ -16,7 +16,7 @@ import {
 } from "react-icons/fa";
 import { FaShuffle } from "react-icons/fa6";
 import useAppState from "@/state";
-import { Options } from "nuqs";
+import type { Options } from "nuqs";
 
 const Navbar = ({
   onDelete,
@@ -85,6 +85,11 @@ const Navbar = ({
   }, [sortType]);
   const toggleSortType = () => {
     const newType = sortType === "created_at" ? "random" : "created_at";
+    if (newType === "created_at") {
+      setSeed(null);
+    } else {
+      handleReseed();
+    }
     setSortType(newType);
     setSortDirection(newType === "random" ? "desc" : sortDirection);
   };

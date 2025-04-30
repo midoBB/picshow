@@ -257,12 +257,19 @@ export default function App() {
     isDarkMode,
   } = useAppState();
 
+  const isFirstRun = useRef(true);
+
   useEffect(() => {
-    if (!seed) {
+    if (!seed && isFirstRun.current) {
       setSeed(Math.floor(Date.now() / 1000));
     }
   }, [seed, setSeed]);
 
+  useEffect(() => {
+    if (isFirstRun.current) {
+      isFirstRun.current = false;
+    }
+  }, []);
   const [isOpen, setIsOpen] = useState(false);
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isShowingControls, setIsShowingControls] = useState(true);

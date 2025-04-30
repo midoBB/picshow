@@ -66,7 +66,7 @@ impl Handler {
         let parent_dir = Path::new(path)
             .parent()
             .ok_or_else(|| anyhow!("Could not get parent directory"))?;
-        if ext == ".gif" {
+        if ext == "gif" {
             filename = filename.clone() + "[0]"; // Identify the first frame of the GIF
         }
         let identify_perm = self.identify_semp.acquire().await?;
