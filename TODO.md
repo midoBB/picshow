@@ -9,6 +9,7 @@
 - [X] Fix caching errors (some APIs aren't being updated when an operation happens e.g. Delete/Update)
 - [X] Add links to required stuff to the readme RUN curl -L https://musl.cc/arm-linux-musleabihf-cross.tgz | tar -xz -C /opt
 - [X] Add a graceful shutdown for the file processor
+- [X] Add a way to explore folders in the first run app
 
 Future:
 - [ ] Add PHash to allow to detect similar files (look into stashapp)
@@ -17,5 +18,4 @@ Future:
 - [ ] Queue write commands that were sent during backup/restore
 - [ ] Add multiple root folders on db and allow them to be selected on first run
 - [ ] Add capability to run the configuration app after the first time
-- [ ] Add a way to explore folders in the first run app
 - [ ] Add a way to batch all write operations

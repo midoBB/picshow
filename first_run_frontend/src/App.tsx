@@ -8,12 +8,15 @@ import {
   Button,
   Dialog,
   Select,
+  IconButton,
 } from "@radix-ui/themes";
 import "@radix-ui/themes/styles.css";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useState } from "react";
+import FolderBrowserDialog from "./FolderBrowserDialog";
+import { FolderIcon } from "lucide-react";
 
 const isValidLinuxDirectory = (path: string) => {
   return /^\/(?:[^/\0]+\/)+$|^\/?$/gm.test(path);
@@ -52,20 +55,27 @@ const configSchema = z.object({
 // Public Domain/MIT
 // https://stackoverflow.com/a/8809472
 function generateUUID() {
-    var d = new Date().getTime();//Timestamp
-    var d2 = ((typeof performance !== 'undefined') && performance.now && (performance.now()*1000)) || 0;//Time in microseconds since page-load or 0 if unsupported
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
-        var r = Math.random() * 16;//random number between 0 and 16
-        if(d > 0){//Use timestamp until depleted
-            r = (d + r)%16 | 0;
-            d = Math.floor(d/16);
-        } else {//Use microseconds since page-load if supported
-            r = (d2 + r)%16 | 0;
-            d2 = Math.floor(d2/16);
-        }
-        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
-    });
+  var d = new Date().getTime(); //Timestamp
+  var d2 =
+    (typeof performance !== "undefined" &&
+      performance.now &&
+      performance.now() * 1000) ||
+    0; //Time in microseconds since page-load or 0 if unsupported
+  return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) {
+    var r = Math.random() * 16; //random number between 0 and 16
+    if (d > 0) {
+      //Use timestamp until depleted
+      r = (d + r) % 16 | 0;
+      d = Math.floor(d / 16);
+    } else {
+      //Use microseconds since page-load if supported
+      r = (d2 + r) % 16 | 0;
+      d2 = Math.floor(d2 / 16);
+    }
+    return (c === "x" ? r : (r & 0x3) | 0x8).toString(16);
+  });
 }
+type FolderFieldName = "folderPath" | "dbPath" | "backupFolderPath";
 const ConfigInstallWizard = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitResult, setSubmitResult] = useState<{
@@ -76,6 +86,7 @@ const ConfigInstallWizard = () => {
     control,
     handleSubmit,
     formState: { errors },
+    setValue,
   } = useForm({
     resolver: zodResolver(configSchema),
     defaultValues: {
@@ -89,10 +100,14 @@ const ConfigInstallWizard = () => {
       maxThumbnailSize: 720,
       refreshInterval: 72,
       cacheSizeMB: 128,
-      logLevel: "Info",
+      logLevel: "Info" as "Debug" | "Info" | "Warn" | "Error",
       lockSecret: btoa(generateUUID()),
     },
   });
+
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false);
+  const [currentFolderField, setCurrentFolderField] =
+    useState<FolderFieldName | null>(null);
 
   const onSubmit = async (data: z.infer<typeof configSchema>) => {
     setIsSubmitting(true);
@@ -118,8 +133,11 @@ const ConfigInstallWizard = () => {
           message: `Error: ${errorData.error}`,
         });
       }
-    } catch (error) {
-      setSubmitResult({ success: false, message: `Error: ${error.message}` });
+    } catch (error: unknown) {
+      setSubmitResult({ 
+        success: false, 
+        message: `Error: ${error instanceof Error ? error.message : String(error)}` 
+      });
     } finally {
       setIsSubmitting(false);
     }
@@ -130,6 +148,16 @@ const ConfigInstallWizard = () => {
       window.location.reload();
     } else {
       setSubmitResult(null);
+    }
+  };
+  const openFolderBrowser = (fieldName: FolderFieldName) => {
+    setCurrentFolderField(fieldName);
+    setFolderDialogOpen(true);
+  };
+
+  const handleFolderSelect = (path: string) => {
+    if (currentFolderField) {
+      setValue(currentFolderField, path);
     }
   };
 
@@ -154,16 +182,26 @@ const ConfigInstallWizard = () => {
                 <Text as="div" size="2" mb="1" weight="bold">
                   Library Folder Path Ending In /
                 </Text>
-                <Controller
-                  name="folderPath"
-                  control={control}
-                  render={({ field }) => (
-                    <TextField.Root
-                      {...field}
-                      placeholder="Enter the path where your library is located"
-                    />
-                  )}
-                />
+                <Flex gap="2">
+                  <Controller
+                    name="folderPath"
+                    control={control}
+                    render={({ field }) => (
+                      <TextField.Root
+                        {...field}
+                        placeholder="Select the path where your library is located"
+                        style={{ width: "100%" }}
+                      />
+                    )}
+                  />
+                  <IconButton
+                    type="button"
+                    onClick={() => openFolderBrowser("folderPath")}
+                    variant="soft"
+                  >
+                    <FolderIcon width="16" height="16" />
+                  </IconButton>
+                </Flex>
                 {errors.folderPath && (
                   <Text color="red" size="1">
                     {errors.folderPath.message}
@@ -175,16 +213,26 @@ const ConfigInstallWizard = () => {
                 <Text as="div" size="2" mb="1" weight="bold">
                   Database Folder Path Ending In /
                 </Text>
-                <Controller
-                  name="dbPath"
-                  control={control}
-                  render={({ field }) => (
-                    <TextField.Root
-                      {...field}
-                      placeholder="Enter the path where your library is located"
-                    />
-                  )}
-                />
+                <Flex gap="2">
+                  <Controller
+                    name="dbPath"
+                    control={control}
+                    render={({ field }) => (
+                      <TextField.Root
+                        {...field}
+                        placeholder="Select the path for your database"
+                        style={{ width: "100%" }}
+                      />
+                    )}
+                  />
+                  <IconButton
+                    type="button"
+                    onClick={() => openFolderBrowser("dbPath")}
+                    variant="soft"
+                  >
+                    <FolderIcon width="16" height="16" />
+                  </IconButton>
+                </Flex>
                 {errors.dbPath && (
                   <Text color="red" size="1">
                     {errors.dbPath.message}
@@ -196,16 +244,26 @@ const ConfigInstallWizard = () => {
                 <Text as="div" size="2" mb="1" weight="bold">
                   Backup Folder Path Ending In /
                 </Text>
-                <Controller
-                  name="backupFolderPath"
-                  control={control}
-                  render={({ field }) => (
-                    <TextField.Root
-                      {...field}
-                      placeholder="Enter the path for your backup folder"
-                    />
-                  )}
-                />
+                <Flex gap="2">
+                  <Controller
+                    name="backupFolderPath"
+                    control={control}
+                    render={({ field }) => (
+                      <TextField.Root
+                        {...field}
+                        placeholder="Select the path for your backup folder"
+                        style={{ width: "100%" }}
+                      />
+                    )}
+                  />
+                  <IconButton
+                    type="button"
+                    onClick={() => openFolderBrowser("backupFolderPath")}
+                    variant="soft"
+                  >
+                    <FolderIcon width="16" height="16" />
+                  </IconButton>
+                </Flex>
                 {errors.backupFolderPath && (
                   <Text color="red" size="1">
                     {errors.backupFolderPath.message}
@@ -296,9 +354,9 @@ const ConfigInstallWizard = () => {
                       <Slider
                         value={[field.value]}
                         onValueChange={(value) => field.onChange(value[0])}
-                        min={240}
-                        max={1024}
-                        step={16}
+                        min={1}
+                        max={32}
+                        step={1}
                         style={{ flexGrow: 1 }}
                       />
                       <TextField.Root
@@ -504,6 +562,12 @@ const ConfigInstallWizard = () => {
           </Flex>
         </Dialog.Content>
       </Dialog.Root>
+      <FolderBrowserDialog
+        open={folderDialogOpen}
+        onOpenChange={setFolderDialogOpen}
+        onSelect={handleFolderSelect}
+        title={`Select ${currentFolderField?.replace("Path", "") || "Folder"}`}
+      />
     </Theme>
   );
 };
