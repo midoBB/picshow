@@ -86,7 +86,7 @@ jobs:
             libclang-dev \
             crossbuild-essential-armhf
       - name: Download ARMv7 toolchain
-        run: curl -L https://musl.cc/arm-linux-musleabihf-cross.tgz | sudo tar -xz -C /opt
+        run: curl -L https://github.com/musl-cc/musl.cc/releases/download/v0.0.1/arm-linux-musleabihf-cross.tgz | sudo tar -xz -C /opt
       - name: Build Rust app for ARMv7
         run: |
           PATH="/opt/arm-linux-musleabihf-cross/bin:${PATH}" cargo build --target armv7-unknown-linux-musleabihf --release
