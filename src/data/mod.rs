@@ -237,15 +237,6 @@ impl Image {
             thumbnail,
         }
     }
-
-    fn with_thumbnail(&self, thumbnail: Thumbnail) -> Image {
-        Image {
-            id: self.id,
-            width: self.width,
-            height: self.height,
-            thumbnail,
-        }
-    }
 }
 
 #[derive(Clone, Serialize, Deserialize, FromRow, Default)]
@@ -290,16 +281,6 @@ impl Video {
             width,
             height,
             duration_ms,
-            thumbnail,
-        }
-    }
-
-    fn with_thumbnail(&self, thumbnail: Thumbnail) -> Video {
-        Video {
-            id: self.id,
-            width: self.width,
-            height: self.height,
-            duration_ms: self.duration_ms,
             thumbnail,
         }
     }
