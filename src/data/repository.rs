@@ -33,11 +33,22 @@ impl MediaRepository {
             .pragma("journal_mode", "WAL")
             .pragma("synchronous", "FULL")
             .pragma("foreign_keys", "ON")
+            .pragma("cache_size", "-64000")
+            .pragma("temp_store", "MEMORY")
+            .pragma("page_size", "4096")
+            .pragma("secure_delete", "OFF")
+            .pragma("wal_autocheckpoint", "1000")
             .busy_timeout(Duration::from_secs(10));
         let write_options = SqliteConnectOptions::from_str(url_db_path)?
             .pragma("journal_mode", "WAL")
             .pragma("synchronous", "FULL")
             .pragma("foreign_keys", "ON")
+            .pragma("cache_size", "-64000")
+            .pragma("temp_store", "MEMORY")
+            .pragma("page_size", "4096")
+            .pragma("secure_delete", "OFF")
+            .pragma("wal_autocheckpoint", "1000")
+            .pragma("auto_vacuum", "INCREMENTAL")
             .busy_timeout(Duration::from_secs(10));
         let read_pool = SqlitePoolOptions::new()
             .max_connections(10)
@@ -67,6 +78,7 @@ impl MediaRepository {
         };
 
         repo.init_schema().await?;
+        repo.check_and_repair_corruption().await?;
         Ok(repo)
     }
 
@@ -85,6 +97,111 @@ impl MediaRepository {
             .await?;
         Ok(())
     }
+
+    pub async fn check_and_repair_corruption(&self) -> Result<()> {
+        use tracing::{error, info, warn};
+
+        info!("Checking database integrity...");
+
+        let quick_check = sqlx::query_scalar::<_, String>("PRAGMA quick_check")
+            .fetch_one(self.get_read_conn())
+            .await;
+
+        match quick_check {
+            Ok(result) if result == "ok" => {
+                info!("Database quick check passed");
+                return Ok(());
+            }
+            Ok(result) => {
+                warn!("Database quick check failed: {}", result);
+            }
+            Err(e) => {
+                error!("Failed to perform quick check: {}", e);
+            }
+        }
+
+        info!("Performing full integrity check...");
+        let integrity_check = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+            .fetch_one(self.get_read_conn())
+            .await;
+
+        match integrity_check {
+            Ok(result) if result == "ok" => {
+                info!("Database integrity check passed");
+                return Ok(());
+            }
+            Ok(result) => {
+                error!("Database corruption detected: {}", result);
+            }
+            Err(e) => {
+                error!("Failed to perform integrity check: {}", e);
+                return Err(e.into());
+            }
+        }
+
+        warn!("Attempting database repair...");
+
+        if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(self.get_write_conn().await.borrow())
+            .await
+        {
+            error!("Failed to checkpoint WAL during repair: {}", e);
+        }
+
+        if let Err(e) = sqlx::query("PRAGMA incremental_vacuum")
+            .execute(self.get_write_conn().await.borrow())
+            .await
+        {
+            error!("Failed to vacuum database during repair: {}", e);
+        }
+
+        let recheck = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
+            .fetch_one(self.get_read_conn())
+            .await;
+
+        match recheck {
+            Ok(result) if result == "ok" => {
+                info!("Database repair successful");
+                Ok(())
+            }
+            Ok(result) => {
+                error!("Database repair failed, corruption persists: {}", result);
+                Err(anyhow::anyhow!(
+                    "Database corruption could not be repaired: {}",
+                    result
+                ))
+            }
+            Err(e) => {
+                error!("Failed to recheck integrity after repair: {}", e);
+                Err(e.into())
+            }
+        }
+    }
+
+    pub async fn perform_maintenance(&self) -> Result<()> {
+        use tracing::{debug, info};
+
+        info!("Starting database maintenance...");
+
+        debug!("Checkpointing WAL...");
+        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+            .execute(self.get_write_conn().await.borrow())
+            .await?;
+
+        debug!("Performing incremental vacuum...");
+        sqlx::query("PRAGMA incremental_vacuum")
+            .execute(self.get_write_conn().await.borrow())
+            .await?;
+
+        debug!("Analyzing database statistics...");
+        sqlx::query("PRAGMA analyze")
+            .execute(self.get_write_conn().await.borrow())
+            .await?;
+
+        info!("Database maintenance completed");
+        Ok(())
+    }
+
     pub(crate) async fn cleanup(&self) -> Result<()> {
         debug!("Starting DB cleanup");
         {
@@ -701,8 +818,14 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
         conn.execute_batch(
             r#"
                 PRAGMA journal_mode = WAL;
-                PRAGMA synchronous = NORMAL;
+                PRAGMA synchronous = FULL;
                 PRAGMA busy_timeout = 30000;
+                PRAGMA cache_size = -64000;
+                PRAGMA temp_store = MEMORY;
+                PRAGMA page_size = 4096;
+                PRAGMA secure_delete = OFF;
+                PRAGMA wal_autocheckpoint = 1000;
+                PRAGMA auto_vacuum = INCREMENTAL;
             "#,
         )?;
     }
