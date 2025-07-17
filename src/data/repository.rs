@@ -1,6 +1,5 @@
 use anyhow::Result;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use sqlx::Row;
+use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row};
 use std::borrow::Borrow;
 use std::str::FromStr as _;
 use std::time::Duration;
@@ -271,33 +270,33 @@ impl MediaRepository {
         _thumb_id: uuid::Uuid,
     ) -> Result<FilledMediaFile> {
         let media_type = media_file.media_type.clone();
-        
+
         // Single optimized query with JOIN to get both media and thumbnail data
         let query_str = match media_type {
             MediaType::Image => {
-                "SELECT i.id, i.width, i.height, 0 as duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data 
-                 FROM images i JOIN thumbnails t ON i.thumbnail_id = t.id 
+                "SELECT i.id, i.width, i.height, 0 as duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+                 FROM images i JOIN thumbnails t ON i.thumbnail_id = t.id
                  WHERE i.id = ?"
             }
             MediaType::Video => {
-                "SELECT v.id, v.width, v.height, v.duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data 
-                 FROM videos v JOIN thumbnails t ON v.thumbnail_id = t.id 
+                "SELECT v.id, v.width, v.height, v.duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+                 FROM videos v JOIN thumbnails t ON v.thumbnail_id = t.id
                  WHERE v.id = ?"
             }
         };
-        
+
         let row = sqlx::query(query_str)
             .bind(img_vid_id)
             .fetch_one(self.get_read_conn())
             .await?;
-            
+
         let thumbnail = Thumbnail {
             id: row.get("thumb_id"),
             width: row.get("thumb_width"),
             height: row.get("thumb_height"),
             data: row.get("thumb_data"),
         };
-        
+
         match media_type {
             MediaType::Image => {
                 let image = Image {
@@ -458,19 +457,19 @@ impl MediaRepository {
         if file_ids.is_empty() {
             return Ok(());
         }
-        
+
         let mut tx = self.get_write_conn().await.begin().await?;
         let placeholders = ["?"].repeat(file_ids.len()).join(",");
-        
+
         // Optimized single query to get stats and delete in one operation using CTE
         let combined_query = format!(
             r#"WITH deleted_files AS (
-                SELECT id, media_type, is_favorite, filename 
-                FROM media_files 
+                SELECT id, media_type, is_favorite, filename
+                FROM media_files
                 WHERE id IN ({})
             ),
             stats_calc AS (
-                SELECT 
+                SELECT
                     COUNT(*) as total_count,
                     SUM(CASE WHEN media_type = 'Image' THEN 1 ELSE 0 END) as img_count,
                     SUM(CASE WHEN media_type = 'Video' THEN 1 ELSE 0 END) as vid_count,
@@ -480,18 +479,18 @@ impl MediaRepository {
             SELECT total_count, img_count, vid_count, fav_count FROM stats_calc"#,
             placeholders
         );
-        
+
         let stats_row = file_ids
             .iter()
             .fold(sqlx::query(&combined_query), |builder, id| builder.bind(id))
             .fetch_one(&mut *tx)
             .await?;
-            
+
         let count: i64 = stats_row.get("total_count");
         let img_count: i64 = stats_row.get("img_count");
         let vid_count: i64 = stats_row.get("vid_count");
         let fav_count: i64 = stats_row.get("fav_count");
-        
+
         // Delete the files
         let delete_query = format!("DELETE FROM media_files WHERE id IN ({})", placeholders);
         file_ids
@@ -499,7 +498,7 @@ impl MediaRepository {
             .fold(sqlx::query(&delete_query), |builder, id| builder.bind(id))
             .execute(&mut *tx)
             .await?;
-            
+
         // Update stats in single query
         sqlx::query(
             "UPDATE stats SET count = count - ?, images = images - ?, videos = videos - ?, favorites = favorites - ? WHERE id = 1"
@@ -510,9 +509,9 @@ impl MediaRepository {
         .bind(fav_count)
         .execute(&mut *tx)
         .await?;
-        
+
         tx.commit().await?;
-        
+
         // Cache invalidation
         self.cache.invalidate_stats_cache();
         self.cache.invalidate_files_cache();
@@ -778,7 +777,7 @@ impl MediaRepository {
                 None
             },
         };
-        
+
         // Optimize random ordering with proper seeded randomness
         let order_by = match query.order.as_str() {
             "random" => {
@@ -792,7 +791,7 @@ impl MediaRepository {
             }
             _ => format!("mf.created_at {}", query.direction),
         };
-        
+
         let only_favs = if query.file_type == FileQueryType::Favorite {
             "AND mf.is_favorite = 1"
         } else {
@@ -803,11 +802,11 @@ impl MediaRepository {
             FileQueryType::Video => "AND mf.media_type = 'Video'",
             _ => "",
         };
-        
+
         // Single optimized query with JOINs - eliminates N+1 problem
         let query_str = format!(
-            r#"SELECT 
-                mf.id, mf.hash, mf.created_at, mf.filename, mf.size, mf.media_type, 
+            r#"SELECT
+                mf.id, mf.hash, mf.created_at, mf.filename, mf.size, mf.media_type,
                 mf.last_modified, mf.is_favorite, mf.mime_type,
                 COALESCE(i.id, v.id) as media_id,
                 COALESCE(i.width, v.width) as width,
@@ -825,11 +824,11 @@ impl MediaRepository {
             LIMIT {} OFFSET {}"#,
             only_favs, mime_cond, order_by, query.page_size, offset
         );
-        
+
         let rows = sqlx::query(&query_str)
             .fetch_all(self.get_read_conn())
             .await?;
-            
+
         let filled_files: Vec<FilledMediaFile> = rows.into_iter().map(|row| {
             let media_file = UnfilledMediaFile {
                 id: row.get("id"),
@@ -843,14 +842,14 @@ impl MediaRepository {
                 mime_type: row.get("mime_type"),
                 media: None,
             };
-            
+
             let thumbnail = Thumbnail {
                 id: row.get("thumbnail_id"),
                 width: row.get("thumb_width"),
                 height: row.get("thumb_height"),
                 data: row.get("thumb_data"),
             };
-            
+
             let mime_type = media_file.mime_type.clone().unwrap();
             match media_file.media_type {
                 MediaType::Image => {
@@ -874,7 +873,7 @@ impl MediaRepository {
                 }
             }
         }).collect();
-        
+
         let result = (pagination, filled_files);
         self.cache.set(cache_key, &result).await;
         Ok(result)

@@ -27,10 +27,7 @@ impl AppCache {
         match raw {
             Some(raw) => {
                 let res = bincode::deserialize::<T>(&raw);
-                match res {
-                    Ok(res) => Some(res),
-                    Err(_) => None,
-                }
+                res.ok()
             }
             None => None,
         }
