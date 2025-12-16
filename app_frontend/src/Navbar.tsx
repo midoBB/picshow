@@ -18,6 +18,46 @@ import { FaShuffle } from "react-icons/fa6";
 import useAppState from "@/state";
 import type { Options } from "nuqs";
 
+interface TooltipButtonProps {
+  icon: React.ReactNode;
+  label: string;
+  onClick: () => void;
+  ariaLabel: string;
+  isDarkMode: boolean;
+}
+
+const TooltipButton = ({
+  icon,
+  label,
+  onClick,
+  ariaLabel,
+  isDarkMode,
+}: TooltipButtonProps) => (
+  <Tooltip.Provider>
+    <Tooltip.Root>
+      <Tooltip.Trigger asChild>
+        <button
+          onClick={onClick}
+          className={`${isDarkMode ? "hover:bg-gray-700" : "hover:bg-gray-200"} p-2 rounded-full`}
+          aria-label={ariaLabel}
+        >
+          {icon}
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Portal>
+        <Tooltip.Content
+          className={`${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} px-2 py-1 rounded text-sm z-50`}
+        >
+          {label}
+          <Tooltip.Arrow
+            className={`${isDarkMode ? "fill-gray-700" : "fill-white"}`}
+          />
+        </Tooltip.Content>
+      </Tooltip.Portal>
+    </Tooltip.Root>
+  </Tooltip.Provider>
+);
+
 const Navbar = ({
   onDelete,
   setSeed,
@@ -140,25 +180,25 @@ const Navbar = ({
                   <Select.Viewport className="p-1">
                     <Select.Item
                       value="all"
-                      className={`cursor-pointer hover:${isDarkMode ? "bg-gray-700" : "bg-gray-100"} rounded px-2 py-1`}
+                      className={`cursor-pointer ${isDarkMode ? "hover:bg-gray-700" : "hover:bg-gray-100"} rounded px-2 py-1`}
                     >
                       <Select.ItemText>All </Select.ItemText>
                     </Select.Item>
                     <Select.Item
                       value="video"
-                      className={`cursor-pointer hover:${isDarkMode ? "bg-gray-700" : "bg-gray-100"} rounded px-2 py-1`}
+                      className={`cursor-pointer ${isDarkMode ? "hover:bg-gray-700" : "hover:bg-gray-100"} rounded px-2 py-1`}
                     >
                       <Select.ItemText>Video </Select.ItemText>
                     </Select.Item>
                     <Select.Item
                       value="image"
-                      className={`cursor-pointer hover:${isDarkMode ? "bg-gray-700" : "bg-gray-100"} rounded px-2 py-1`}
+                      className={`cursor-pointer ${isDarkMode ? "hover:bg-gray-700" : "hover:bg-gray-100"} rounded px-2 py-1`}
                     >
                       <Select.ItemText>Image </Select.ItemText>
                     </Select.Item>
                     <Select.Item
                       value="favorite"
-                      className={`cursor-pointer hover:${isDarkMode ? "bg-gray-700" : "bg-gray-100"} rounded px-2 py-1`}
+                      className={`cursor-pointer ${isDarkMode ? "hover:bg-gray-700" : "hover:bg-gray-100"} rounded px-2 py-1`}
                     >
                       <Select.ItemText>Favorites </Select.ItemText>
                     </Select.Item>
@@ -171,168 +211,77 @@ const Navbar = ({
         <div className="flex items-center space-x-4">
           {isSelectionMode ? (
             <>
-              <Tooltip.Provider>
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <button
-                      onClick={onDelete}
-                      className={`hover:${isDarkMode ? "bg-gray-700" : "bg-gray-200"} p-2 rounded-full`}
-                    >
-                      <FaTrash size={20} />
-                    </button>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content
-                      className={`${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} px-2 py-1 rounded text-sm z-50`}
-                    >
-                      Delete Selected
-                      <Tooltip.Arrow
-                        className={`fill-${isDarkMode ? "gray-700" : "white"}`}
-                      />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
-
-              <Tooltip.Provider>
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <button
-                      onClick={resetSelection}
-                      className={`hover:${isDarkMode ? "bg-gray-700" : "bg-gray-200"} p-2 rounded-full`}
-                    >
-                      <FaUndo size={20} />
-                    </button>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content
-                      className={`${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} px-2 py-1 rounded text-sm z-50`}
-                    >
-                      Exit Selection Mode
-                      <Tooltip.Arrow
-                        className={`fill-${isDarkMode ? "gray-700" : "white"}`}
-                      />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
+              <TooltipButton
+                icon={<FaTrash size={20} />}
+                label="Delete Selected"
+                onClick={onDelete}
+                ariaLabel="Delete selected files"
+                isDarkMode={isDarkMode}
+              />
+              <TooltipButton
+                icon={<FaUndo size={20} />}
+                label="Exit Selection Mode"
+                onClick={resetSelection}
+                ariaLabel="Exit selection mode"
+                isDarkMode={isDarkMode}
+              />
             </>
           ) : (
             <>
-              <Tooltip.Provider>
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    {isSortDirectionDisabled ? (
-                      <button
-                        onClick={handleReseed}
-                        className={`hover:${isDarkMode ? "bg-gray-700" : "bg-gray-200"} p-2 rounded-full`}
-                      >
-                        <FaDice size={20} />
-                      </button>
+              {isSortDirectionDisabled ? (
+                <TooltipButton
+                  icon={<FaDice size={20} />}
+                  label="Reseed random order"
+                  onClick={handleReseed}
+                  ariaLabel="Reseed random order"
+                  isDarkMode={isDarkMode}
+                />
+              ) : (
+                <TooltipButton
+                  icon={
+                    sortDirection === "desc" ? (
+                      <FaSortAmountDown size={20} />
                     ) : (
-                      <button
-                        onClick={toggleSortDirection}
-                        className={`hover:${isDarkMode ? "bg-gray-700" : "bg-gray-200"} p-2 rounded-full`}
-                      >
-                        {sortDirection === "desc" ? (
-                          <FaSortAmountDown size={20} />
-                        ) : (
-                          <FaSortAmountUp size={20} />
-                        )}
-                      </button>
-                    )}
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content
-                      className={`${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} px-2 py-1 rounded text-sm z-50`}
-                    >
-                      {isSortDirectionDisabled
-                        ? "Reseed random order"
-                        : sortDirection === "desc"
-                          ? "Sort Descending"
-                          : "Sort Ascending"}
-                      <Tooltip.Arrow
-                        className={`fill-${isDarkMode ? "gray-700" : "white"}`}
-                      />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
-
-              <Tooltip.Provider>
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <button
-                      onClick={toggleSortType}
-                      className={`hover:${isDarkMode ? "bg-gray-700" : "bg-gray-200"} p-2 rounded-full`}
-                    >
-                      {sortType === "created_at" ? (
-                        <FaRegCalendarAlt size={20} />
-                      ) : (
-                        <FaShuffle size={20} />
-                      )}
-                    </button>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content
-                      className={`${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} px-2 py-1 rounded text-sm z-50`}
-                    >
-                      {sortType === "created_at"
-                        ? "Sort by Date"
-                        : "Sort Randomly"}
-                      <Tooltip.Arrow
-                        className={`fill-${isDarkMode ? "gray-700" : "white"}`}
-                      />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
-              <Tooltip.Provider>
-                <Tooltip.Root>
-                  <Tooltip.Trigger asChild>
-                    <button
-                      onClick={() => setIsStatsOpen(true)}
-                      className={`hover:${isDarkMode ? "bg-gray-700" : "bg-gray-200"} p-2 rounded-full`}
-                    >
-                      <FaChartBar size={20} />
-                    </button>
-                  </Tooltip.Trigger>
-                  <Tooltip.Portal>
-                    <Tooltip.Content
-                      className={`${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} px-2 py-1 rounded text-sm z-50`}
-                    >
-                      View Stats
-                      <Tooltip.Arrow
-                        className={`fill-${isDarkMode ? "gray-700" : "white"}`}
-                      />
-                    </Tooltip.Content>
-                  </Tooltip.Portal>
-                </Tooltip.Root>
-              </Tooltip.Provider>
+                      <FaSortAmountUp size={20} />
+                    )
+                  }
+                  label={
+                    sortDirection === "desc" ? "Sort Descending" : "Sort Ascending"
+                  }
+                  onClick={toggleSortDirection}
+                  ariaLabel={`Sort ${sortDirection === "desc" ? "descending" : "ascending"}`}
+                  isDarkMode={isDarkMode}
+                />
+              )}
+              <TooltipButton
+                icon={
+                  sortType === "created_at" ? (
+                    <FaRegCalendarAlt size={20} />
+                  ) : (
+                    <FaShuffle size={20} />
+                  )
+                }
+                label={sortType === "created_at" ? "Sort by Date" : "Sort Randomly"}
+                onClick={toggleSortType}
+                ariaLabel={`Sort by ${sortType === "created_at" ? "date" : "random"}`}
+                isDarkMode={isDarkMode}
+              />
+              <TooltipButton
+                icon={<FaChartBar size={20} />}
+                label="View Stats"
+                onClick={() => setIsStatsOpen(true)}
+                ariaLabel="View statistics"
+                isDarkMode={isDarkMode}
+              />
             </>
           )}
-          <Tooltip.Provider>
-            <Tooltip.Root>
-              <Tooltip.Trigger asChild>
-                <button
-                  onClick={toggleDarkMode}
-                  className={`hover:${isDarkMode ? "bg-gray-700" : "bg-gray-200"} p-2 rounded-full`}
-                >
-                  {isDarkMode ? <FaSun size={20} /> : <FaMoon size={20} />}
-                </button>
-              </Tooltip.Trigger>
-              <Tooltip.Portal>
-                <Tooltip.Content
-                  className={`${isDarkMode ? "bg-gray-700 text-white" : "bg-white text-gray-900"} px-2 py-1 rounded text-sm z-50`}
-                >
-                  {isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
-                  <Tooltip.Arrow
-                    className={`fill-${isDarkMode ? "gray-700" : "white"}`}
-                  />
-                </Tooltip.Content>
-              </Tooltip.Portal>
-            </Tooltip.Root>
-          </Tooltip.Provider>
+          <TooltipButton
+            icon={isDarkMode ? <FaSun size={20} /> : <FaMoon size={20} />}
+            label={isDarkMode ? "Switch to Light Mode" : "Switch to Dark Mode"}
+            onClick={toggleDarkMode}
+            ariaLabel={`Switch to ${isDarkMode ? "light" : "dark"} mode`}
+            isDarkMode={isDarkMode}
+          />
         </div>
       </div>
       <StatsDialog isOpen={isStatsOpen} onClose={() => setIsStatsOpen(false)} />

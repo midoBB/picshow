@@ -118,7 +118,6 @@ export const useDeleteFile = () => {
 };
 export const useThumbnail = (fileId: string) => {
   const enabled = !!fileId;
-  const queryClient = useQueryClient();
   return useQuery({
     queryKey: ["thumbnail", fileId],
     queryFn: () => fetchThumbnail(fileId),
@@ -128,11 +127,5 @@ export const useThumbnail = (fileId: string) => {
     refetchOnReconnect: false,
     refetchOnMount: false,
     gcTime: 1000 * 60 * 60, // 1 hour
-    onSuccess: (data) => {
-      const existingUrl = queryClient.getQueryData(["thumbnail", fileId]);
-      if (existingUrl && typeof existingUrl === "string") {
-        URL.revokeObjectURL(existingUrl);
-      }
-    },
   });
 };

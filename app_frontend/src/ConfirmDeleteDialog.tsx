@@ -31,7 +31,7 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
       queryKey: ["thumbnail", file.Id],
       queryFn: () => fetchThumbnail(file.Id),
       staleTime: Infinity,
-      cacheTime: Infinity,
+      gcTime: Infinity,
       refetchOnWindowFocus: false,
       refetchOnReconnect: false,
       refetchOnMount: false,

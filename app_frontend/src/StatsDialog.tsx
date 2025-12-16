@@ -9,7 +9,7 @@ interface StatsDialogProps {
 }
 
 const StatsDialog = ({ isOpen, onClose }: StatsDialogProps) => {
-  const { data: stats, isLoading } = useStats();
+  const { data: stats, isLoading, isError, error } = useStats();
   const { isDarkMode } = useAppState();
 
   const StatCard = ({
@@ -52,7 +52,18 @@ const StatsDialog = ({ isOpen, onClose }: StatsDialogProps) => {
           <Dialog.Title className="text-2xl font-bold mb-6">
             Media Statistics
           </Dialog.Title>
-          {isLoading ? (
+          {isError ? (
+            <div className="flex justify-center items-center h-40">
+              <div className="text-center">
+                <p className={`text-lg font-semibold mb-2 ${isDarkMode ? "text-red-400" : "text-red-600"}`}>
+                  Error Loading Statistics
+                </p>
+                <p className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
+                  {error instanceof Error ? error.message : "Failed to load stats. Please try again."}
+                </p>
+              </div>
+            </div>
+          ) : isLoading ? (
             <div className="flex justify-center items-center h-40">
               <div
                 className={`animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 ${isDarkMode ? "border-white" : "border-gray-900"}`}
