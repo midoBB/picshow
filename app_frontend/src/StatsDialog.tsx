@@ -55,11 +55,17 @@ const StatsDialog = ({ isOpen, onClose }: StatsDialogProps) => {
           {isError ? (
             <div className="flex justify-center items-center h-40">
               <div className="text-center">
-                <p className={`text-lg font-semibold mb-2 ${isDarkMode ? "text-red-400" : "text-red-600"}`}>
+                <p
+                  className={`text-lg font-semibold mb-2 ${isDarkMode ? "text-red-400" : "text-red-600"}`}
+                >
                   Error Loading Statistics
                 </p>
-                <p className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
-                  {error instanceof Error ? error.message : "Failed to load stats. Please try again."}
+                <p
+                  className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
+                >
+                  {error instanceof Error
+                    ? error.message
+                    : "Failed to load stats. Please try again."}
                 </p>
               </div>
             </div>

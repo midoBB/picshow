@@ -246,7 +246,9 @@ const Navbar = ({
                     )
                   }
                   label={
-                    sortDirection === "desc" ? "Sort Descending" : "Sort Ascending"
+                    sortDirection === "desc"
+                      ? "Sort Descending"
+                      : "Sort Ascending"
                   }
                   onClick={toggleSortDirection}
                   ariaLabel={`Sort ${sortDirection === "desc" ? "descending" : "ascending"}`}
@@ -261,7 +263,9 @@ const Navbar = ({
                     <FaShuffle size={20} />
                   )
                 }
-                label={sortType === "created_at" ? "Sort by Date" : "Sort Randomly"}
+                label={
+                  sortType === "created_at" ? "Sort by Date" : "Sort Randomly"
+                }
                 onClick={toggleSortType}
                 ariaLabel={`Sort by ${sortType === "created_at" ? "date" : "random"}`}
                 isDarkMode={isDarkMode}
