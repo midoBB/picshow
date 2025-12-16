@@ -28,15 +28,33 @@ impl OperationLock {
         // Set up signal handling
         let lock_path_clone = BACKUP_LOCK_PATH.to_string();
         tokio::spawn(async move {
-            let mut sigint = signal(SignalKind::interrupt()).unwrap();
-            let mut sigterm = signal(SignalKind::terminate()).unwrap();
+            let mut sigint = match signal(SignalKind::interrupt()) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    tracing::error!("Failed to setup SIGINT handler: {}", e);
+                    return;
+                }
+            };
+            let mut sigterm = match signal(SignalKind::terminate()) {
+                Ok(sig) => sig,
+                Err(e) => {
+                    tracing::error!("Failed to setup SIGTERM handler: {}", e);
+                    return;
+                }
+            };
 
             tokio::select! {
-                _ = sigint.recv() => {},
-                _ = sigterm.recv() => {},
+                _ = sigint.recv() => {
+                    tracing::info!("Received SIGINT, cleaning up lock file");
+                },
+                _ = sigterm.recv() => {
+                    tracing::info!("Received SIGTERM, cleaning up lock file");
+                },
             }
 
-            let _ = tokio::fs::remove_file(lock_path_clone).await;
+            if let Err(e) = tokio::fs::remove_file(&lock_path_clone).await {
+                tracing::error!("Failed to remove lock file {}: {}", lock_path_clone, e);
+            }
             std::process::exit(0);
         });
 

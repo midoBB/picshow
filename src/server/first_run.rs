@@ -124,7 +124,13 @@ async fn browse_directory(Json(payload): Json<BrowseRequest>) -> impl IntoRespon
         Ok(entries) => {
             let mut items: Vec<DirectoryItem> = Vec::new();
             for entry in entries.filter_map(Result::ok) {
-                let file_type = entry.file_type().unwrap();
+                let file_type = match entry.file_type() {
+                    Ok(ft) => ft,
+                    Err(e) => {
+                        tracing::error!("Failed to get file type for entry: {}", e);
+                        continue; // Skip this entry if we can't determine its type
+                    }
+                };
                 let is_dir = file_type.is_dir();
                 let is_hidden = entry.file_name().to_string_lossy().starts_with('.');
                 let hidden_wanted = payload.show_hidden;

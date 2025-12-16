@@ -140,7 +140,17 @@ async fn get_thumbnail(
         }
     };
     let media_file = match state.repo.get_file_by_id(file_id, true).await {
-        Ok(file) => FilledMediaFile::try_from(file).unwrap(),
+        Ok(file) => match FilledMediaFile::try_from(file) {
+            Ok(filled) => filled,
+            Err(e) => {
+                tracing::error!("Failed to convert media file: {:?}", e);
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::response::Json(json!({"error": "Failed to convert media file"})),
+                )
+                    .into_response();
+            }
+        },
         Err(e) => {
             tracing::error!("Failed to get file: {:?}", e);
             return (
@@ -191,7 +201,17 @@ async fn get_media_file(state: Arc<AppState>, id: String, headers: HeaderMap) ->
     };
 
     let media_file = match state.repo.get_file_by_id(file_id, true).await {
-        Ok(file) => FilledMediaFile::try_from(file).unwrap(),
+        Ok(file) => match FilledMediaFile::try_from(file) {
+            Ok(filled) => filled,
+            Err(e) => {
+                tracing::error!("Failed to convert media file: {:?}", e);
+                return (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    axum::response::Json(json!({"error": "Failed to convert media file"})),
+                )
+                    .into_response();
+            }
+        },
         Err(e) => {
             tracing::error!("Failed to get file: {:?}", e);
             return (

@@ -145,11 +145,11 @@ async fn process_files(
     }
 }
 fn port_is_available(port: u16) -> bool {
-    let listener = std::net::TcpListener::bind(format!("0.0.0.0:{}", port));
-    if listener.is_err() {
-        return false;
+    match std::net::TcpListener::bind(format!("0.0.0.0:{}", port)) {
+        Ok(listener) => {
+            drop(listener);
+            true
+        }
+        Err(_) => false,
     }
-    let listener = listener.unwrap();
-    drop(listener);
-    true
 }

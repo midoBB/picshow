@@ -293,10 +293,10 @@ pub async fn get_mime_guess(file_path: &str) -> Result<MediaType> {
         .iter()
         .map(|x| x.to_string())
         .find(|x| x.contains("video") || x.contains("image"))
-        .unwrap_or("other/other".to_string())
+        .unwrap_or_else(|| "other/other".to_string())
         .split_once("/")
-        .unwrap()
-        .0
+        .map(|(name, _)| name)
+        .unwrap_or("other")
         .to_string();
     MediaType::try_from(mime_name)
 }

@@ -17,6 +17,12 @@ use crate::cache::{self, AppCache};
 use crate::config::AppConfig;
 use crate::server::{FileQueryType, FilledFileQuery};
 
+// Database configuration constants
+const DEFAULT_CACHE_SIZE: &str = "-64000";
+const DEFAULT_PAGE_SIZE: &str = "4096";
+const DEFAULT_WAL_CHECKPOINT: &str = "1000";
+const DEFAULT_BUSY_TIMEOUT_SECS: u64 = 10;
+
 #[derive(Clone, Debug)]
 pub struct MediaRepository {
     read_pool: sqlx::SqlitePool,
@@ -36,23 +42,23 @@ impl MediaRepository {
             .pragma("journal_mode", "WAL")
             .pragma("synchronous", "FULL")
             .pragma("foreign_keys", "ON")
-            .pragma("cache_size", "-64000")
+            .pragma("cache_size", DEFAULT_CACHE_SIZE)
             .pragma("temp_store", "MEMORY")
-            .pragma("page_size", "4096")
+            .pragma("page_size", DEFAULT_PAGE_SIZE)
             .pragma("secure_delete", "OFF")
-            .pragma("wal_autocheckpoint", "1000")
-            .busy_timeout(Duration::from_secs(10));
+            .pragma("wal_autocheckpoint", DEFAULT_WAL_CHECKPOINT)
+            .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
         let write_options = SqliteConnectOptions::from_str(url_db_path)?
             .pragma("journal_mode", "WAL")
             .pragma("synchronous", "FULL")
             .pragma("foreign_keys", "ON")
-            .pragma("cache_size", "-64000")
+            .pragma("cache_size", DEFAULT_CACHE_SIZE)
             .pragma("temp_store", "MEMORY")
-            .pragma("page_size", "4096")
+            .pragma("page_size", DEFAULT_PAGE_SIZE)
             .pragma("secure_delete", "OFF")
-            .pragma("wal_autocheckpoint", "1000")
+            .pragma("wal_autocheckpoint", DEFAULT_WAL_CHECKPOINT)
             .pragma("auto_vacuum", "INCREMENTAL")
-            .busy_timeout(Duration::from_secs(10));
+            .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
         let read_pool = SqlitePoolOptions::new()
             .max_connections(10)
             .min_connections(2)
@@ -89,14 +95,15 @@ impl MediaRepository {
         &self.read_pool
     }
 
-    async fn get_write_conn(&self) -> Arc<sqlx::SqlitePool> {
-        let _ = self.write_semaphore.read().await.acquire().await.unwrap();
-        Arc::clone(&self.write_pool)
+    async fn get_write_conn(&self) -> Result<Arc<sqlx::SqlitePool>> {
+        let _ = self.write_semaphore.read().await.acquire().await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire write semaphore: {}", e))?;
+        Ok(Arc::clone(&self.write_pool))
     }
 
     async fn init_schema(&self) -> Result<()> {
         sqlx::migrate!("./migrations")
-            .run(self.get_write_conn().await.borrow())
+            .run(self.get_write_conn().await?.borrow())
             .await?;
         Ok(())
     }
@@ -145,14 +152,14 @@ impl MediaRepository {
         warn!("Attempting database repair...");
 
         if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.get_write_conn().await.borrow())
+            .execute(self.get_write_conn().await?.borrow())
             .await
         {
             error!("Failed to checkpoint WAL during repair: {}", e);
         }
 
         if let Err(e) = sqlx::query("PRAGMA incremental_vacuum")
-            .execute(self.get_write_conn().await.borrow())
+            .execute(self.get_write_conn().await?.borrow())
             .await
         {
             error!("Failed to vacuum database during repair: {}", e);
@@ -188,17 +195,17 @@ impl MediaRepository {
 
         debug!("Checkpointing WAL...");
         sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.get_write_conn().await.borrow())
+            .execute(self.get_write_conn().await?.borrow())
             .await?;
 
         debug!("Performing incremental vacuum...");
         sqlx::query("PRAGMA incremental_vacuum")
-            .execute(self.get_write_conn().await.borrow())
+            .execute(self.get_write_conn().await?.borrow())
             .await?;
 
         debug!("Analyzing database statistics...");
         sqlx::query("PRAGMA analyze")
-            .execute(self.get_write_conn().await.borrow())
+            .execute(self.get_write_conn().await?.borrow())
             .await?;
 
         info!("Database maintenance completed");
@@ -240,7 +247,8 @@ impl MediaRepository {
     pub async fn lock_writes(&self) -> Result<()> {
         trace!("Locking writes");
         // Force acquire the lock semaphore first
-        let _lock = self.lock_semaphore.acquire().await.unwrap();
+        let _lock = self.lock_semaphore.acquire().await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire lock semaphore: {}", e))?;
 
         // Wait a small duration for current operations to complete
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -272,10 +280,8 @@ impl MediaRepository {
         img_vid_id: uuid::Uuid,
         _thumb_id: uuid::Uuid,
     ) -> Result<FilledMediaFile> {
-        let media_type = media_file.media_type.clone();
-
         // Single optimized query with JOIN to get both media and thumbnail data
-        let query_str = match media_type {
+        let query_str = match &media_file.media_type {
             MediaType::Image => {
                 "SELECT i.id, i.width, i.height, 0 as duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
                  FROM images i JOIN thumbnails t ON i.thumbnail_id = t.id
@@ -300,7 +306,12 @@ impl MediaRepository {
             data: row.get("thumb_data"),
         };
 
-        match media_type {
+        let mime_type = match media_file.mime_type.clone() {
+            Some(mime) => mime,
+            None => return Err(anyhow::anyhow!("Missing mime_type for media file")),
+        };
+
+        match &media_file.media_type {
             MediaType::Image => {
                 let image = Image {
                     id: row.get("id"),
@@ -308,9 +319,7 @@ impl MediaRepository {
                     height: row.get("height"),
                     thumbnail,
                 };
-                Ok(media_file
-                    .clone()
-                    .with_image(image, media_file.mime_type.unwrap()))
+                Ok(media_file.with_image(image, mime_type.clone()))
             }
             MediaType::Video => {
                 let video = Video {
@@ -321,8 +330,7 @@ impl MediaRepository {
                     thumbnail,
                 };
                 Ok(media_file
-                    .clone()
-                    .with_video(video, media_file.mime_type.unwrap()))
+                    .with_video(video, mime_type.clone()))
             }
         }
     }
@@ -459,7 +467,7 @@ impl MediaRepository {
             return Ok(());
         }
 
-        let mut tx = self.get_write_conn().await.begin().await?;
+        let mut tx = self.get_write_conn().await?.begin().await?;
         let placeholders = ["?"].repeat(file_ids.len()).join(",");
 
         // Optimized single query to get stats and delete in one operation using CTE
@@ -526,7 +534,7 @@ impl MediaRepository {
     /// Atomically insert or update a file, handling duplicates gracefully
     /// Returns Ok(MediaFile) if successful, Err if file should be treated as duplicate
     pub async fn upsert_file(&self, media_file: FilledMediaFile) -> Result<MediaFile> {
-        let mut tx = self.get_write_conn().await.begin().await?;
+        let mut tx = self.get_write_conn().await?.begin().await?;
 
         // Check if file with same hash exists
         let existing_by_hash: Option<UnfilledMediaFile> = sqlx::query_as::<_, UnfilledMediaFile>(
@@ -639,13 +647,13 @@ impl MediaRepository {
     ) -> Result<()> {
         debug!("Saving image to database {}", media_file.filename);
         let image = media_file.media.as_image().expect("Should be an image");
-        let thumbnail = image.thumbnail.clone();
 
+        // Insert thumbnail first
         sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(thumbnail.id)
-            .bind(thumbnail.width)
-            .bind(thumbnail.height)
-            .bind(thumbnail.data)
+            .bind(&image.thumbnail.id)
+            .bind(image.thumbnail.width)
+            .bind(image.thumbnail.height)
+            .bind(&image.thumbnail.data)
             .execute(&mut **tx)
             .await?;
 
@@ -653,7 +661,7 @@ impl MediaRepository {
             .bind(image.id)
             .bind(image.width)
             .bind(image.height)
-            .bind(thumbnail.id)
+            .bind(&image.thumbnail.id)
             .execute(&mut **tx)
             .await?;
 
@@ -688,7 +696,7 @@ impl MediaRepository {
         let image = media_file.media.as_image().expect("Should be an image");
         let thumbnail = image.thumbnail.clone();
 
-        let mut tx = self.get_write_conn().await.begin().await?;
+        let mut tx = self.get_write_conn().await?.begin().await?;
 
         sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
             .bind(thumbnail.id)
@@ -740,13 +748,13 @@ impl MediaRepository {
     ) -> Result<()> {
         debug!("Saving video to database {}", media_file.filename);
         let video = media_file.media.as_video().expect("Should be a video");
-        let thumbnail = video.thumbnail.clone();
 
+        // Insert thumbnail first
         sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(thumbnail.id)
-            .bind(thumbnail.width)
-            .bind(thumbnail.height)
-            .bind(thumbnail.data)
+            .bind(&video.thumbnail.id)
+            .bind(video.thumbnail.width)
+            .bind(video.thumbnail.height)
+            .bind(&video.thumbnail.data)
             .execute(&mut **tx)
             .await?;
 
@@ -758,7 +766,7 @@ impl MediaRepository {
         .bind(video.width)
         .bind(video.height)
         .bind(video.duration_ms as i64)
-        .bind(thumbnail.id)
+        .bind(&video.thumbnail.id)
         .execute(&mut **tx)
         .await?;
 
@@ -793,7 +801,7 @@ impl MediaRepository {
         let video = media_file.media.as_video().expect("Should be a video");
         let thumbnail = video.thumbnail.clone();
 
-        let mut tx = self.get_write_conn().await.begin().await?;
+        let mut tx = self.get_write_conn().await?.begin().await?;
 
         sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
             .bind(thumbnail.id)
@@ -907,7 +915,7 @@ impl MediaRepository {
         new_file_name: &str,
         last_modified: DateTime<Utc>,
     ) -> Result<()> {
-        let mut tx = self.get_write_conn().await.begin().await?;
+        let mut tx = self.get_write_conn().await?.begin().await?;
         sqlx::query("UPDATE media_files SET filename = ?, last_modified = ? WHERE id = ?")
             .bind(new_file_name)
             .bind(last_modified)
@@ -944,7 +952,7 @@ impl MediaRepository {
         let vid_count = data.iter().filter(|(t, _)| *t == MediaType::Video).count();
         let fav_count = data.iter().filter(|(_, f)| *f).count();
 
-        let mut tx = self.get_write_conn().await.begin().await?;
+        let mut tx = self.get_write_conn().await?.begin().await?;
         let query = format!(
             "DELETE FROM media_files WHERE hash NOT IN ({})",
             placeholders
@@ -972,7 +980,7 @@ impl MediaRepository {
     }
 
     pub async fn toggle_favorite_status(&self, file_id: Uuid) -> Result<()> {
-        let mut tx = self.get_write_conn().await.begin().await?;
+        let mut tx = self.get_write_conn().await?.begin().await?;
         let is_favorite: bool =
             sqlx::query_scalar("SELECT is_favorite FROM media_files WHERE id = ?")
                 .bind(file_id)
@@ -1116,7 +1124,10 @@ impl MediaRepository {
                     data: row.get("thumb_data"),
                 };
 
-                let mime_type = media_file.mime_type.clone().unwrap();
+                let mime_type = match media_file.mime_type.clone() {
+                    Some(mime) => mime,
+                    None => return Err(anyhow::anyhow!("Missing mime_type for media file")),
+                };
                 match media_file.media_type {
                     MediaType::Image => {
                         let image = Image {
@@ -1125,7 +1136,7 @@ impl MediaRepository {
                             height: row.get("height"),
                             thumbnail,
                         };
-                        media_file.with_image(image, mime_type)
+                        Ok(media_file.with_image(image, mime_type.clone()))
                     }
                     MediaType::Video => {
                         let video = Video {
@@ -1135,11 +1146,11 @@ impl MediaRepository {
                             duration_ms: row.get::<i64, _>("duration_ms") as u64,
                             thumbnail,
                         };
-                        media_file.with_video(video, mime_type)
+                        Ok(media_file.with_video(video, mime_type))
                     }
                 }
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         let result = (pagination, filled_files);
         self.cache.set(cache_key, &result).await;
@@ -1164,17 +1175,20 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
                 | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )?;
         conn.execute_batch(
-            r#"
+            &format!(
+                r#"
                 PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = FULL;
                 PRAGMA busy_timeout = 30000;
-                PRAGMA cache_size = -64000;
+                PRAGMA cache_size = {};
                 PRAGMA temp_store = MEMORY;
-                PRAGMA page_size = 4096;
+                PRAGMA page_size = {};
                 PRAGMA secure_delete = OFF;
-                PRAGMA wal_autocheckpoint = 1000;
+                PRAGMA wal_autocheckpoint = {};
                 PRAGMA auto_vacuum = INCREMENTAL;
-            "#,
+                "#,
+                DEFAULT_CACHE_SIZE, DEFAULT_PAGE_SIZE, DEFAULT_WAL_CHECKPOINT
+            ),
         )?;
     }
     Ok(())

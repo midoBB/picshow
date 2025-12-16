@@ -22,7 +22,7 @@ pub async fn handle_restore(config: AppConfig, source: PathBuf) -> Result<()> {
         make_lock_request(&config, InternalOP::Unlock).await?;
         return Err(e);
     }
-    match repo.unwrap().restore(source).await {
+    match repo?.restore(source).await {
         Ok(_) => {
             make_lock_request(&config, InternalOP::Unlock).await?;
             info!("Restore completed");

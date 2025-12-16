@@ -18,7 +18,9 @@ pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> R
     let datetime = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let default_path = format!("{}picshow.{}.bak", config.backup_folder_path, datetime).to_string();
     let dest_path = destination.unwrap_or(default_path.into());
-    let dest_path = dest_path.as_os_str().to_str().unwrap().to_string();
+    let dest_path = dest_path.as_os_str().to_str()
+        .ok_or_else(|| anyhow::anyhow!("Invalid destination path: contains non-UTF-8 characters"))?
+        .to_string();
     ensure_dir(&dest_path).await?;
     info!("Backing up the database to file: {}", dest_path.clone());
     let db_path = format!("{}picshow.db", config.db_path.clone());
@@ -27,7 +29,7 @@ pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> R
         make_lock_request(&config, InternalOP::Unlock).await?;
         return Err(e);
     }
-    match repo.unwrap().backup(dest_path).await {
+    match repo?.backup(dest_path).await {
         Ok(_) => {
             make_lock_request(&config, InternalOP::Unlock).await?;
             info!("Backup completed");

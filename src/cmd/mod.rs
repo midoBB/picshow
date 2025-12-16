@@ -86,7 +86,7 @@ pub(crate) async fn make_lock_request(
         }
         return Err(e.into());
     }
-    let response = response.unwrap();
+    let response = response.map_err(|e| anyhow::anyhow!("HTTP request failed: {}", e))?;
     match response.status() {
         reqwest::StatusCode::NO_CONTENT => {
             info!("Database is {} during this operation", op);
