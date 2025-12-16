@@ -1,5 +1,8 @@
 use anyhow::Result;
-use sqlx::{sqlite::{SqliteConnectOptions, SqlitePoolOptions}, Row};
+use sqlx::{
+    sqlite::{SqliteConnectOptions, SqlitePoolOptions},
+    Row,
+};
 use std::borrow::Borrow;
 use std::str::FromStr as _;
 use std::time::Duration;
@@ -305,10 +308,9 @@ impl MediaRepository {
                     height: row.get("height"),
                     thumbnail,
                 };
-                Ok(media_file.clone().with_image(
-                    image,
-                    media_file.mime_type.unwrap(),
-                ))
+                Ok(media_file
+                    .clone()
+                    .with_image(image, media_file.mime_type.unwrap()))
             }
             MediaType::Video => {
                 let video = Video {
@@ -318,10 +320,9 @@ impl MediaRepository {
                     duration_ms: row.get::<i64, _>("duration_ms") as u64,
                     thumbnail,
                 };
-                Ok(media_file.clone().with_video(
-                    video,
-                    media_file.mime_type.unwrap(),
-                ))
+                Ok(media_file
+                    .clone()
+                    .with_video(video, media_file.mime_type.unwrap()))
             }
         }
     }
@@ -419,18 +420,18 @@ impl MediaRepository {
         )
         .bind(filename)
         .fetch_one(self.get_read_conn())
-        .await? > 0)
+        .await?
+            > 0)
     }
 
     pub async fn exists_by_hash(&self, hash: String) -> Result<bool> {
         // Optimized EXISTS query using COUNT with LIMIT for early termination
         Ok(
-            sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM media_files WHERE hash = ? LIMIT 1",
-            )
-            .bind(hash)
-            .fetch_one(self.get_read_conn())
-            .await? > 0,
+            sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM media_files WHERE hash = ? LIMIT 1")
+                .bind(hash)
+                .fetch_one(self.get_read_conn())
+                .await?
+                > 0,
         )
     }
 
@@ -784,7 +785,10 @@ impl MediaRepository {
                 if let Some(seed) = query.seed {
                     // Use deterministic hash-based ordering with seed
                     // This combines the rowid with the seed for deterministic randomness
-                    format!("(((mf.rowid + {}) * 1103515245 + 12345) % 2147483647)", seed)
+                    format!(
+                        "(((mf.rowid + {}) * 1103515245 + 12345) % 2147483647)",
+                        seed
+                    )
                 } else {
                     "RANDOM()".to_string()
                 }
@@ -829,50 +833,53 @@ impl MediaRepository {
             .fetch_all(self.get_read_conn())
             .await?;
 
-        let filled_files: Vec<FilledMediaFile> = rows.into_iter().map(|row| {
-            let media_file = UnfilledMediaFile {
-                id: row.get("id"),
-                hash: row.get("hash"),
-                created_at: row.get("created_at"),
-                filename: row.get("filename"),
-                size: row.get("size"),
-                media_type: row.get("media_type"),
-                last_modified: row.get("last_modified"),
-                is_favorite: row.get("is_favorite"),
-                mime_type: row.get("mime_type"),
-                media: None,
-            };
+        let filled_files: Vec<FilledMediaFile> = rows
+            .into_iter()
+            .map(|row| {
+                let media_file = UnfilledMediaFile {
+                    id: row.get("id"),
+                    hash: row.get("hash"),
+                    created_at: row.get("created_at"),
+                    filename: row.get("filename"),
+                    size: row.get("size"),
+                    media_type: row.get("media_type"),
+                    last_modified: row.get("last_modified"),
+                    is_favorite: row.get("is_favorite"),
+                    mime_type: row.get("mime_type"),
+                    media: None,
+                };
 
-            let thumbnail = Thumbnail {
-                id: row.get("thumbnail_id"),
-                width: row.get("thumb_width"),
-                height: row.get("thumb_height"),
-                data: row.get("thumb_data"),
-            };
+                let thumbnail = Thumbnail {
+                    id: row.get("thumbnail_id"),
+                    width: row.get("thumb_width"),
+                    height: row.get("thumb_height"),
+                    data: row.get("thumb_data"),
+                };
 
-            let mime_type = media_file.mime_type.clone().unwrap();
-            match media_file.media_type {
-                MediaType::Image => {
-                    let image = Image {
-                        id: row.get("media_id"),
-                        width: row.get("width"),
-                        height: row.get("height"),
-                        thumbnail,
-                    };
-                    media_file.with_image(image, mime_type)
+                let mime_type = media_file.mime_type.clone().unwrap();
+                match media_file.media_type {
+                    MediaType::Image => {
+                        let image = Image {
+                            id: row.get("media_id"),
+                            width: row.get("width"),
+                            height: row.get("height"),
+                            thumbnail,
+                        };
+                        media_file.with_image(image, mime_type)
+                    }
+                    MediaType::Video => {
+                        let video = Video {
+                            id: row.get("media_id"),
+                            width: row.get("width"),
+                            height: row.get("height"),
+                            duration_ms: row.get::<i64, _>("duration_ms") as u64,
+                            thumbnail,
+                        };
+                        media_file.with_video(video, mime_type)
+                    }
                 }
-                MediaType::Video => {
-                    let video = Video {
-                        id: row.get("media_id"),
-                        width: row.get("width"),
-                        height: row.get("height"),
-                        duration_ms: row.get::<i64, _>("duration_ms") as u64,
-                        thumbnail,
-                    };
-                    media_file.with_video(video, mime_type)
-                }
-            }
-        }).collect();
+            })
+            .collect();
 
         let result = (pagination, filled_files);
         self.cache.set(cache_key, &result).await;
