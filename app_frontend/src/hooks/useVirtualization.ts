@@ -1,5 +1,5 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useRef } from "react";
 import type { File } from "@/queries/model";
 
 export const useVirtualization = (
@@ -10,6 +10,8 @@ export const useVirtualization = (
   debouncedLoadMore: () => void,
   containerSize: { width: number; height: number },
 ) => {
+  const previousFilesLength = useRef(0);
+
   const estimateSize = useCallback(
     (index: number) => {
       const file = allFiles[index];
@@ -32,10 +34,30 @@ export const useVirtualization = (
     lanes: columnCount,
   });
 
+  // Initial measurement
   useEffect(() => {
     rowVirtualizer.measure();
   }, [rowVirtualizer]);
 
+  // Remeasure when files change (especially when first loaded)
+  useEffect(() => {
+    if (previousFilesLength.current === 0 && allFiles.length > 0) {
+      // Files loaded for the first time, force remeasurement
+      setTimeout(() => {
+        rowVirtualizer.measure();
+      }, 50);
+    }
+    previousFilesLength.current = allFiles.length;
+  }, [allFiles.length, rowVirtualizer]);
+
+  // Also remeasure when container size changes
+  useEffect(() => {
+    if (containerSize.width > 0 && containerSize.height > 0) {
+      rowVirtualizer.measure();
+    }
+  }, [containerSize, rowVirtualizer]);
+
+  // Scroll handling
   useEffect(() => {
     const scrollElement = containerRef.current;
     if (!scrollElement) return;
@@ -53,7 +75,7 @@ export const useVirtualization = (
     return () => {
       scrollElement.removeEventListener("scroll", handleScroll);
     };
-  }, [debouncedLoadMore, containerRef]);
+  }, [debouncedLoadMore, containerRef, rowVirtualizer]);
 
   return { rowVirtualizer };
 };

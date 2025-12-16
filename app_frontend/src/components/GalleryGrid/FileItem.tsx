@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
 import { FaRegPlayCircle } from "react-icons/fa";
-import { LuLoader2 } from "react-icons/lu";
 import { useThumbnail } from "@/queries/loaders";
 import type { FileItemProps } from "@/types/gallery";
 
@@ -75,7 +74,7 @@ export const FileItem = React.memo(
           >
             {isLoading && (
               <div className="absolute inset-0 flex items-center justify-center bg-gray-100 dark:bg-gray-800">
-                <LuLoader2 className="w-8 h-8 animate-spin text-blue-500" />
+                <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500"></div>
               </div>
             )}
 

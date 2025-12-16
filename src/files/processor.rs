@@ -1,14 +1,14 @@
 use crate::{
-    config::AppConfig,
+    config::{AppConfig, DuplicateHandling},
     data::{repository::MediaRepository, MediaFile, MediaType, UnfilledMediaFile},
     files::handler::get_mime_guess,
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use dashmap::DashSet;
 use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::HashSet,
     path::PathBuf,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -56,8 +56,11 @@ impl Processor {
             self.duplicate_path.as_path().display()
         );
         ensure_path(self.duplicate_path.clone()).await?;
-        let processed_hashes: Arc<DashSet<String>> = Arc::new(DashSet::new());
+
+        // Track processed hashes for cleanup phase
+        let processed_hashes: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
         let final_processed_hashes = processed_hashes.clone();
+
         let folder = PathBuf::from(self.config.clone().folder_path.as_str());
         let concurrency_max = self.config.concurrency as usize;
         let semaphore = Arc::new(Semaphore::new(concurrency_max));
@@ -74,13 +77,15 @@ impl Processor {
         let mut media_stream = futures::stream::iter(entries)
             .map(|entry| {
                 let semaphore_clone = semaphore.clone();
-                let hashset = processed_hashes.clone();
+                let processed_hashes_clone = processed_hashes.clone();
                 let progress_counter = progress_counter.clone();
                 let last_update = last_update.clone();
                 async move {
                     let entry_arc = Arc::new(entry);
                     let _permit = semaphore_clone.acquire().await?;
-                    let res = self.process_file(entry_arc.clone(), hashset).await;
+                    let res = self
+                        .process_file(entry_arc.clone(), processed_hashes_clone)
+                        .await;
                     if let Err(ref error) = res {
                         let filename = entry_arc
                             .clone()
@@ -132,7 +137,7 @@ impl Processor {
     async fn process_file(
         &self,
         entry: Arc<DirEntry>,
-        processed_hashes: Arc<DashSet<String>>,
+        processed_hashes: Arc<Mutex<HashSet<String>>>,
     ) -> Result<MediaFile> {
         let dir_entry = &entry.clone();
         let filename = dir_entry
@@ -150,47 +155,25 @@ impl Processor {
         let last_modified: DateTime<Utc> = metadata.modified()?.into();
         let size = metadata.len() as i64;
         let key = self.handler.generate_key(file_path).await?;
-        let filename_exists = self.repository.exists_by_name(filename.as_str()).await?;
-        if filename_exists {
-            let existing_file = self
-                .repository
-                .get_file_by_filename(filename.as_str(), false)
-                .await?;
+
+        // Check if file exists and hasn't been modified
+        if let Ok(existing_file) = self
+            .repository
+            .get_file_by_filename(filename.as_str(), false)
+            .await
+        {
             let existing_file: UnfilledMediaFile = existing_file.into();
-            if existing_file.hash == key {
+            if existing_file.hash == key && existing_file.last_modified == last_modified {
                 debug!(
                     "File {} has not been modified since last processing, skipping",
                     filename
                 );
+                // Add to processed hashes for cleanup
+                processed_hashes.lock().await.insert(key);
                 return Ok(MediaFile::Unfilled(existing_file));
             }
         }
-        if processed_hashes.contains(&key) {
-            let original_file: UnfilledMediaFile = self
-                .repository
-                .get_file_by_hash(key.clone(), false)
-                .await?
-                .into();
-            self.handle_duplicate_file(filename.as_str(), original_file.filename.as_str())
-                .await?;
-            return Err(anyhow::anyhow!("Found duplicate file: {}", filename));
-        }
-        let hash_exists = self.repository.exists_by_hash(key.clone()).await?;
-        if hash_exists {
-            let existing_file = self.repository.get_file_by_hash(key.clone(), false).await?;
-            let mut existing_file: UnfilledMediaFile = existing_file.into();
-            debug!("Updating existing file record for {}", filename);
-            existing_file.filename = filename.clone();
-            existing_file.last_modified = last_modified;
-            if let Err(err) = self
-                .repository
-                .update_file_name_and_modified_date(existing_file.id, &filename, last_modified)
-                .await
-            {
-                return Err(anyhow::anyhow!("error updating file {}: {}", filename, err));
-            }
-            return Ok(MediaFile::Unfilled(existing_file));
-        }
+
         debug!("Processing new file {}", filename);
         let mime = get_mime_guess(file_path).await?;
         let file = UnfilledMediaFile {
@@ -205,13 +188,53 @@ impl Processor {
             mime_type: None,
             is_favorite: false,
         };
+
         let file = match mime {
             MediaType::Image => self.handler.clone().handle_new_image(file, file_path).await,
             MediaType::Video => self.handler.clone().handle_new_video(file, file_path).await,
         }?;
-        self.repository.insert_file(file.clone()).await?;
-        processed_hashes.insert(key);
-        Ok(MediaFile::Filled(file))
+
+        // Use the new upsert method to handle duplicates atomically
+        match self.repository.upsert_file(file.clone()).await {
+            Ok(media_file) => {
+                // Add to processed hashes for cleanup
+                processed_hashes.lock().await.insert(key);
+                Ok(media_file)
+            }
+            Err(e) if e.to_string().contains("Duplicate file detected") => {
+                // Handle duplicate based on configuration
+                match self.config.duplicate_handling {
+                    DuplicateHandling::MoveToFolder => {
+                        // Try to get the original file for moving
+                        if let Ok(original_file) =
+                            self.repository.get_file_by_hash(key.clone(), false).await
+                        {
+                            let original_file: UnfilledMediaFile = original_file.into();
+                            self.handle_duplicate_file(
+                                filename.as_str(),
+                                original_file.filename.as_str(),
+                            )
+                            .await?;
+                        }
+                    }
+                    DuplicateHandling::Delete => {
+                        let file_path =
+                            PathBuf::from(self.config.folder_path.as_str()).join(&filename);
+                        if let Err(delete_err) = fs::remove_file(file_path).await {
+                            error!(
+                                "Failed to delete duplicate file {}: {}",
+                                filename, delete_err
+                            );
+                        }
+                    }
+                    DuplicateHandling::Skip => {
+                        debug!("Skipping duplicate file: {}", filename);
+                    }
+                }
+                Err(anyhow::anyhow!("Found duplicate file: {}", filename))
+            }
+            Err(e) => Err(e),
+        }
     }
 
     async fn handle_duplicate_file(&self, filename: &str, original_filename: &str) -> Result<()> {
@@ -232,11 +255,13 @@ impl Processor {
 
     async fn handle_non_exsiting_files(
         &self,
-        processed_hashes: Arc<DashSet<String>>,
+        processed_hashes: Arc<Mutex<HashSet<String>>>,
     ) -> Result<()> {
         let hashes = processed_hashes
+            .lock()
+            .await
             .iter()
-            .map(|v| v.to_string())
+            .cloned()
             .collect::<Vec<String>>();
         self.repository
             .remove_non_existing_files_by_hashes(hashes)

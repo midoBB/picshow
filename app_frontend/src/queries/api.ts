@@ -1,5 +1,10 @@
 import axios from "axios";
-import { PaginatedFiles, Stats, AppSettings, PartialAppSettings } from "@/queries/model";
+import {
+  PaginatedFiles,
+  Stats,
+  AppSettings,
+  PartialAppSettings,
+} from "@/queries/model";
 
 export const BASE_URL = "/api";
 
@@ -73,7 +78,7 @@ export const fetchSettings = async (): Promise<AppSettings> => {
 };
 
 export const updateSettings = async (
-  settings: PartialAppSettings
+  settings: PartialAppSettings,
 ): Promise<AppSettings> => {
   const { data } = await api.patch<AppSettings>("/settings", settings);
   return data;

@@ -4,7 +4,11 @@ import { useSettings, useUpdateSettings } from "@/queries/loaders";
 import useAppState from "@/state";
 import { FaChevronDown, FaSave, FaTimes } from "react-icons/fa";
 import { useState, useEffect } from "react";
-import type { AppSettings, DuplicateHandling, DeleteMode } from "@/queries/model";
+import type {
+  AppSettings,
+  DuplicateHandling,
+  DeleteMode,
+} from "@/queries/model";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -16,7 +20,8 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
   const { mutate: updateSettings, isPending } = useUpdateSettings();
   const { isDarkMode } = useAppState();
 
-  const [duplicateHandling, setDuplicateHandling] = useState<DuplicateHandling>("movetofolder");
+  const [duplicateHandling, setDuplicateHandling] =
+    useState<DuplicateHandling>("movetofolder");
   const [deleteMode, setDeleteMode] = useState<DeleteMode>("movetotrash");
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
   const [autoRefreshDuration, setAutoRefreshDuration] = useState(3600);
@@ -42,7 +47,7 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
         onSuccess: () => {
           onClose();
         },
-      }
+      },
     );
   };
 
@@ -128,7 +133,9 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
                 </label>
                 <Select.Root
                   value={duplicateHandling}
-                  onValueChange={(value) => setDuplicateHandling(value as DuplicateHandling)}
+                  onValueChange={(value) =>
+                    setDuplicateHandling(value as DuplicateHandling)
+                  }
                 >
                   <Select.Trigger
                     className={`w-full ${isDarkMode ? "bg-gray-700" : "bg-gray-200"} text-sm rounded-md px-3 py-2 inline-flex items-center justify-between`}
@@ -259,7 +266,9 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
                     max="86400"
                     step="3600"
                     value={autoRefreshDuration}
-                    onChange={(e) => setAutoRefreshDuration(parseInt(e.target.value))}
+                    onChange={(e) =>
+                      setAutoRefreshDuration(parseInt(e.target.value))
+                    }
                     className="flex-1"
                     disabled={!autoRefreshEnabled}
                   />

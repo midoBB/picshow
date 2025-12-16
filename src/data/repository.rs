@@ -523,6 +523,98 @@ impl MediaRepository {
         Ok(())
     }
 
+    /// Atomically insert or update a file, handling duplicates gracefully
+    /// Returns Ok(MediaFile) if successful, Err if file should be treated as duplicate
+    pub async fn upsert_file(&self, media_file: FilledMediaFile) -> Result<MediaFile> {
+        let mut tx = self.get_write_conn().await.begin().await?;
+
+        // Check if file with same hash exists
+        let existing_by_hash: Option<UnfilledMediaFile> = sqlx::query_as::<_, UnfilledMediaFile>(
+            "SELECT id, hash, created_at, filename, size, media_type, last_modified, is_favorite, mime_type FROM media_files WHERE hash = ?"
+        )
+        .bind(&media_file.hash)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        // Check if file with same filename exists
+        let existing_by_filename: Option<UnfilledMediaFile> = sqlx::query_as::<_, UnfilledMediaFile>(
+            "SELECT id, hash, created_at, filename, size, media_type, last_modified, is_favorite, mime_type FROM media_files WHERE filename = ?"
+        )
+        .bind(&media_file.filename)
+        .fetch_optional(&mut *tx)
+        .await?;
+
+        match (existing_by_hash, existing_by_filename) {
+            (Some(mut existing_by_hash), _) => {
+                // File with same hash exists - check if it's the same filename
+                if existing_by_hash.filename == media_file.filename {
+                    // Same file, check if it needs updating
+                    if existing_by_hash.last_modified != media_file.last_modified {
+                        // Update the existing file
+                        self.update_file_in_transaction(
+                            &mut tx,
+                            existing_by_hash.id,
+                            &media_file.filename,
+                            media_file.last_modified,
+                            media_file.size,
+                        )
+                        .await?;
+                        existing_by_hash.last_modified = media_file.last_modified;
+                        existing_by_hash.size = media_file.size;
+                    }
+                    tx.commit().await?;
+                    return Ok(MediaFile::Unfilled(existing_by_hash));
+                } else {
+                    // Different filename but same hash - this is a duplicate
+                    debug!("Duplicate detected: hash '{}' found in files '{}' and '{}'", 
+                           media_file.hash, existing_by_hash.filename, media_file.filename);
+                    tx.rollback().await?;
+                    return Err(anyhow::anyhow!(
+                        "Duplicate file detected: hash exists with different filename"
+                    ));
+                }
+            }
+            (None, Some(existing_by_filename)) => {
+                // Same filename but different hash - file was modified
+                debug!("File {} was modified, updating record", media_file.filename);
+                self.delete_file_in_transaction(&mut tx, existing_by_filename.id)
+                    .await?;
+                // Continue to insert the new file
+            }
+            (None, None) => {
+                // New file - continue with insertion
+            }
+        }
+
+        // Insert the new file
+        let result = match &media_file.media_type {
+            MediaType::Image => {
+                self.insert_image_in_transaction(&mut tx, media_file.clone())
+                    .await
+            }
+            MediaType::Video => {
+                self.insert_video_in_transaction(&mut tx, media_file.clone())
+                    .await
+            }
+        };
+
+        if result.is_err() {
+            tx.rollback().await?;
+            return result.map(|_| MediaFile::Filled(media_file));
+        }
+
+        tx.commit().await?;
+
+        // Update cache
+        self.cache.invalidate_stats_cache();
+        self.cache.invalidate_files_cache();
+        self.cache
+            .invalidate_img_vid_thumb_cache(&media_file.id, &media_file.media_type);
+        self.cache.invalidate_favorite_status_cache(&media_file.id);
+
+        Ok(MediaFile::Filled(media_file))
+    }
+
     pub async fn insert_file(&self, media_file: FilledMediaFile) -> Result<()> {
         let clone = media_file.clone();
         let result = match &media_file.media_type {
@@ -538,6 +630,57 @@ impl MediaRepository {
         }
         result
     }
+    async fn insert_image_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        media_file: FilledMediaFile,
+    ) -> Result<()> {
+        debug!("Saving image to database {}", media_file.filename);
+        let image = media_file.media.as_image().expect("Should be an image");
+        let thumbnail = image.thumbnail.clone();
+
+        sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
+            .bind(thumbnail.id)
+            .bind(thumbnail.width)
+            .bind(thumbnail.height)
+            .bind(thumbnail.data)
+            .execute(&mut **tx)
+            .await?;
+
+        sqlx::query(r#"INSERT INTO images (id, width, height, thumbnail_id) VALUES (?, ?, ?, ?)"#)
+            .bind(image.id)
+            .bind(image.width)
+            .bind(image.height)
+            .bind(thumbnail.id)
+            .execute(&mut **tx)
+            .await?;
+
+        sqlx::query(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
+        .bind(media_file.id)
+        .bind(&media_file.hash)
+        .bind(media_file.created_at)
+        .bind(&media_file.filename)
+        .bind(&media_file.media_type)
+        .bind(media_file.last_modified)
+        .bind(media_file.size)
+        .bind(&media_file.mime_type)
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query("INSERT INTO media_images (media_id, image_id) VALUES (?, ?)")
+            .bind(media_file.id)
+            .bind(image.id)
+            .execute(&mut **tx)
+            .await?;
+
+        sqlx::query("UPDATE stats SET count = count + 1, images = images + 1 WHERE id = 1")
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
     async fn insert_image(&self, media_file: FilledMediaFile) -> Result<()> {
         debug!("Saving image to database {}", media_file.filename);
         let image = media_file.media.as_image().expect("Should be an image");
@@ -585,6 +728,61 @@ impl MediaRepository {
             .await?;
 
         tx.commit().await?;
+        Ok(())
+    }
+
+    async fn insert_video_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        media_file: FilledMediaFile,
+    ) -> Result<()> {
+        debug!("Saving video to database {}", media_file.filename);
+        let video = media_file.media.as_video().expect("Should be a video");
+        let thumbnail = video.thumbnail.clone();
+
+        sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
+            .bind(thumbnail.id)
+            .bind(thumbnail.width)
+            .bind(thumbnail.height)
+            .bind(thumbnail.data)
+            .execute(&mut **tx)
+            .await?;
+
+        sqlx::query(
+            r#"INSERT INTO videos (id, width, height, duration_ms, thumbnail_id)
+                   VALUES (?, ?, ?, ?, ?)"#,
+        )
+        .bind(video.id)
+        .bind(video.width)
+        .bind(video.height)
+        .bind(video.duration_ms as i64)
+        .bind(thumbnail.id)
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
+        .bind(media_file.id)
+        .bind(&media_file.hash)
+        .bind(media_file.created_at)
+        .bind(&media_file.filename)
+        .bind(&media_file.media_type)
+        .bind(media_file.last_modified)
+        .bind(media_file.size)
+        .bind(&media_file.mime_type)
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query("INSERT INTO media_videos (media_id, video_id) VALUES (?, ?)")
+            .bind(media_file.id)
+            .bind(video.id)
+            .execute(&mut **tx)
+            .await?;
+
+        sqlx::query("UPDATE stats SET count = count + 1, videos = videos + 1 WHERE id = 1")
+            .execute(&mut **tx)
+            .await?;
+
         Ok(())
     }
 
@@ -641,6 +839,66 @@ impl MediaRepository {
         tx.commit().await?;
         Ok(())
     }
+    async fn update_file_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        file_id: Uuid,
+        new_file_name: &str,
+        last_modified: DateTime<Utc>,
+        size: i64,
+    ) -> Result<()> {
+        sqlx::query(
+            "UPDATE media_files SET filename = ?, last_modified = ?, size = ? WHERE id = ?",
+        )
+        .bind(new_file_name)
+        .bind(last_modified)
+        .bind(size)
+        .bind(file_id)
+        .execute(&mut **tx)
+        .await?;
+        Ok(())
+    }
+
+    async fn delete_file_in_transaction(
+        &self,
+        tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>,
+        file_id: Uuid,
+    ) -> Result<()> {
+        // Get file info for stats update
+        let file_info: Option<(MediaType, bool)> = sqlx::query_as::<_, (MediaType, bool)>(
+            "SELECT media_type, is_favorite FROM media_files WHERE id = ?",
+        )
+        .bind(file_id)
+        .fetch_optional(&mut **tx)
+        .await?;
+
+        if let Some((media_type, is_favorite)) = file_info {
+            // Delete the file (cascades to related tables)
+            sqlx::query("DELETE FROM media_files WHERE id = ?")
+                .bind(file_id)
+                .execute(&mut **tx)
+                .await?;
+
+            // Update stats
+            let (img_change, vid_change, fav_change) = match media_type {
+                MediaType::Image => (-1, 0, if is_favorite { -1 } else { 0 }),
+                MediaType::Video => (0, -1, if is_favorite { -1 } else { 0 }),
+            };
+
+            sqlx::query(
+                "UPDATE stats SET count = count + ?, images = images + ?, videos = videos + ?, favorites = favorites + ? WHERE id = 1"
+            )
+            .bind(-1) // Always decrement count by 1
+            .bind(img_change)
+            .bind(vid_change)
+            .bind(fav_change)
+            .execute(&mut **tx)
+            .await?;
+        }
+
+        Ok(())
+    }
+
     pub async fn update_file_name_and_modified_date(
         &self,
         file_id: Uuid,

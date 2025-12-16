@@ -1,13 +1,13 @@
 use std::{path::PathBuf, sync::Arc};
 
 use crate::{
-    config::AppConfig,
+    config::{AppConfig, PartialAppSettings},
     data::{repository::MediaRepository, FilledMediaFile, Media},
     files::processor::DeleteMode,
     ipc::{ProcessorCommand, ProcessorStatus},
     logging,
     server::{middlewares, serve_static_file, MediaFileDTOVec, PaginationDTO},
-    settings::{PartialSettingsUpdate, SettingsManager},
+    settings::SettingsManager,
 };
 use anyhow::Result;
 use axum::{
@@ -427,8 +427,9 @@ async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
 
 async fn update_settings(
     State(state): State<Arc<AppState>>,
-    Json(payload): Json<PartialSettingsUpdate>,
+    Json(payload): Json<PartialAppSettings>,
 ) -> impl IntoResponse {
+    // The settings manager handles logging errors internally
     state.settings.update_partial(payload).await;
     let settings = state.settings.get().await;
     Json(settings).into_response()

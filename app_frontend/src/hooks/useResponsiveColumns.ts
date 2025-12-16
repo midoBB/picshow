@@ -14,18 +14,9 @@ export const useResponsiveColumns = (
 
   useEffect(() => {
     const handleResize = debounce(() => {
-      setIsCurrentlyMobile(isMobile());
-      if (isMobile()) {
-        setColumnCount(1);
-      } else {
-        setColumnCount(4);
-      }
-      if (containerRef.current) {
-        setContainerSize({
-          width: containerRef.current.offsetWidth,
-          height: containerRef.current.offsetHeight,
-        });
-      }
+      const mobile = isMobile();
+      setIsCurrentlyMobile(mobile);
+      setColumnCount(mobile ? 1 : 4);
     }, 150);
 
     window.addEventListener("resize", handleResize);
@@ -35,19 +26,30 @@ export const useResponsiveColumns = (
       window.removeEventListener("resize", handleResize);
       handleResize.cancel();
     };
-  }, [isMobile, containerRef]);
+  }, [isMobile]);
 
+  // Use ResizeObserver for better container size detection
   useEffect(() => {
-    const timer = setTimeout(() => {
-      if (containerRef.current) {
-        setContainerSize({
-          width: containerRef.current.offsetWidth,
-          height: containerRef.current.offsetHeight,
-        });
-      }
-    }, 100);
+    if (!containerRef.current) return;
 
-    return () => clearTimeout(timer);
+    const resizeObserver = new ResizeObserver(
+      debounce((entries) => {
+        for (const entry of entries) {
+          const { width, height } = entry.contentRect;
+          setContainerSize({ width, height });
+        }
+      }, 100)
+    );
+
+    resizeObserver.observe(containerRef.current);
+
+    // Also set initial size immediately
+    const { offsetWidth, offsetHeight } = containerRef.current;
+    setContainerSize({ width: offsetWidth, height: offsetHeight });
+
+    return () => {
+      resizeObserver.disconnect();
+    };
   }, [containerRef]);
 
   return { isCurrentlyMobile, columnCount, containerSize };
