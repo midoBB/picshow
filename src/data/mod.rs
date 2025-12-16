@@ -169,7 +169,7 @@ impl sqlx::Encode<'_, Sqlite> for MediaType {
         args: &mut Vec<sqlx::sqlite::SqliteArgumentValue<'_>>,
     ) -> std::result::Result<
         sqlx::encode::IsNull,
-        std::boxed::Box<(dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static)>,
+        std::boxed::Box<dyn std::error::Error + std::marker::Send + std::marker::Sync + 'static>,
     > {
         args.push(sqlx::sqlite::SqliteArgumentValue::Text(
             self.to_string().into(),

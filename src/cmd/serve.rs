@@ -14,6 +14,7 @@ use crate::{
     files::{command_handler::CommandHandler, processor::Processor},
     ipc::CommandChannels,
     server::api,
+    settings::SettingsManager,
 };
 
 pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<()> {
@@ -39,6 +40,7 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     );
     let processor = Processor::new(config.clone(), repository.clone());
 
+    let settings_manager = SettingsManager::new();
     let processor_tick = time::interval(Duration::from_secs(
         config.refresh_interval as u64 * 60 * 60,
     ));
@@ -59,6 +61,7 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
         api_shutdown,
         channels.command_tx,
         channels.status_rx,
+        settings_manager,
     ));
     let command_handle = tokio::spawn(async move {
         let mut shutdown_rx = command_shutdown;

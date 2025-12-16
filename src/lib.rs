@@ -6,3 +6,4 @@ pub mod files;
 pub mod ipc;
 pub mod logging;
 pub mod server;
+pub mod settings;

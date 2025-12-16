@@ -49,3 +49,23 @@ export const StatsSchema = z.object({
   favorite_count: z.number(),
 });
 export type Stats = z.infer<typeof StatsSchema>;
+
+export const DuplicateHandlingSchema = z.enum([
+  "movetofolder",
+  "delete",
+  "skip",
+]);
+export type DuplicateHandling = z.infer<typeof DuplicateHandlingSchema>;
+
+export const DeleteModeSchema = z.enum(["movetotrash", "deletepermanently"]);
+export type DeleteMode = z.infer<typeof DeleteModeSchema>;
+
+export const AppSettingsSchema = z.object({
+  duplicateHandling: DuplicateHandlingSchema,
+  deleteMode: DeleteModeSchema,
+  autoRefreshEnabled: z.boolean(),
+  autoRefreshDuration: z.number(),
+});
+export type AppSettings = z.infer<typeof AppSettingsSchema>;
+
+export type PartialAppSettings = Partial<AppSettings>;

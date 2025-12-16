@@ -12,8 +12,10 @@ import {
   toggleFavorite,
   getIsFavorite,
   fetchThumbnail,
+  fetchSettings,
+  updateSettings,
 } from "@/queries/api";
-import { Stats } from "@/queries/model";
+import { Stats, AppSettings, PartialAppSettings } from "@/queries/model";
 import { useEffect } from "react";
 
 export const useStats = () => {
@@ -127,5 +129,22 @@ export const useThumbnail = (fileId: string) => {
     refetchOnReconnect: false,
     refetchOnMount: false,
     gcTime: 1000 * 60 * 60, // 1 hour
+  });
+};
+
+export const useSettings = () => {
+  return useQuery<AppSettings>({
+    queryKey: ["settings"],
+    queryFn: fetchSettings,
+  });
+};
+
+export const useUpdateSettings = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateSettings,
+    onSuccess: (data) => {
+      queryClient.setQueryData(["settings"], data);
+    },
   });
 };

@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import StatsDialog from "@/StatsDialog";
+import SettingsDialog from "@/SettingsDialog";
 import * as Select from "@radix-ui/react-select";
 import * as Tooltip from "@radix-ui/react-tooltip";
 import {
@@ -13,6 +14,7 @@ import {
   FaDice,
   FaMoon,
   FaSun,
+  FaCog,
 } from "react-icons/fa";
 import { FaShuffle } from "react-icons/fa6";
 import useAppState from "@/state";
@@ -106,6 +108,7 @@ const Navbar = ({
   selectedCategory: "all" | "video" | "image" | "favorite";
 }) => {
   const [isStatsOpen, setIsStatsOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const {
     isSelectionMode,
     selectedCount,
@@ -277,6 +280,13 @@ const Navbar = ({
                 ariaLabel="View statistics"
                 isDarkMode={isDarkMode}
               />
+              <TooltipButton
+                icon={<FaCog size={20} />}
+                label="Settings"
+                onClick={() => setIsSettingsOpen(true)}
+                ariaLabel="Open settings"
+                isDarkMode={isDarkMode}
+              />
             </>
           )}
           <TooltipButton
@@ -289,6 +299,10 @@ const Navbar = ({
         </div>
       </div>
       <StatsDialog isOpen={isStatsOpen} onClose={() => setIsStatsOpen(false)} />
+      <SettingsDialog
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+      />
     </nav>
   );
 };

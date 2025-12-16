@@ -7,6 +7,7 @@ use crate::{
     ipc::{ProcessorCommand, ProcessorStatus},
     logging,
     server::{middlewares, serve_static_file, MediaFileDTOVec, PaginationDTO},
+    settings::{PartialSettingsUpdate, SettingsManager},
 };
 use anyhow::Result;
 use axum::{
@@ -40,6 +41,7 @@ struct AppState {
     repo: Arc<MediaRepository>,
     command_tx: broadcast::Sender<ProcessorCommand>,
     _status_rx: broadcast::Receiver<ProcessorStatus>,
+    settings: SettingsManager,
 }
 
 pub async fn run_server(
@@ -48,17 +50,21 @@ pub async fn run_server(
     mut shutdown_rx: tokio::sync::broadcast::Receiver<()>,
     command_tx: broadcast::Sender<ProcessorCommand>,
     status_rx: broadcast::Receiver<ProcessorStatus>,
+    settings: SettingsManager,
 ) -> Result<()> {
     let state = Arc::new(AppState {
         config,
         repo,
         command_tx,
         _status_rx: status_rx,
+        settings,
     });
     let api_routes = axum::Router::new()
         .route("/", delete(delete_files))
         .route("/", get(get_files))
         .route("/stats", get(get_stats))
+        .route("/settings", get(get_settings))
+        .route("/settings", patch(update_settings))
         .route("/:id/favorite", get(get_favorite_status))
         .route("/:id/favorite", patch(toggle_favorite))
         .route("/image/:id", get(get_image))
@@ -311,9 +317,15 @@ async fn delete_files(
             .into_response();
     }
 
+    let settings = state.settings.get().await;
+    let mode = match settings.delete_mode {
+        crate::settings::DeleteMode::MoveToTrash => DeleteMode::MoveToTrash,
+        crate::settings::DeleteMode::DeletePermanently => DeleteMode::DeletePermanently,
+    };
+
     let command = ProcessorCommand::DeleteFiles {
         ids: ids.clone(),
-        mode: DeleteMode::MoveToTrash,
+        mode,
     };
     match state.command_tx.send(command.clone()) {
         Ok(_) => {
@@ -406,4 +418,18 @@ async fn unlock(
                 .into_response()
         }
     }
+}
+
+async fn get_settings(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    let settings = state.settings.get().await;
+    Json(settings).into_response()
+}
+
+async fn update_settings(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<PartialSettingsUpdate>,
+) -> impl IntoResponse {
+    state.settings.update_partial(payload).await;
+    let settings = state.settings.get().await;
+    Json(settings).into_response()
 }

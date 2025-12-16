@@ -1,5 +1,5 @@
 import axios from "axios";
-import { PaginatedFiles, Stats } from "@/queries/model";
+import { PaginatedFiles, Stats, AppSettings, PartialAppSettings } from "@/queries/model";
 
 export const BASE_URL = "/api";
 
@@ -65,4 +65,16 @@ export const fetchThumbnail = async (fileId: string): Promise<string> => {
     responseType: "blob",
   });
   return URL.createObjectURL(response.data);
+};
+
+export const fetchSettings = async (): Promise<AppSettings> => {
+  const { data } = await api.get<AppSettings>("/settings");
+  return data;
+};
+
+export const updateSettings = async (
+  settings: PartialAppSettings
+): Promise<AppSettings> => {
+  const { data } = await api.patch<AppSettings>("/settings", settings);
+  return data;
 };

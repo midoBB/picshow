@@ -41,7 +41,9 @@ pub fn middlewares() -> Middlewares {
                 .allow_methods([http::Method::GET, http::Method::POST, http::Method::OPTIONS])
                 .allow_origin(cors::Any),
         )
-        .layer(TimeoutLayer::new(Duration::from_secs(30)))
+        .layer({
+            TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(30))
+        })
         .layer(SetRequestIdLayer::new(
             HeaderName::from_static("x-request-id"),
             MakeRequestUuid,
