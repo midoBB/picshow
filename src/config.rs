@@ -18,7 +18,6 @@ pub enum DuplicateHandling {
     Skip,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
@@ -27,7 +26,6 @@ pub enum DeleteMode {
     MoveToTrash,
     DeletePermanently,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

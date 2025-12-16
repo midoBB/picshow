@@ -566,8 +566,10 @@ impl MediaRepository {
                     return Ok(MediaFile::Unfilled(existing_by_hash));
                 } else {
                     // Different filename but same hash - this is a duplicate
-                    debug!("Duplicate detected: hash '{}' found in files '{}' and '{}'", 
-                           media_file.hash, existing_by_hash.filename, media_file.filename);
+                    debug!(
+                        "Duplicate detected: hash '{}' found in files '{}' and '{}'",
+                        media_file.hash, existing_by_hash.filename, media_file.filename
+                    );
                     tx.rollback().await?;
                     return Err(anyhow::anyhow!(
                         "Duplicate file detected: hash exists with different filename"

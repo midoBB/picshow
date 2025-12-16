@@ -45,9 +45,15 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     let processor = Processor::new(config.clone(), repository.clone());
 
     let settings_manager = SettingsManager::new(config_manager.clone()).await;
-    let processor_tick = time::interval(Duration::from_secs(
-        config.auto_refresh_duration as u64 * 60 * 60,
-    ));
+    let auto_refresh_enabled = config.auto_refresh_enabled;
+    let auto_refresh_duration = config.auto_refresh_duration;
+    let processor_tick = if auto_refresh_enabled {
+        Some(time::interval(Duration::from_secs(
+            auto_refresh_duration as u64 * 60 * 60,
+        )))
+    } else {
+        None
+    };
     let processor_semaphore = Semaphore::new(1);
     // Get a config change receiver for the processor
     let mut config_change_rx = config_manager.subscribe();
@@ -60,6 +66,7 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
             processor_semaphore,
             &mut shutdown_rx,
             &mut config_change_rx,
+            auto_refresh_enabled,
         )
         .await
     });
@@ -85,10 +92,11 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
 
 async fn process_files(
     processor: Processor,
-    mut tick: Interval,
+    mut tick: Option<Interval>,
     semaphore: Semaphore,
     shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
     config_change_rx: &mut tokio::sync::broadcast::Receiver<crate::config::ConfigChange>,
+    mut auto_refresh_enabled: bool,
 ) -> Result<()> {
     loop {
         tokio::select! {
@@ -98,20 +106,31 @@ async fn process_files(
             }
             config_result = config_change_rx.recv() => {
                 if let std::result::Result::Ok(config_change) = config_result {
-                        // Update the refresh interval if auto_refresh is enabled
-                        if config_change.config.auto_refresh_enabled {
-                            // Convert hours to seconds safely to avoid overflow
-                            let duration_hours = config_change.config.auto_refresh_duration as u64;
-                            let duration_seconds = duration_hours.saturating_mul(3600);
-                            let new_duration = Duration::from_secs(duration_seconds);
-                            tick = time::interval(new_duration);
-                            info!("Updated refresh interval to {} seconds", duration_seconds);
-                        }
+                    // Update auto_refresh_enabled state
+                    auto_refresh_enabled = config_change.config.auto_refresh_enabled;
+
+                    // Update the refresh interval if auto_refresh is enabled
+                    if auto_refresh_enabled {
+                        // Convert hours to seconds safely to avoid overflow
+                        let duration_hours = config_change.config.auto_refresh_duration as u64;
+                        let duration_seconds = duration_hours.saturating_mul(3600);
+                        let new_duration = Duration::from_secs(duration_seconds);
+                        tick = Some(time::interval(new_duration));
+                        info!("Auto-refresh enabled with interval {} seconds", duration_seconds);
                     } else {
-                        debug!("Config change receiver error: channel closed");
+                        tick = None;
+                        info!("Auto-refresh disabled");
                     }
+                } else {
+                    debug!("Config change receiver error: channel closed");
+                }
             }
-            _ = tick.tick() => {
+            _ = async {
+                match &mut tick {
+                    Some(t) => t.tick().await,
+                    None => std::future::pending().await,
+                }
+            }, if auto_refresh_enabled => {
                 let _permit = semaphore.acquire().await;
                 if _permit.is_err() {
                     continue;
