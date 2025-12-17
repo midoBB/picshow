@@ -15,8 +15,12 @@ import {
   FaMoon,
   FaSun,
   FaCog,
+  FaSpinner,
+  FaSync,
 } from "react-icons/fa";
 import { FaShuffle } from "react-icons/fa6";
+import { useProcessorStatus } from "@/hooks/useProcessorStatus";
+import { useTriggerScan } from "@/queries/loaders";
 import useAppState from "@/state";
 import type { Options } from "nuqs";
 
@@ -26,6 +30,7 @@ interface TooltipButtonProps {
   onClick: () => void;
   ariaLabel: string;
   isDarkMode: boolean;
+  disabled?: boolean;
 }
 
 const TooltipButton = ({
@@ -34,13 +39,15 @@ const TooltipButton = ({
   onClick,
   ariaLabel,
   isDarkMode,
+  disabled = false,
 }: TooltipButtonProps) => (
   <Tooltip.Provider>
     <Tooltip.Root>
       <Tooltip.Trigger asChild>
         <button
           onClick={onClick}
-          className={`${isDarkMode ? "hover:bg-gray-700" : "hover:bg-gray-200"} p-2 rounded-full`}
+          disabled={disabled}
+          className={`${isDarkMode ? "hover:bg-gray-700" : "hover:bg-gray-200"} p-2 rounded-full ${disabled ? "opacity-50 cursor-not-allowed" : ""}`}
           aria-label={ariaLabel}
         >
           {icon}
@@ -109,6 +116,8 @@ const Navbar = ({
 }) => {
   const [isStatsOpen, setIsStatsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const { isProcessing } = useProcessorStatus();
+  const { mutate: triggerScan } = useTriggerScan();
   const {
     isSelectionMode,
     selectedCount,
@@ -287,7 +296,20 @@ const Navbar = ({
                 ariaLabel="Open settings"
                 isDarkMode={isDarkMode}
               />
+              <TooltipButton
+                icon={<FaSync size={20} />}
+                label="Trigger Scan"
+                onClick={() => triggerScan()}
+                ariaLabel="Manually trigger a scan for new files"
+                isDarkMode={isDarkMode}
+                disabled={isProcessing}
+              />
             </>
+          )}
+          {isProcessing && (
+            <div className="animate-spin">
+              <FaSpinner size={20} className={isDarkMode ? "text-white" : "text-gray-900"} />
+            </div>
           )}
           <TooltipButton
             icon={isDarkMode ? <FaSun size={20} /> : <FaMoon size={20} />}

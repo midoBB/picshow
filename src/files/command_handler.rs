@@ -95,6 +95,10 @@ impl CommandHandler {
                                         }
                                     }
                                 }
+                                ProcessorCommand::TriggerScan => {
+                                    // Trigger scan is handled by the processor itself
+                                    info!("TriggerScan command received");
+                                }
                             }
                         },
                         Err(_) => {

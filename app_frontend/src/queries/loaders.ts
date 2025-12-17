@@ -14,6 +14,7 @@ import {
   fetchThumbnail,
   fetchSettings,
   updateSettings,
+  triggerScan,
 } from "@/queries/api";
 import { Stats, AppSettings, PartialAppSettings } from "@/queries/model";
 import { useEffect } from "react";
@@ -145,6 +146,16 @@ export const useUpdateSettings = () => {
     mutationFn: updateSettings,
     onSuccess: (data) => {
       queryClient.setQueryData(["settings"], data);
+    },
+  });
+};
+
+export const useTriggerScan = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: triggerScan,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["stats"] });
     },
   });
 };

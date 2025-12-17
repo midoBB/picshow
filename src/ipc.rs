@@ -71,12 +71,15 @@ impl Drop for OperationLock {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProcessorCommand {
     DeleteFiles { ids: Vec<Uuid>, mode: DeleteMode },
+    TriggerScan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ProcessorStatus {
     TaskDone { command: ProcessorCommand },
     ProcessingError { error: String },
+    ProcessingStarted,
+    ProcessingFinished,
 }
 pub struct CommandChannels {
     pub command_tx: broadcast::Sender<ProcessorCommand>,

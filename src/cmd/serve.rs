@@ -36,6 +36,7 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
 
     let cache = AppCache::new(config.cache_size_mb as u64);
     let repository = Arc::new(MediaRepository::new(cache.clone(), config.clone()).await?);
+    let status_tx = channels.status_tx.clone();
     let mut command_handler = CommandHandler::new(
         config.clone(),
         repository.clone(),
@@ -58,8 +59,12 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     // Get a config change receiver for the processor
     let mut config_change_rx = config_manager.subscribe();
 
+    let command_tx = channels.command_tx.clone();
+    let status_rx = channels.status_rx;
+    let api_command_tx = command_tx.clone();
     let processorer_handle = tokio::spawn(async move {
         let mut shutdown_rx = processor_shutdown;
+        let command_rx = command_tx.subscribe();
         process_files(
             processor,
             processor_tick,
@@ -67,6 +72,8 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
             &mut shutdown_rx,
             &mut config_change_rx,
             auto_refresh_enabled,
+            status_tx,
+            command_rx,
         )
         .await
     });
@@ -74,8 +81,8 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
         config.clone(),
         repository.clone(),
         api_shutdown,
-        channels.command_tx,
-        channels.status_rx,
+        api_command_tx,
+        status_rx,
         settings_manager,
     ));
     let command_handle = tokio::spawn(async move {
@@ -97,12 +104,28 @@ async fn process_files(
     shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
     config_change_rx: &mut tokio::sync::broadcast::Receiver<crate::config::ConfigChange>,
     mut auto_refresh_enabled: bool,
+    status_tx: tokio::sync::broadcast::Sender<crate::ipc::ProcessorStatus>,
+    mut command_rx: tokio::sync::broadcast::Receiver<crate::ipc::ProcessorCommand>,
 ) -> Result<()> {
     loop {
         tokio::select! {
             _ = shutdown_rx.recv() => {
                 debug!("Shutting down processor");
                 break Ok(());
+            }
+            command = command_rx.recv() => {
+                if let Ok(crate::ipc::ProcessorCommand::TriggerScan) = command {
+                    let _permit = semaphore.acquire().await;
+                    if _permit.is_err() {
+                        continue;
+                    }
+                    // Send processing started status
+                    let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingStarted);
+                    let (media_files_count, _) = processor.process(shutdown_rx).await?;
+                    info!("Found {} files", media_files_count);
+                    // Send processing finished status
+                    let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
+                }
             }
             config_result = config_change_rx.recv() => {
                 if let std::result::Result::Ok(config_change) = config_result {
@@ -135,8 +158,12 @@ async fn process_files(
                 if _permit.is_err() {
                     continue;
                 }
+                // Send processing started status
+                let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingStarted);
                 let (media_files_count, exit_option) = processor.process(shutdown_rx).await?;
                 info!("Found {} files", media_files_count);
+                // Send processing finished status
+                let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
                 if exit_option.is_some() {
                     break Ok(());
                 }

@@ -62,16 +62,11 @@ export default function App() {
 
   // Initialize seed on first run
   useEffect(() => {
-    if (!seed && isFirstRun.current) {
+    if (isFirstRun.current && !seed) {
       setSeed(Math.floor(Date.now() / 1000));
-    }
-  }, [seed, setSeed]);
-
-  useEffect(() => {
-    if (isFirstRun.current) {
       isFirstRun.current = false;
     }
-  }, []);
+  }, []); // Empty deps - only run once on mount
 
   // Deduplicate files from paginated data
   const allFiles = useMemo(() => {

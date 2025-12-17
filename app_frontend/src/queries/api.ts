@@ -83,3 +83,7 @@ export const updateSettings = async (
   const { data } = await api.patch<AppSettings>("/settings", settings);
   return data;
 };
+
+export const triggerScan = async (): Promise<void> => {
+  await api.post("/internal/trigger-scan");
+};

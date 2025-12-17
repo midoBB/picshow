@@ -15,8 +15,8 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::{header, HeaderMap, StatusCode},
     middleware,
-    response::IntoResponse,
-    routing::{delete, get, patch},
+    response::{sse::Event, IntoResponse, Sse},
+    routing::{delete, get, patch, post},
     Json,
 };
 
@@ -40,7 +40,7 @@ struct AppState {
     config: Arc<AppConfig>,
     repo: Arc<MediaRepository>,
     command_tx: broadcast::Sender<ProcessorCommand>,
-    _status_rx: broadcast::Receiver<ProcessorStatus>,
+    status_rx: broadcast::Receiver<ProcessorStatus>,
     settings: SettingsManager,
 }
 
@@ -56,7 +56,7 @@ pub async fn run_server(
         config,
         repo,
         command_tx,
-        _status_rx: status_rx,
+        status_rx: status_rx,
         settings,
     });
     let api_routes = axum::Router::new()
@@ -70,6 +70,8 @@ pub async fn run_server(
         .route("/image/:id", get(get_image))
         .route("/video/:id", get(stream_video))
         .route("/thumbnail/:id", get(get_thumbnail))
+        .route("/processor-status", get(processor_status_stream))
+        .route("/internal/trigger-scan", post(trigger_scan))
         .route("/internal/lock/:secret", get(lock))
         .route("/internal/unlock/:secret", get(unlock));
     let app = axum::Router::new()
@@ -453,4 +455,44 @@ async fn update_settings(
     state.settings.update_partial(payload).await;
     let settings = state.settings.get().await;
     Json(settings).into_response()
+}
+
+async fn trigger_scan(
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    // Send a scan command to the processor
+    let scan_command = crate::ipc::ProcessorCommand::TriggerScan;
+    
+    match state.command_tx.send(scan_command) {
+        Ok(_) => (StatusCode::ACCEPTED, Json(json!({"message": "Scan triggered"}))).into_response(),
+        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Failed to trigger scan"}))).into_response(),
+    }
+}
+
+async fn processor_status_stream(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl futures::Stream<Item = Result<Event, axum::Error>>> {
+    let mut status_rx = state.status_rx.resubscribe();
+
+    let stream = async_stream::stream! {
+        while let Ok(status) = status_rx.recv().await {
+            let event = match status {
+                ProcessorStatus::ProcessingStarted => {
+                    Event::default().event("processing_started").data("started")
+                }
+                ProcessorStatus::ProcessingFinished => {
+                    Event::default().event("processing_finished").data("finished")
+                }
+                _ => continue,
+            };
+            
+            yield Ok(event);
+        }
+    };
+
+    Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(std::time::Duration::from_secs(15))
+            .text("keepalive"),
+    )
 }
