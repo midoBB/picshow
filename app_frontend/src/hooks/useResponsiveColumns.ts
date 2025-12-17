@@ -38,7 +38,7 @@ export const useResponsiveColumns = (
           const { width, height } = entry.contentRect;
           setContainerSize({ width, height });
         }
-      }, 100)
+      }, 100),
     );
 
     resizeObserver.observe(containerRef.current);

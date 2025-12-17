@@ -5,19 +5,18 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import {
-  fetchStats,
-  fetchPaginatedFiles,
-  PaginationParams,
   deleteFile,
-  toggleFavorite,
-  getIsFavorite,
-  fetchThumbnail,
+  fetchPaginatedFiles,
   fetchSettings,
-  updateSettings,
+  fetchStats,
+  fetchThumbnail,
+  getIsFavorite,
+  type PaginationParams,
+  toggleFavorite,
   triggerScan,
+  updateSettings,
 } from "@/queries/api";
-import { Stats, AppSettings, PartialAppSettings } from "@/queries/model";
-import { useEffect } from "react";
+import type { AppSettings, Stats } from "@/queries/model";
 
 export const useStats = () => {
   return useQuery<Stats>({

@@ -235,6 +235,7 @@ pub struct StatsDTO {
     video_count: u32,
     image_count: u32,
     favorite_count: u32,
+    is_processing: bool,
 }
 
 impl From<Stats> for StatsDTO {
@@ -244,6 +245,19 @@ impl From<Stats> for StatsDTO {
             video_count: stats.videos,
             image_count: stats.images,
             favorite_count: stats.favorites,
+            is_processing: false, // Will be overridden in get_stats
+        }
+    }
+}
+
+impl From<(Stats, bool)> for StatsDTO {
+    fn from((stats, is_processing): (Stats, bool)) -> Self {
+        Self {
+            count: stats.count,
+            video_count: stats.videos,
+            image_count: stats.images,
+            favorite_count: stats.favorites,
+            is_processing,
         }
     }
 }

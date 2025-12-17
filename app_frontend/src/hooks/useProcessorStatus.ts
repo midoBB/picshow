@@ -1,37 +1,86 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { fetchStats } from "@/queries/api";
 
 export const useProcessorStatus = () => {
-	const [isProcessing, setIsProcessing] = useState(false);
-	const [eventSource, setEventSource] = useState<EventSource | null>(null);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<number | null>(null);
+  const reconnectAttemptsRef = useRef(0);
+  const MAX_RECONNECT_ATTEMPTS = 5;
 
-	const connect = useCallback(() => {
-		const es = new EventSource("/api/processor-status");
+  // Fetch initial status
+  const fetchInitialStatus = useCallback(async () => {
+    const stats = await fetchStats();
+    // Extract isProcessing status from the stats response
+    setIsProcessing(stats.is_processing || false);
+  }, []);
 
-		es.addEventListener("processing_started", () => {
-			setIsProcessing(true);
-		});
+  const connect = useCallback(() => {
+    // Clear any existing reconnection timeout
+    if (reconnectTimeoutRef.current) {
+      clearTimeout(reconnectTimeoutRef.current);
+      reconnectTimeoutRef.current = null;
+    }
 
-		es.addEventListener("processing_finished", () => {
-			setIsProcessing(false);
-		});
+    // Close existing connection
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
 
-		es.addEventListener("error", () => {
-			console.error("Processor status SSE connection error");
-			setIsProcessing(false);
-		});
+    const es = new EventSource("/api/processor-status");
 
-		setEventSource(es);
-	}, []);
+    es.addEventListener("processing_started", () => {
+      setIsProcessing(true);
+      reconnectAttemptsRef.current = 0; // Reset reconnect attempts on successful event
+    });
 
-	useEffect(() => {
-		connect();
+    es.addEventListener("processing_finished", () => {
+      setIsProcessing(false);
+    });
 
-		return () => {
-			if (eventSource) {
-				eventSource.close();
-			}
-		};
-	}, [connect]);
+    es.addEventListener("error", () => {
+      console.error("Processor status SSE connection error");
+      setIsProcessing(false);
 
-	return { isProcessing };
+      // Attempt reconnection with exponential backoff
+      if (reconnectAttemptsRef.current < MAX_RECONNECT_ATTEMPTS) {
+        const delay = Math.min(1000 * 2 ** reconnectAttemptsRef.current, 30000);
+        reconnectAttemptsRef.current++;
+
+        console.log(
+          `Attempting to reconnect in ${delay}ms (attempt ${reconnectAttemptsRef.current}/${MAX_RECONNECT_ATTEMPTS})`,
+        );
+
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connect();
+        }, delay);
+      } else {
+        console.error("Max reconnection attempts reached. Giving up.");
+      }
+    });
+
+    es.onopen = () => {
+      reconnectAttemptsRef.current = 0;
+    };
+
+    eventSourceRef.current = es;
+  }, []);
+
+  useEffect(() => {
+    // Fetch initial status and then connect to SSE
+    fetchInitialStatus().then(() => {
+      connect();
+    });
+
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, [connect, fetchInitialStatus]);
+
+  return { isProcessing };
 };

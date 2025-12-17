@@ -96,7 +96,12 @@ impl MediaRepository {
     }
 
     async fn get_write_conn(&self) -> Result<Arc<sqlx::SqlitePool>> {
-        let _ = self.write_semaphore.read().await.acquire().await
+        let _ = self
+            .write_semaphore
+            .read()
+            .await
+            .acquire()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire write semaphore: {}", e))?;
         Ok(Arc::clone(&self.write_pool))
     }
@@ -247,7 +252,10 @@ impl MediaRepository {
     pub async fn lock_writes(&self) -> Result<()> {
         trace!("Locking writes");
         // Force acquire the lock semaphore first
-        let _lock = self.lock_semaphore.acquire().await
+        let _lock = self
+            .lock_semaphore
+            .acquire()
+            .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock semaphore: {}", e))?;
 
         // Wait a small duration for current operations to complete
@@ -329,8 +337,7 @@ impl MediaRepository {
                     duration_ms: row.get::<i64, _>("duration_ms") as u64,
                     thumbnail,
                 };
-                Ok(media_file
-                    .with_video(video, mime_type.clone()))
+                Ok(media_file.with_video(video, mime_type.clone()))
             }
         }
     }
@@ -650,7 +657,7 @@ impl MediaRepository {
 
         // Insert thumbnail first
         sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(&image.thumbnail.id)
+            .bind(image.thumbnail.id)
             .bind(image.thumbnail.width)
             .bind(image.thumbnail.height)
             .bind(&image.thumbnail.data)
@@ -661,7 +668,7 @@ impl MediaRepository {
             .bind(image.id)
             .bind(image.width)
             .bind(image.height)
-            .bind(&image.thumbnail.id)
+            .bind(image.thumbnail.id)
             .execute(&mut **tx)
             .await?;
 
@@ -751,7 +758,7 @@ impl MediaRepository {
 
         // Insert thumbnail first
         sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(&video.thumbnail.id)
+            .bind(video.thumbnail.id)
             .bind(video.thumbnail.width)
             .bind(video.thumbnail.height)
             .bind(&video.thumbnail.data)
@@ -766,7 +773,7 @@ impl MediaRepository {
         .bind(video.width)
         .bind(video.height)
         .bind(video.duration_ms as i64)
-        .bind(&video.thumbnail.id)
+        .bind(video.thumbnail.id)
         .execute(&mut **tx)
         .await?;
 
@@ -1174,9 +1181,8 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )?;
-        conn.execute_batch(
-            &format!(
-                r#"
+        conn.execute_batch(&format!(
+            r#"
                 PRAGMA journal_mode = WAL;
                 PRAGMA synchronous = FULL;
                 PRAGMA busy_timeout = 30000;
@@ -1187,9 +1193,8 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
                 PRAGMA wal_autocheckpoint = {};
                 PRAGMA auto_vacuum = INCREMENTAL;
                 "#,
-                DEFAULT_CACHE_SIZE, DEFAULT_PAGE_SIZE, DEFAULT_WAL_CHECKPOINT
-            ),
-        )?;
+            DEFAULT_CACHE_SIZE, DEFAULT_PAGE_SIZE, DEFAULT_WAL_CHECKPOINT
+        ))?;
     }
     Ok(())
 }

@@ -42,6 +42,7 @@ struct AppState {
     command_tx: broadcast::Sender<ProcessorCommand>,
     status_rx: broadcast::Receiver<ProcessorStatus>,
     settings: SettingsManager,
+    is_processing: Arc<tokio::sync::Mutex<bool>>,
 }
 
 pub async fn run_server(
@@ -56,8 +57,9 @@ pub async fn run_server(
         config,
         repo,
         command_tx,
-        status_rx: status_rx,
+        status_rx,
         settings,
+        is_processing: Arc::new(tokio::sync::Mutex::new(false)),
     });
     let api_routes = axum::Router::new()
         .route("/", delete(delete_files))
@@ -102,7 +104,10 @@ pub async fn run_server(
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     let stats = state.repo.get_stats().await;
     match stats {
-        Ok(stats) => axum::Json(StatsDTO::from(stats)).into_response(),
+        Ok(stats) => {
+            let is_processing = *state.is_processing.lock().await;
+            axum::Json(StatsDTO::from((stats, is_processing))).into_response()
+        }
         Err(e) => {
             tracing::error!("Failed to get stats: {:?}", e);
             axum::http::StatusCode::INTERNAL_SERVER_ERROR.into_response()
@@ -457,15 +462,21 @@ async fn update_settings(
     Json(settings).into_response()
 }
 
-async fn trigger_scan(
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
+async fn trigger_scan(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     // Send a scan command to the processor
     let scan_command = crate::ipc::ProcessorCommand::TriggerScan;
-    
+
     match state.command_tx.send(scan_command) {
-        Ok(_) => (StatusCode::ACCEPTED, Json(json!({"message": "Scan triggered"}))).into_response(),
-        Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": "Failed to trigger scan"}))).into_response(),
+        Ok(_) => (
+            StatusCode::ACCEPTED,
+            Json(json!({"message": "Scan triggered"})),
+        )
+            .into_response(),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(json!({"error": "Failed to trigger scan"})),
+        )
+            .into_response(),
     }
 }
 
@@ -473,19 +484,22 @@ async fn processor_status_stream(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl futures::Stream<Item = Result<Event, axum::Error>>> {
     let mut status_rx = state.status_rx.resubscribe();
+    let is_processing = state.is_processing.clone();
 
     let stream = async_stream::stream! {
         while let Ok(status) = status_rx.recv().await {
             let event = match status {
                 ProcessorStatus::ProcessingStarted => {
+                    *is_processing.lock().await = true;
                     Event::default().event("processing_started").data("started")
                 }
                 ProcessorStatus::ProcessingFinished => {
+                    *is_processing.lock().await = false;
                     Event::default().event("processing_finished").data("finished")
                 }
                 _ => continue,
             };
-            
+
             yield Ok(event);
         }
     };

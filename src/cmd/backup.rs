@@ -18,7 +18,9 @@ pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> R
     let datetime = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
     let default_path = format!("{}picshow.{}.bak", config.backup_folder_path, datetime).to_string();
     let dest_path = destination.unwrap_or(default_path.into());
-    let dest_path = dest_path.as_os_str().to_str()
+    let dest_path = dest_path
+        .as_os_str()
+        .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid destination path: contains non-UTF-8 characters"))?
         .to_string();
     ensure_dir(&dest_path).await?;

@@ -17,7 +17,15 @@ async fn main() -> Result<()> {
     if should_run_first_time {
         logging::init_logging(cli.log_level, None);
     } else {
-        logging::init_logging(cli.log_level, Some(config.as_ref().map_err(|e| anyhow::anyhow!("Failed to access config: {}", e))?.log_level));
+        logging::init_logging(
+            cli.log_level,
+            Some(
+                config
+                    .as_ref()
+                    .map_err(|e| anyhow::anyhow!("Failed to access config: {}", e))?
+                    .log_level,
+            ),
+        );
     }
     let mut config = match config {
         Ok(cfg) => cfg,
@@ -50,11 +58,9 @@ async fn main() -> Result<()> {
 
             Commands::Serve { port } => handle_serve(&config, port).await?,
         }
-    } else {
-        if let Err(e) = Cli::command().print_long_help() {
-            error!("Failed to print help: {}", e);
-            std::process::exit(1);
-        }
+    } else if let Err(e) = Cli::command().print_long_help() {
+        error!("Failed to print help: {}", e);
+        std::process::exit(1);
     }
     Ok(())
 }
