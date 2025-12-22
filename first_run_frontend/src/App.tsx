@@ -45,7 +45,7 @@ const configSchema = z.object({
   batchSize: z.number().int().min(1).max(100).default(10),
   concurrency: z.number().int().min(1).max(32).default(3),
   maxThumbnailSize: z.number().int().min(240).max(1024).default(480),
-  refreshInterval: z.number().int().min(1).max(100).default(72),
+  autoRefreshDuration: z.number().int().min(1).max(168).default(1),
   cacheSizeMB: z.number().int().min(20).max(1024).default(64),
   port: z.number().int().min(1024).max(65535).default(8281),
   logLevel: z.enum(["Debug", "Info", "Warn", "Error"]).default("Info"),
@@ -98,7 +98,7 @@ const ConfigInstallWizard = () => {
       backupFolderPath: "",
       hashSize: 512,
       maxThumbnailSize: 720,
-      refreshInterval: 72,
+      autoRefreshDuration: 1,
       cacheSizeMB: 128,
       logLevel: "Info" as "Debug" | "Info" | "Warn" | "Error",
       lockSecret: btoa(generateUUID()),
@@ -432,19 +432,19 @@ const ConfigInstallWizard = () => {
                 )}
               />
               <Controller
-                name="refreshInterval"
+                name="autoRefreshDuration"
                 control={control}
                 render={({ field }) => (
                   <Flex direction="column" gap="2">
                     <Text as="label" size="2" weight="bold">
-                      Refresh Interval (1-100 hours)
+                      Auto Refresh Duration (1-168 hours / 7 days)
                     </Text>
                     <Flex gap="2" align="center">
                       <Slider
                         value={[field.value]}
                         onValueChange={(value) => field.onChange(value[0])}
                         min={1}
-                        max={100}
+                        max={168}
                         step={1}
                         style={{ flexGrow: 1 }}
                       />
@@ -454,13 +454,13 @@ const ConfigInstallWizard = () => {
                         value={field.value}
                         onChange={(e) => field.onChange(Number(e.target.value))}
                         min={1}
-                        max={100}
+                        max={168}
                       ></TextField.Root>
                       <Text size="2">hours</Text>
                     </Flex>
-                    {errors.refreshInterval && (
+                    {errors.autoRefreshDuration && (
                       <Text color="red" size="1">
-                        {errors.refreshInterval.message}
+                        {errors.autoRefreshDuration.message}
                       </Text>
                     )}
                   </Flex>

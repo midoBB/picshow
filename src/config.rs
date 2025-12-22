@@ -58,7 +58,7 @@ fn default_auto_refresh_enabled() -> bool {
 }
 
 fn default_auto_refresh_duration() -> u16 {
-    3600
+    1 // Default: 1 hour
 }
 
 impl Default for AppConfig {
@@ -141,7 +141,8 @@ impl AppConfig {
             self.auto_refresh_enabled = auto_refresh_enabled;
         }
         if let Some(auto_refresh_duration) = update.auto_refresh_duration {
-            self.auto_refresh_duration = auto_refresh_duration;
+            // Validate: 1 hour minimum, 168 hours (7 days) maximum
+            self.auto_refresh_duration = auto_refresh_duration.clamp(1, 168);
         }
     }
 }

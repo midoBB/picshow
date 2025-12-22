@@ -1,14 +1,14 @@
 import * as Dialog from "@radix-ui/react-dialog";
 import * as Select from "@radix-ui/react-select";
-import { useSettings, useUpdateSettings } from "@/queries/loaders";
-import useAppState from "@/state";
+import { useEffect, useState } from "react";
 import { FaChevronDown, FaSave, FaTimes } from "react-icons/fa";
-import { useState, useEffect } from "react";
+import { useSettings, useUpdateSettings } from "@/queries/loaders";
 import type {
   AppSettings,
-  DuplicateHandling,
   DeleteMode,
+  DuplicateHandling,
 } from "@/queries/model";
+import useAppState from "@/state";
 
 interface SettingsDialogProps {
   isOpen: boolean;
@@ -24,7 +24,7 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
     useState<DuplicateHandling>("movetofolder");
   const [deleteMode, setDeleteMode] = useState<DeleteMode>("movetotrash");
   const [autoRefreshEnabled, setAutoRefreshEnabled] = useState(true);
-  const [autoRefreshDuration, setAutoRefreshDuration] = useState(3600);
+  const [autoRefreshDuration, setAutoRefreshDuration] = useState(1); // Duration in hours
 
   useEffect(() => {
     if (settings) {
@@ -75,8 +75,7 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
     }
   };
 
-  const formatDuration = (seconds: number): string => {
-    const hours = Math.floor(seconds / 3600);
+  const formatDuration = (hours: number): string => {
     return `${hours} hour${hours !== 1 ? "s" : ""}`;
   };
 
@@ -262,9 +261,9 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
                 <div className="flex items-center space-x-2">
                   <input
                     type="range"
-                    min="3600"
-                    max="86400"
-                    step="3600"
+                    min="1"
+                    max="168"
+                    step="1"
                     value={autoRefreshDuration}
                     onChange={(e) =>
                       setAutoRefreshDuration(parseInt(e.target.value))
@@ -281,7 +280,7 @@ const SettingsDialog = ({ isOpen, onClose }: SettingsDialogProps) => {
                 <p
                   className={`text-xs mt-1 ${isDarkMode ? "text-gray-400" : "text-gray-500"}`}
                 >
-                  How often to scan for new files (1-24 hours)
+                  How often to scan for new files (1-168 hours / 7 days)
                 </p>
               </div>
             </div>

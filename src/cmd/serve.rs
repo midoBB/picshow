@@ -47,10 +47,11 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
 
     let settings_manager = SettingsManager::new(config_manager.clone()).await;
     let auto_refresh_enabled = config.auto_refresh_enabled;
-    let auto_refresh_duration = config.auto_refresh_duration;
+    let auto_refresh_duration = config.auto_refresh_duration; // Duration is in hours
     let processor_tick = if auto_refresh_enabled {
+        // Convert hours to seconds
         Some(time::interval(Duration::from_secs(
-            auto_refresh_duration as u64 * 60 * 60,
+            auto_refresh_duration as u64 * 3600,
         )))
     } else {
         None
@@ -139,7 +140,7 @@ async fn process_files(
                         let duration_seconds = duration_hours.saturating_mul(3600);
                         let new_duration = Duration::from_secs(duration_seconds);
                         tick = Some(time::interval(new_duration));
-                        info!("Auto-refresh enabled with interval {} seconds", duration_seconds);
+                        info!("Auto-refresh enabled with interval {} hours ({} seconds)", duration_hours, duration_seconds);
                     } else {
                         tick = None;
                         info!("Auto-refresh disabled");
