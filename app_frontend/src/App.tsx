@@ -171,7 +171,14 @@ export default function App() {
 
       <LightboxContainer
         open={isOpen}
-        onClose={() => setIsOpen(false)}
+        onClose={() => {
+          setIsOpen(false);
+          // Scroll to the current lightbox index when closing
+          rowVirtualizer.scrollToIndex(currentIndex, {
+            align: "center",
+            behavior: "smooth",
+          });
+        }}
         currentIndex={currentIndex}
         onIndexChange={setCurrentIndex}
         slides={slides}
