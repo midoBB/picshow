@@ -10,6 +10,7 @@ import type { SlideType } from "@/types/gallery";
 import { CustomSlide } from "./CustomSlide";
 import { DeleteButton } from "./DeleteButton";
 import { FavoriteButton } from "./FavoriteButton";
+import { useLightboxKeyboardNavigation } from "@/hooks/useLightboxKeyboardNavigation";
 
 const Lightbox = lazy(() => import("yet-another-react-lightbox"));
 
@@ -38,6 +39,13 @@ export const LightboxContainer = ({
 	slideShowRef,
 	onCurrentSlideDelete,
 }: LightboxContainerProps) => {
+	useLightboxKeyboardNavigation({
+		isOpen: open,
+		currentIndex,
+		onIndexChange,
+		slides,
+	});
+
 	return (
 		<Suspense fallback={null}>
 			<Lightbox
