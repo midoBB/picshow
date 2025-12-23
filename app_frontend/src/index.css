@@ -9,3 +9,10 @@
 .animation-delay-400 {
   animation-delay: 400ms;
 }
+
+/* Override lightbox z-index to allow dialogs to show over it.
+   Note: .yarl__portal is an internal library class name that could change in future versions.
+   If z-index override stops working, inspect the lightbox DOM to find the new class name. */
+.yarl__portal {
+  z-index: 1500 !important;
+}

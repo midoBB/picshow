@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { LuX } from "react-icons/lu";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
 import { GalleryGrid } from "@/components/GalleryGrid";
 import { EmptyState } from "@/components/GalleryGrid/EmptyState";
 import { FileItemSkeleton } from "@/components/GalleryGrid/FileItemSkeleton";
 import { LightboxContainer } from "@/components/Lightbox";
+import { useDeleteFile } from "@/queries/loaders";
 import { useDeleteFileHandler } from "@/hooks/useDeleteFileHandler";
 import { useFileSelection } from "@/hooks/useFileSelection";
 import { useGalleryFiltering } from "@/hooks/useGalleryFiltering";
@@ -142,6 +143,46 @@ export default function App() {
       setIsSelectionMode,
     );
 
+  // Lightbox delete handler
+  const deleteFileMutation = useDeleteFile();
+  const [lightboxDeleteDialog, setLightboxDeleteDialog] = useState<{
+    isOpen: boolean;
+    fileId: string | null;
+  }>({ isOpen: false, fileId: null });
+
+  const handleLightboxDelete = (slideId: string) => {
+    if (dontAskAgainForDelete) {
+      confirmLightboxDelete(slideId);
+    } else {
+      setLightboxDeleteDialog({ isOpen: true, fileId: slideId });
+    }
+  };
+
+  const confirmLightboxDelete = (slideId: string | null) => {
+    const id = slideId || lightboxDeleteDialog.fileId;
+    if (!id) return;
+
+    deleteFileMutation.mutate(id, {
+      onSuccess: () => {
+        setLightboxDeleteDialog({ isOpen: false, fileId: null });
+        // Navigate to next or previous slide, or close lightbox
+        const nextIndex =
+          currentIndex < slides.length - 1 ? currentIndex : currentIndex - 1;
+        if (nextIndex >= 0 && nextIndex < slides.length) {
+          setCurrentIndex(nextIndex);
+        } else {
+          setIsOpen(false);
+        }
+      },
+    });
+  };
+
+  const handleLightboxDeleteDialogChange = (open: boolean) => {
+    if (!open) {
+      setLightboxDeleteDialog({ isOpen: false, fileId: null });
+    }
+  };
+
   // Handle lightbox view change
   const handleViewChange = ({ index }: { index: number }) => {
     setCurrentIndex(index);
@@ -186,6 +227,7 @@ export default function App() {
         onControlsToggle={() => setIsShowingControls(!isShowingControls)}
         onViewChange={handleViewChange}
         slideShowRef={slideShowRef}
+        onCurrentSlideDelete={handleLightboxDelete}
       />
 
       {isErrorFiles ? (
@@ -275,6 +317,23 @@ export default function App() {
         dontAskAgain={dontAskAgainForDelete}
         setDontAskAgain={setDontAskAgainForDelete}
         files={selectedFileObjects}
+      />
+      <ConfirmDialog
+        isOpen={lightboxDeleteDialog.isOpen}
+        onOpenChange={handleLightboxDeleteDialogChange}
+        onConfirm={() => confirmLightboxDelete(null)}
+        dontAskAgain={dontAskAgainForDelete}
+        setDontAskAgain={setDontAskAgainForDelete}
+        files={
+          lightboxDeleteDialog.fileId
+            ? allFiles
+                .filter((f) => f.Id === lightboxDeleteDialog.fileId)
+                .map((f) => ({
+                  Id: f.Id,
+                  MimeType: f.MimeType,
+                }))
+            : []
+        }
       />
     </div>
   );
