@@ -1,7 +1,10 @@
 use anyhow::{anyhow, Result};
+use fast_image_resize::{self as fir, ResizeAlg, ResizeOptions};
+use image::DynamicImage;
 use image_hasher::{HashAlg, HasherConfig};
 use regex::Regex;
 use std::ffi::OsStr;
+use std::num::NonZeroU32;
 use std::path::Path;
 use std::process::Stdio;
 use std::sync::Arc;
@@ -54,7 +57,37 @@ impl Handler {
         let hash = xxh3_64(buf.as_slice()).to_string();
         Ok(hash)
     }
+    fn load_and_resize_fast(path: &str, target_size: u32) -> Result<DynamicImage> {
+        let img = image::open(path)?;
 
+        // Use SIMD-accelerated resizing
+        let width = NonZeroU32::new(img.width()).unwrap();
+        let height = NonZeroU32::new(img.height()).unwrap();
+
+        let src_image = fir::images::Image::from_vec_u8(
+            width.into(),
+            height.into(),
+            img.to_rgba8().into_raw(),
+            fir::PixelType::U8x4,
+        )?;
+
+        let dst_width = NonZeroU32::new(target_size).unwrap();
+        let dst_height = NonZeroU32::new(target_size).unwrap();
+        let mut dst_image =
+            fir::images::Image::new(dst_width.into(), dst_height.into(), fir::PixelType::U8x4);
+
+        let mut resizer = fir::Resizer::new();
+        resizer.resize(
+            &src_image,
+            &mut dst_image,
+            &ResizeOptions::new().resize_alg(ResizeAlg::Nearest), // Fastest
+        )?;
+
+        // Convert back to DynamicImage...
+        Ok(DynamicImage::ImageRgba8(
+            image::RgbaImage::from_raw(target_size, target_size, dst_image.into_vec()).unwrap(),
+        ))
+    }
     pub async fn compute_perceptual_hash(&self, file_path: &str) -> Result<Option<i64>> {
         let _permit = self.phash_semp.acquire().await?;
 
@@ -62,7 +95,7 @@ impl Handler {
             let file_path = file_path.to_string();
             move || {
                 // Load image using image crate
-                let img = image::open(&file_path)?;
+                let img = Self::load_and_resize_fast(&file_path, 64)?;
 
                 // Create hasher with PerceptualHash algorithm (8x8 DCT)
                 let hasher = HasherConfig::new()
@@ -149,6 +182,7 @@ impl Handler {
 
         // Compute perceptual hash
         let perceptual_hash = self.compute_perceptual_hash(path).await?;
+        tracing::info!("Perceptual hash: {}", perceptual_hash.unwrap_or(-1));
 
         let (thumb_width, thumb_height) = self.calculate_thumb_size(width, height);
         let temp = tempfile::NamedTempFile::new()?;

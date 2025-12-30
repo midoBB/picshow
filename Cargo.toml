@@ -65,3 +65,4 @@ local-ip-address = "0.6"
 reqwest = { version = "0.12", default-features = false }
 image_hasher = "3.0"
 image = "0.25"
+fast_image_resize = "5.4.0"
