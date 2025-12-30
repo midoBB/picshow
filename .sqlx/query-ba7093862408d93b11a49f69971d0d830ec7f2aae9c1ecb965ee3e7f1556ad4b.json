@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT t.data\n                   FROM cluster_members cm\n                   JOIN images i ON cm.image_id = i.id\n                   JOIN thumbnails t ON i.thumbnail_id = t.id\n                   WHERE cm.cluster_id = ?\n                   LIMIT 4",
+  "describe": {
+    "columns": [
+      {
+        "name": "data",
+        "ordinal": 0,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "ba7093862408d93b11a49f69971d0d830ec7f2aae9c1ecb965ee3e7f1556ad4b"
+}

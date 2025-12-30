@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE cluster_members SET is_best_shot = 0 WHERE cluster_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "fc96e050e7d8d8b4c63cd2d75c2a806eee055e0453b081b62408c2b930edb84c"
+}

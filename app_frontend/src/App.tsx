@@ -5,6 +5,7 @@ import { GalleryGrid } from "@/components/GalleryGrid";
 import { EmptyState } from "@/components/GalleryGrid/EmptyState";
 import { FileItemSkeleton } from "@/components/GalleryGrid/FileItemSkeleton";
 import { LightboxContainer } from "@/components/Lightbox";
+import { ClusterView } from "@/components/ClusterView";
 import { useDeleteFile } from "@/queries/loaders";
 import { useDeleteFileHandler } from "@/hooks/useDeleteFileHandler";
 import { useFileSelection } from "@/hooks/useFileSelection";
@@ -26,6 +27,7 @@ export default function App() {
   const navbarRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isFirstRun = useRef(true);
+  const [viewMode, setViewMode] = useState<"gallery" | "clusters">("gallery");
 
   // App state
   const {
@@ -207,10 +209,13 @@ export default function App() {
           sortDirection={sortDirection}
           sortType={sortType}
           selectedCategory={selectedCategory}
+          viewMode={viewMode}
+          setViewMode={setViewMode}
         />
       </div>
 
-      <LightboxContainer
+      {viewMode === "gallery" && (
+        <LightboxContainer
         open={isOpen}
         onClose={() => {
           setIsOpen(false);
@@ -229,8 +234,11 @@ export default function App() {
         slideShowRef={slideShowRef}
         onCurrentSlideDelete={handleLightboxDelete}
       />
+      )}
 
-      {isErrorFiles ? (
+      {viewMode === "clusters" ? (
+        <ClusterView />
+      ) : isErrorFiles ? (
         <div
           className={`flex items-center justify-center h-screen ${isDarkMode ? "bg-gray-900 text-white" : "bg-white text-gray-900"}`}
         >
@@ -308,7 +316,8 @@ export default function App() {
             )}
           </div>
         </>
-      )}
+      )
+      }
 
       <ConfirmDialog
         isOpen={deleteDialogState.isOpen}

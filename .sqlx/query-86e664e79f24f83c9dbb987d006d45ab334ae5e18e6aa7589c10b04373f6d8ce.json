@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT mf.id\n               FROM cluster_members cm\n               JOIN images i ON cm.image_id = i.id\n               JOIN media_images mi ON i.id = mi.image_id\n               JOIN media_files mf ON mi.media_id = mf.id\n               WHERE cm.cluster_id = ? AND cm.is_best_shot = 0",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "86e664e79f24f83c9dbb987d006d45ab334ae5e18e6aa7589c10b04373f6d8ce"
+}

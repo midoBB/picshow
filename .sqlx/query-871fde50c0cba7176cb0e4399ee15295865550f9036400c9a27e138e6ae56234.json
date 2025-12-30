@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO image_clusters (representative_image_id, created_at, is_resolved) VALUES (?, ?, 0)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "871fde50c0cba7176cb0e4399ee15295865550f9036400c9a27e138e6ae56234"
+}

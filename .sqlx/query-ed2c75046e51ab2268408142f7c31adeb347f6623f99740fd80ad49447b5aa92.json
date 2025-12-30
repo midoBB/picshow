@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT c.cluster_id, i.perceptual_hash\n               FROM image_clusters c\n               JOIN images i ON c.representative_image_id = i.id\n               WHERE i.perceptual_hash IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "cluster_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "ed2c75046e51ab2268408142f7c31adeb347f6623f99740fd80ad49447b5aa92"
+}

@@ -341,3 +341,55 @@ impl From<FileQuery> for FilledFileQuery {
 struct DeleteFilesRequest {
     ids: String,
 }
+
+// ===== Clustering DTOs =====
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterDTO {
+    pub cluster_id: i64,
+    pub image_count: i32,
+    pub representative_image_id: String,
+    pub preview_thumbnails: Vec<String>,
+    pub is_resolved: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterImageDTO {
+    pub id: String,
+    pub filename: String,
+    pub hamming_distance: i32,
+    pub is_best_shot: bool,
+    pub thumbnail: String,
+    pub width: i32,
+    pub height: i32,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClustersResponse {
+    pub clusters: Vec<ClusterDTO>,
+    pub pagination: PaginationDTO,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClusterDetailResponse {
+    pub cluster_id: i64,
+    pub images: Vec<ClusterImageDTO>,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolveClusterRequest {
+    pub best_shot_id: String,
+    pub delete_others: bool,
+}
+
+#[derive(serde::Deserialize)]
+pub struct ClusterQuery {
+    pub page: Option<u32>,
+    pub page_size: Option<u32>,
+}

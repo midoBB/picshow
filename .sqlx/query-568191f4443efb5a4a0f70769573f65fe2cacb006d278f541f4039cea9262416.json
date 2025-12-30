@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT i.id, i.perceptual_hash\n               FROM cluster_members cm\n               JOIN images i ON cm.image_id = i.id\n               JOIN media_images mi ON i.id = mi.image_id\n               JOIN media_files mf ON mi.media_id = mf.id\n               WHERE cm.cluster_id = ? AND i.perceptual_hash IS NOT NULL",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "perceptual_hash",
+        "ordinal": 1,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      true
+    ]
+  },
+  "hash": "568191f4443efb5a4a0f70769573f65fe2cacb006d278f541f4039cea9262416"
+}

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO cluster_members (cluster_id, image_id, hamming_distance, is_best_shot, added_at)\n             VALUES (?, ?, ?, 0, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "1541c61af0b3b058bcdfc3d033914f048af1240413f97ae8fdf422b03fc8b251"
+}

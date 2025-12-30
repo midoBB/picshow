@@ -1,4 +1,5 @@
 use anyhow::{anyhow, Result};
+use image_hasher::{HashAlg, HasherConfig};
 use regex::Regex;
 use std::ffi::OsStr;
 use std::path::Path;
@@ -8,7 +9,7 @@ use tokio::fs::File;
 use tokio::io::{AsyncReadExt, BufReader};
 use tokio::process::Command;
 use tokio::sync::Semaphore;
-use tracing::debug;
+use tracing::{debug, warn};
 use uuid::Uuid;
 use xxhash_rust::const_xxh3::xxh3_64;
 
@@ -23,6 +24,7 @@ pub struct Handler {
     convert_semp: Arc<Semaphore>,
     ffmpeg_semp: Arc<Semaphore>,
     ffpobe_semp: Arc<Semaphore>,
+    phash_semp: Arc<Semaphore>,
 }
 
 impl Handler {
@@ -35,6 +37,7 @@ impl Handler {
             convert_semp: Arc::new(Semaphore::new(1)),
             ffmpeg_semp: Arc::new(Semaphore::new(1)),
             ffpobe_semp: Arc::new(Semaphore::new(1)),
+            phash_semp: Arc::new(Semaphore::new(1)),
         }
     }
     pub async fn generate_key(&self, file_path: &str) -> Result<String> {
@@ -51,6 +54,48 @@ impl Handler {
         let hash = xxh3_64(buf.as_slice()).to_string();
         Ok(hash)
     }
+
+    pub async fn compute_perceptual_hash(&self, file_path: &str) -> Result<Option<i64>> {
+        let _permit = self.phash_semp.acquire().await?;
+
+        match tokio::task::spawn_blocking({
+            let file_path = file_path.to_string();
+            move || {
+                // Load image using image crate
+                let img = image::open(&file_path)?;
+
+                // Create hasher with PerceptualHash algorithm (8x8 DCT)
+                let hasher = HasherConfig::new()
+                    .hash_alg(HashAlg::Gradient)
+                    .hash_size(8, 8)
+                    .to_hasher();
+
+                // Compute hash
+                let hash = hasher.hash_image(&img);
+
+                // Convert to i64 (SQLite INTEGER)
+                let hash_bytes = hash.as_bytes();
+                if hash_bytes.len() < 8 {
+                    return Err(anyhow!("Hash too short"));
+                }
+                let hash_u64 = u64::from_be_bytes(hash_bytes[0..8].try_into()?);
+                Ok(hash_u64 as i64)
+            }
+        })
+        .await
+        {
+            Ok(Ok(hash)) => Ok(Some(hash)),
+            Ok(Err(e)) => {
+                warn!("Failed to compute perceptual hash for {}: {}", file_path, e);
+                Ok(None)
+            }
+            Err(e) => {
+                warn!("Perceptual hash task panicked for {}: {}", file_path, e);
+                Ok(None)
+            }
+        }
+    }
+
     pub async fn handle_new_image(
         &self,
         file: UnfilledMediaFile,
@@ -101,6 +146,10 @@ impl Handler {
             ))?
             .as_str()
             .parse::<u32>()?;
+
+        // Compute perceptual hash
+        let perceptual_hash = self.compute_perceptual_hash(path).await?;
+
         let (thumb_width, thumb_height) = self.calculate_thumb_size(width, height);
         let temp = tempfile::NamedTempFile::new()?;
         let temp_path = temp
@@ -135,7 +184,7 @@ impl Handler {
         reader.read_to_end(&mut buf).await?;
         let thumbnail = Thumbnail::new(uuid::Uuid::new_v4(), thumb_width, thumb_height, buf);
         let with_image = file.with_image(
-            Image::new(Uuid::new_v4(), width, height, thumbnail),
+            Image::new(Uuid::new_v4(), width, height, perceptual_hash, thumbnail),
             full_mime,
         );
         drop(convert_perm);

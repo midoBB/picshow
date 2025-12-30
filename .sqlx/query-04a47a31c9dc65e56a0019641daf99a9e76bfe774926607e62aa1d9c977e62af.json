@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                c.cluster_id,\n                c.representative_image_id,\n                c.created_at,\n                c.is_resolved,\n                COUNT(DISTINCT cm.image_id) as image_count\n            FROM image_clusters c\n            JOIN cluster_members cm ON c.cluster_id = cm.cluster_id\n            WHERE c.is_resolved = 0\n            GROUP BY c.cluster_id\n            ORDER BY c.created_at DESC\n            LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "cluster_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "representative_image_id",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "created_at",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_resolved",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "image_count",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "04a47a31c9dc65e56a0019641daf99a9e76bfe774926607e62aa1d9c977e62af"
+}

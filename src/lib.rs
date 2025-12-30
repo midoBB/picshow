@@ -1,4 +1,5 @@
 pub mod cache;
+pub mod clustering;
 pub mod cmd;
 pub mod config;
 pub mod data;

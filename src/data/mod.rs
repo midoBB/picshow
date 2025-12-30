@@ -224,16 +224,18 @@ pub struct Image {
     pub id: uuid::Uuid,
     pub width: u32,
     pub height: u32,
+    pub perceptual_hash: Option<i64>,
     #[sqlx(skip)]
     pub thumbnail: Thumbnail,
 }
 
 impl Image {
-    pub fn new(id: uuid::Uuid, width: u32, height: u32, thumbnail: Thumbnail) -> Self {
+    pub fn new(id: uuid::Uuid, width: u32, height: u32, perceptual_hash: Option<i64>, thumbnail: Thumbnail) -> Self {
         Self {
             id,
             width,
             height,
+            perceptual_hash,
             thumbnail,
         }
     }

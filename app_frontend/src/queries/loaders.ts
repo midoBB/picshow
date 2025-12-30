@@ -6,17 +6,26 @@ import {
 } from "@tanstack/react-query";
 import {
   deleteFile,
+  fetchClusters,
+  fetchClusterDetail,
   fetchPaginatedFiles,
   fetchSettings,
   fetchStats,
   fetchThumbnail,
   getIsFavorite,
   type PaginationParams,
+  rebuildClusters,
+  resolveCluster,
   toggleFavorite,
   triggerScan,
   updateSettings,
 } from "@/queries/api";
-import type { AppSettings, Stats } from "@/queries/model";
+import type {
+  AppSettings,
+  ClusterDetailResponse,
+  ClustersResponse,
+  Stats,
+} from "@/queries/model";
 
 export const useStats = () => {
   return useQuery<Stats>({
@@ -155,6 +164,55 @@ export const useTriggerScan = () => {
     mutationFn: triggerScan,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
+  });
+};
+
+// ===== Clustering Hooks =====
+
+export const useInfiniteClusters = () => {
+  return useInfiniteQuery({
+    queryKey: ["clusters"],
+    queryFn: ({ pageParam }) =>
+      fetchClusters({ page: pageParam.page, pageSize: pageParam.pageSize }),
+    initialPageParam: { page: 1, pageSize: 20 },
+    getNextPageParam: (lastPage) =>
+      lastPage.pagination.next_page
+        ? { page: lastPage.pagination.next_page, pageSize: 20 }
+        : undefined,
+    getPreviousPageParam: (firstPage) =>
+      firstPage.pagination.prev_page
+        ? { page: firstPage.pagination.prev_page, pageSize: 20 }
+        : undefined,
+  });
+};
+
+export const useClusterDetail = (clusterId: number) => {
+  return useQuery<ClusterDetailResponse>({
+    queryKey: ["cluster", clusterId],
+    queryFn: () => fetchClusterDetail(clusterId),
+    enabled: !!clusterId,
+  });
+};
+
+export const useResolveCluster = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: resolveCluster,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["clusters"] });
+      queryClient.invalidateQueries({ queryKey: ["files"] });
+      queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
+  });
+};
+
+export const useRebuildClusters = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: rebuildClusters,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["clusters"] });
     },
   });
 };

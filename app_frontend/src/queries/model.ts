@@ -70,3 +70,38 @@ export const AppSettingsSchema = z.object({
 export type AppSettings = z.infer<typeof AppSettingsSchema>;
 
 export type PartialAppSettings = Partial<AppSettings>;
+
+// ===== Clustering Schemas =====
+
+export const ClusterDTOSchema = z.object({
+  clusterId: z.number(),
+  imageCount: z.number(),
+  representativeImageId: z.string(),
+  previewThumbnails: z.array(z.string()),
+  isResolved: z.boolean(),
+  createdAt: z.coerce.date(),
+});
+export type ClusterDTO = z.infer<typeof ClusterDTOSchema>;
+
+export const ClusterImageSchema = z.object({
+  id: z.string(),
+  filename: z.string(),
+  hammingDistance: z.number(),
+  isBestShot: z.boolean(),
+  thumbnail: z.string(),
+  width: z.number(),
+  height: z.number(),
+});
+export type ClusterImage = z.infer<typeof ClusterImageSchema>;
+
+export const ClustersResponseSchema = z.object({
+  clusters: z.array(ClusterDTOSchema),
+  pagination: PaginationSchema,
+});
+export type ClustersResponse = z.infer<typeof ClustersResponseSchema>;
+
+export const ClusterDetailResponseSchema = z.object({
+  clusterId: z.number(),
+  images: z.array(ClusterImageSchema),
+});
+export type ClusterDetailResponse = z.infer<typeof ClusterDetailResponseSchema>;

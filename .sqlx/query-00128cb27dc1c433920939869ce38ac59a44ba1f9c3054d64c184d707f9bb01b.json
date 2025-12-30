@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE image_clusters SET is_resolved = 1 WHERE cluster_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "00128cb27dc1c433920939869ce38ac59a44ba1f9c3054d64c184d707f9bb01b"
+}

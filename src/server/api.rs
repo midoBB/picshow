@@ -75,7 +75,11 @@ pub async fn run_server(
         .route("/processor-status", get(processor_status_stream))
         .route("/internal/trigger-scan", post(trigger_scan))
         .route("/internal/lock/:secret", get(lock))
-        .route("/internal/unlock/:secret", get(unlock));
+        .route("/internal/unlock/:secret", get(unlock))
+        .route("/clusters", get(get_clusters_handler))
+        .route("/clusters/:id", get(get_cluster_detail_handler))
+        .route("/clusters/:id/resolve", post(resolve_cluster_handler))
+        .route("/internal/rebuild-clusters", post(rebuild_clusters_handler));
     let app = axum::Router::new()
         .nest("/api", api_routes)
         .fallback(|path: Request| async move { serve_static_file::<FrontendAssets>(path.uri()) })
@@ -509,4 +513,168 @@ async fn processor_status_stream(
             .interval(std::time::Duration::from_secs(15))
             .text("keepalive"),
     )
+}
+
+// ===== Clustering Endpoints =====
+
+async fn get_clusters_handler(
+    State(state): State<Arc<AppState>>,
+    Query(query): Query<super::ClusterQuery>,
+) -> impl IntoResponse {
+    let page = query.page.unwrap_or(1);
+    let page_size = query.page_size.unwrap_or(20);
+
+    match state.repo.get_clusters_paginated(page, page_size).await {
+        Ok((pagination, clusters)) => {
+            let response = super::ClustersResponse {
+                clusters,
+                pagination: PaginationDTO::from(pagination),
+            };
+            axum::Json(response).into_response()
+        }
+        Err(e) => {
+            error!("Failed to get clusters: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": "Failed to get clusters"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn get_cluster_detail_handler(
+    State(state): State<Arc<AppState>>,
+    Path(cluster_id): Path<i64>,
+) -> impl IntoResponse {
+    match state.repo.get_cluster_images(cluster_id).await {
+        Ok(images) => {
+            let response = super::ClusterDetailResponse {
+                cluster_id,
+                images,
+            };
+            axum::Json(response).into_response()
+        }
+        Err(e) => {
+            error!("Failed to get cluster detail: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": "Failed to get cluster detail"})),
+            )
+                .into_response()
+        }
+    }
+}
+
+async fn resolve_cluster_handler(
+    State(state): State<Arc<AppState>>,
+    Path(cluster_id): Path<i64>,
+    Json(payload): Json<super::ResolveClusterRequest>,
+) -> impl IntoResponse {
+    // Parse best shot ID
+    let best_shot_id = match Uuid::parse_str(&payload.best_shot_id) {
+        Ok(id) => id,
+        Err(e) => {
+            error!("Failed to parse best_shot_id: {:?}", e);
+            return (
+                StatusCode::BAD_REQUEST,
+                axum::Json(json!({"error": "Invalid best_shot_id"})),
+            )
+                .into_response();
+        }
+    };
+
+    // Mark the best shot
+    if let Err(e) = state.repo.mark_best_shot(cluster_id, best_shot_id).await {
+        error!("Failed to mark best shot: {:?}", e);
+        return (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            axum::Json(json!({"error": "Failed to mark best shot"})),
+        )
+            .into_response();
+    }
+
+    // Get media file IDs to delete
+    let media_file_ids = match state.repo.resolve_cluster(cluster_id).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            error!("Failed to resolve cluster: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": "Failed to resolve cluster"})),
+            )
+                .into_response();
+        }
+    };
+
+    if payload.delete_others && !media_file_ids.is_empty() {
+        // Get delete mode from settings
+        let settings = state.settings.get().await;
+        let delete_mode = match settings.delete_mode {
+            crate::config::DeleteMode::MoveToTrash => crate::files::processor::DeleteMode::MoveToTrash,
+            crate::config::DeleteMode::DeletePermanently => crate::files::processor::DeleteMode::DeletePermanently,
+        };
+
+        // Send delete command to processor
+        let ids_clone = media_file_ids.clone();
+        if let Err(e) = state.command_tx.send(ProcessorCommand::DeleteFiles {
+            ids: ids_clone,
+            mode: delete_mode,
+        }) {
+            error!("Failed to send delete command: {:?}", e);
+        }
+
+        // Delete from database
+        let deleted_count = media_file_ids.len();
+        if let Err(e) = state.repo.batch_delete_files(media_file_ids).await {
+            error!("Failed to delete files from database: {:?}", e);
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": "Failed to delete files"})),
+            )
+                .into_response();
+        }
+
+        (
+            StatusCode::OK,
+            axum::Json(json!({"success": true, "deleted_count": deleted_count})),
+        )
+            .into_response()
+    } else {
+        (
+            StatusCode::OK,
+            axum::Json(json!({"success": true, "deleted_count": 0})),
+        )
+            .into_response()
+    }
+}
+
+async fn rebuild_clusters_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
+    use crate::clustering::ClusterBuilder;
+
+    let builder = ClusterBuilder::new(state.repo.clone());
+
+    match builder.build_clusters().await {
+        Ok(stats) => {
+            info!(
+                "Cluster rebuild complete: {} clusters, {} images clustered",
+                stats.clusters_created, stats.images_clustered
+            );
+            axum::Json(json!({
+                "success": true,
+                "clusters_created": stats.clusters_created,
+                "images_clustered": stats.images_clustered,
+                "total_images": stats.total_images
+            }))
+            .into_response()
+        }
+        Err(e) => {
+            error!("Failed to rebuild clusters: {:?}", e);
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                axum::Json(json!({"error": "Failed to rebuild clusters"})),
+            )
+                .into_response()
+        }
+    }
 }
