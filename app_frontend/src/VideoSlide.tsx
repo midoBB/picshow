@@ -46,6 +46,7 @@ const VideoSlide = ({ slide }: VideoSlideProps) => {
         controls
         muted
         className="h-full w-full rounded-lg"
+        style={{ touchAction: "pan-y pinch-zoom" }}
         aria-label="Video player"
       />
     </div>

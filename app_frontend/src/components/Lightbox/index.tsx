@@ -15,70 +15,70 @@ import { useLightboxKeyboardNavigation } from "@/hooks/useLightboxKeyboardNaviga
 const Lightbox = lazy(() => import("yet-another-react-lightbox"));
 
 interface LightboxContainerProps {
-	open: boolean;
-	onClose: () => void;
-	currentIndex: number;
-	onIndexChange: (index: number) => void;
-	slides: SlideType[];
-	isShowingControls: boolean;
-	onControlsToggle: () => void;
-	onViewChange: ({ index }: { index: number }) => void;
-	slideShowRef: React.MutableRefObject<SlideshowRef | null>;
-	onCurrentSlideDelete?: (slideId: string) => void;
+  open: boolean;
+  onClose: () => void;
+  currentIndex: number;
+  onIndexChange: (index: number) => void;
+  slides: SlideType[];
+  isShowingControls: boolean;
+  onControlsToggle: () => void;
+  onViewChange: ({ index }: { index: number }) => void;
+  slideShowRef: React.MutableRefObject<SlideshowRef | null>;
+  onCurrentSlideDelete?: (slideId: string) => void;
 }
 
 export const LightboxContainer = ({
-	open,
-	onClose,
-	currentIndex,
-	onIndexChange,
-	slides,
-	isShowingControls,
-	onControlsToggle,
-	onViewChange,
-	slideShowRef,
-	onCurrentSlideDelete,
+  open,
+  onClose,
+  currentIndex,
+  onIndexChange,
+  slides,
+  isShowingControls,
+  onControlsToggle,
+  onViewChange,
+  slideShowRef,
+  onCurrentSlideDelete,
 }: LightboxContainerProps) => {
-	useLightboxKeyboardNavigation({
-		isOpen: open,
-		currentIndex,
-		onIndexChange,
-		slides,
-	});
+  useLightboxKeyboardNavigation({
+    isOpen: open,
+    currentIndex,
+    onIndexChange,
+    slides,
+  });
 
-	return (
-		<Suspense fallback={null}>
-			<Lightbox
-				open={open}
-				close={onClose}
-				carousel={{ finite: true }}
-				index={currentIndex}
-				slides={slides}
-				fullscreen={{ auto: false }}
-				slideshow={{ autoplay: false, delay: 5000, ref: slideShowRef }}
-				plugins={[Thumbnails, Fullscreen, Slideshow]}
-				thumbnails={{ showToggle: true, hidden: true }}
-				toolbar={{
-					buttons: [
-						<FavoriteButton key="favorite" />,
-						<DeleteButton key="delete" onDelete={onCurrentSlideDelete} />,
-						"close",
-					],
-				}}
-				render={{
-					slide: CustomSlide,
-					buttonPrev:
-						isShowingControls && currentIndex > 0 ? undefined : () => null,
-					buttonNext:
-						isShowingControls && currentIndex < slides.length - 1
-							? undefined
-							: () => null,
-				}}
-				on={{
-					click: onControlsToggle,
-					view: onViewChange,
-				}}
-			/>
-		</Suspense>
-	);
+  return (
+    <Suspense fallback={null}>
+      <Lightbox
+        open={open}
+        close={onClose}
+        carousel={{ finite: true }}
+        index={currentIndex}
+        slides={slides}
+        fullscreen={{ auto: false }}
+        slideshow={{ autoplay: false, delay: 5000, ref: slideShowRef }}
+        plugins={[Thumbnails, Fullscreen, Slideshow]}
+        thumbnails={{ showToggle: true, hidden: true }}
+        toolbar={{
+          buttons: [
+            <FavoriteButton key="favorite" />,
+            <DeleteButton key="delete" onDelete={onCurrentSlideDelete} />,
+            "close",
+          ],
+        }}
+        render={{
+          slide: CustomSlide,
+          buttonPrev:
+            isShowingControls && currentIndex > 0 ? undefined : () => null,
+          buttonNext:
+            isShowingControls && currentIndex < slides.length - 1
+              ? undefined
+              : () => null,
+        }}
+        on={{
+          click: onControlsToggle,
+          view: onViewChange,
+        }}
+      />
+    </Suspense>
+  );
 };
