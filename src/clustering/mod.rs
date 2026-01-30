@@ -22,16 +22,31 @@ impl ClusterBuilder {
     pub fn new(repository: Arc<MediaRepository>) -> Self {
         Self {
             repository,
-            hamming_threshold: 12, // Very similar only
+            hamming_threshold: 15, // Very similar only
         }
     }
 
-    /// Calculate Hamming distance between two hashes
-    fn hamming_distance(hash1: i64, hash2: i64) -> u32 {
-        // Convert to u64 for XOR operation
-        let h1 = hash1 as u64;
-        let h2 = hash2 as u64;
-        (h1 ^ h2).count_ones()
+    fn min_distance(hashset_a: &[u64], hashset_b: &[u64]) -> Option<u32> {
+        if hashset_a.is_empty() || hashset_b.is_empty() {
+            return None;
+        }
+
+        let mut best: Option<u32> = None;
+        for a in hashset_a {
+            for b in hashset_b {
+                let d = (a ^ b).count_ones();
+                match best {
+                    Some(cur) if d >= cur => {}
+                    _ => {
+                        best = Some(d);
+                        if d == 0 {
+                            return Some(0);
+                        }
+                    }
+                }
+            }
+        }
+        best
     }
 
     /// Build clusters from all images with perceptual hashes
@@ -71,28 +86,29 @@ impl ClusterBuilder {
         // Step 3: In-Memory Clustering (pure CPU operations, no DB calls)
         // Each cluster stores its members with their hashes for distance calculations
         struct InMemoryCluster {
-            members: Vec<(Uuid, u64)>, // (image_id, hash)
+            members: Vec<(Uuid, Vec<u64>)>, // (image_id, hashes)
         }
 
         let mut clusters: Vec<InMemoryCluster> = Vec::new();
 
-        for (image_id, hash_i64) in all_images {
-            let hash_u64 = hash_i64 as u64;
+        for (image_id, hashes_i64) in all_images {
+            let hashes_u64: Vec<u64> = hashes_i64.into_iter().map(|h| h as u64).collect();
             let mut best_cluster_idx: Option<usize> = None;
             let mut min_distance = u32::MAX;
 
             // Compare against ALL existing clusters in RAM (no DB calls!)
             // True single-linkage: check distance to ALL members of each cluster
             for (cluster_idx, cluster) in clusters.iter().enumerate() {
-                for (_, member_hash) in &cluster.members {
-                    let distance = (hash_u64 ^ member_hash).count_ones();
+                for (_, member_hashes) in &cluster.members {
+                    let Some(distance) = Self::min_distance(&hashes_u64, member_hashes) else {
+                        continue;
+                    };
 
                     if distance < self.hamming_threshold {
                         if distance < min_distance {
                             min_distance = distance;
                             best_cluster_idx = Some(cluster_idx);
                         }
-                        // Optimization: if distance is 0 (identical), stop searching
                         if distance == 0 {
                             break;
                         }
@@ -103,12 +119,12 @@ impl ClusterBuilder {
             // Add to existing cluster or create new one (all in RAM)
             match best_cluster_idx {
                 Some(idx) => {
-                    clusters[idx].members.push((image_id, hash_u64));
+                    clusters[idx].members.push((image_id, hashes_u64));
                 }
                 None => {
                     // Create new cluster
                     clusters.push(InMemoryCluster {
-                        members: vec![(image_id, hash_u64)],
+                        members: vec![(image_id, hashes_u64)],
                     });
                 }
             }
@@ -127,7 +143,7 @@ impl ClusterBuilder {
 
             // Use first member as representative
             let representative_id = cluster.members[0].0;
-            let representative_hash = cluster.members[0].1;
+            let representative_hashes = &cluster.members[0].1;
 
             // Create cluster in DB
             let db_cluster_id = self.repository.create_cluster(representative_id).await?;
@@ -137,9 +153,9 @@ impl ClusterBuilder {
             let members_with_distances: Vec<(Uuid, u32)> = cluster
                 .members
                 .iter()
-                .map(|(id, hash)| {
-                    let distance = (hash ^ representative_hash).count_ones();
-                    (*id, distance)
+                .filter_map(|(id, hashes)| {
+                    let distance = Self::min_distance(hashes, representative_hashes)?;
+                    Some((*id, distance))
                 })
                 .collect();
 
@@ -173,8 +189,12 @@ impl ClusterBuilder {
     }
 
     /// Add a newly processed image to existing clusters (incremental clustering)
-    pub async fn add_to_clusters(&self, image_id: Uuid, phash: i64) -> Result<()> {
-        debug!("Attempting to add image {} to existing clusters", image_id);
+    pub async fn add_to_clusters_multi(&self, image_id: Uuid, hashes: &[i64]) -> Result<()> {
+        debug!(
+            "Attempting to add image {} to existing clusters ({} hashes)",
+            image_id,
+            hashes.len()
+        );
 
         // Fetch cluster representatives
         let representatives = self.repository.get_cluster_representatives().await?;
@@ -186,8 +206,13 @@ impl ClusterBuilder {
 
         let mut best_match: Option<(i64, u32)> = None; // (cluster_id, distance)
 
-        for (cluster_id, rep_hash) in representatives {
-            let distance = Self::hamming_distance(phash, rep_hash);
+        let hashes_u64: Vec<u64> = hashes.iter().copied().map(|h| h as u64).collect();
+
+        for (cluster_id, rep_hashes) in representatives {
+            let rep_u64: Vec<u64> = rep_hashes.into_iter().map(|h| h as u64).collect();
+            let Some(distance) = Self::min_distance(&hashes_u64, &rep_u64) else {
+                continue;
+            };
 
             if distance < self.hamming_threshold {
                 if let Some((_, best_distance)) = best_match {
@@ -214,29 +239,8 @@ impl ClusterBuilder {
 
         Ok(())
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_hamming_distance() {
-        // Same hashes
-        assert_eq!(ClusterBuilder::hamming_distance(0, 0), 0);
-
-        // Different by 1 bit
-        assert_eq!(ClusterBuilder::hamming_distance(0b1010, 0b1110), 1);
-
-        // Different by 2 bits
-        assert_eq!(ClusterBuilder::hamming_distance(0b1010, 0b1100), 2);
-
-        // Completely different
-        assert_eq!(ClusterBuilder::hamming_distance(0b0000, 0b1111), 4);
-
-        // Real-world example with i64
-        let hash1: i64 = 123456789;
-        let hash2: i64 = 123456790;
-        assert!(ClusterBuilder::hamming_distance(hash1, hash2) > 0);
+    pub async fn add_to_clusters(&self, image_id: Uuid, phash: i64) -> Result<()> {
+        self.add_to_clusters_multi(image_id, &[phash]).await
     }
 }

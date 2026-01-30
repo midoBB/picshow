@@ -292,12 +292,18 @@ impl MediaRepository {
         // Single optimized query with JOIN to get both media and thumbnail data
         let query_str = match &media_file.media_type {
             MediaType::Image => {
-                "SELECT i.id, i.width, i.height, i.perceptual_hash, 0 as duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+                "SELECT i.id, i.width, i.height,
+                        i.perceptual_hash, i.perceptual_hash_center, i.perceptual_hash_tl, i.perceptual_hash_tr, i.perceptual_hash_bl, i.perceptual_hash_br,
+                        0 as duration_ms,
+                        t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
                  FROM images i JOIN thumbnails t ON i.thumbnail_id = t.id
                  WHERE i.id = ?"
             }
             MediaType::Video => {
-                "SELECT v.id, v.width, v.height, NULL as perceptual_hash, v.duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+                "SELECT v.id, v.width, v.height,
+                        NULL as perceptual_hash, NULL as perceptual_hash_center, NULL as perceptual_hash_tl, NULL as perceptual_hash_tr, NULL as perceptual_hash_bl, NULL as perceptual_hash_br,
+                        v.duration_ms,
+                        t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
                  FROM videos v JOIN thumbnails t ON v.thumbnail_id = t.id
                  WHERE v.id = ?"
             }
@@ -327,6 +333,11 @@ impl MediaRepository {
                     width: row.get("width"),
                     height: row.get("height"),
                     perceptual_hash: row.try_get("perceptual_hash").ok(),
+                    perceptual_hash_center: row.try_get("perceptual_hash_center").ok(),
+                    perceptual_hash_tl: row.try_get("perceptual_hash_tl").ok(),
+                    perceptual_hash_tr: row.try_get("perceptual_hash_tr").ok(),
+                    perceptual_hash_bl: row.try_get("perceptual_hash_bl").ok(),
+                    perceptual_hash_br: row.try_get("perceptual_hash_br").ok(),
                     thumbnail,
                 };
                 Ok(media_file.with_image(image, mime_type.clone()))
@@ -666,12 +677,22 @@ impl MediaRepository {
             .execute(&mut **tx)
             .await?;
 
-        sqlx::query(r#"INSERT INTO images (id, width, height, thumbnail_id, perceptual_hash) VALUES (?, ?, ?, ?, ?)"#)
+        sqlx::query(
+            r#"INSERT INTO images (
+                    id, width, height, thumbnail_id,
+                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        )
             .bind(image.id)
             .bind(image.width)
             .bind(image.height)
             .bind(image.thumbnail.id)
             .bind(image.perceptual_hash)
+            .bind(image.perceptual_hash_center)
+            .bind(image.perceptual_hash_tl)
+            .bind(image.perceptual_hash_tr)
+            .bind(image.perceptual_hash_bl)
+            .bind(image.perceptual_hash_br)
             .execute(&mut **tx)
             .await?;
 
@@ -716,11 +737,22 @@ impl MediaRepository {
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query(r#"INSERT INTO images (id, width, height, thumbnail_id) VALUES (?, ?, ?, ?)"#)
+        sqlx::query(
+            r#"INSERT INTO images (
+                    id, width, height, thumbnail_id,
+                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+        )
             .bind(image.id)
             .bind(image.width)
             .bind(image.height)
             .bind(thumbnail.id)
+            .bind(image.perceptual_hash)
+            .bind(image.perceptual_hash_center)
+            .bind(image.perceptual_hash_tl)
+            .bind(image.perceptual_hash_tr)
+            .bind(image.perceptual_hash_bl)
+            .bind(image.perceptual_hash_br)
             .execute(&mut *tx)
             .await?;
 
@@ -1091,12 +1123,17 @@ impl MediaRepository {
                 mf.id, mf.hash, mf.created_at, mf.filename, mf.size, mf.media_type,
                 mf.last_modified, mf.is_favorite, mf.mime_type,
                 COALESCE(i.id, v.id) as media_id,
-                COALESCE(i.width, v.width) as width,
-                COALESCE(i.height, v.height) as height,
-                i.perceptual_hash,
-                COALESCE(v.duration_ms, 0) as duration_ms,
-                t.id as thumbnail_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
-            FROM media_files mf
+                 COALESCE(i.width, v.width) as width,
+                 COALESCE(i.height, v.height) as height,
+                 i.perceptual_hash,
+                 i.perceptual_hash_center,
+                 i.perceptual_hash_tl,
+                 i.perceptual_hash_tr,
+                 i.perceptual_hash_bl,
+                 i.perceptual_hash_br,
+                 COALESCE(v.duration_ms, 0) as duration_ms,
+                 t.id as thumbnail_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+             FROM media_files mf
             LEFT JOIN media_images mi ON mf.id = mi.media_id
             LEFT JOIN images i ON mi.image_id = i.id
             LEFT JOIN media_videos mv ON mf.id = mv.media_id
@@ -1146,6 +1183,11 @@ impl MediaRepository {
                             width: row.get("width"),
                             height: row.get("height"),
                             perceptual_hash: row.try_get("perceptual_hash").ok(),
+                            perceptual_hash_center: row.try_get("perceptual_hash_center").ok(),
+                            perceptual_hash_tl: row.try_get("perceptual_hash_tl").ok(),
+                            perceptual_hash_tr: row.try_get("perceptual_hash_tr").ok(),
+                            perceptual_hash_bl: row.try_get("perceptual_hash_bl").ok(),
+                            perceptual_hash_br: row.try_get("perceptual_hash_br").ok(),
                             thumbnail,
                         };
                         Ok(media_file.with_image(image, mime_type.clone()))
@@ -1171,13 +1213,27 @@ impl MediaRepository {
 
     // ===== Clustering Methods =====
 
-    pub async fn get_all_perceptual_hashes(&self) -> Result<Vec<(uuid::Uuid, i64)>> {
+    pub async fn get_all_perceptual_hashes(&self) -> Result<Vec<(uuid::Uuid, Vec<i64>)>> {
         let rows = sqlx::query!(
-            r#"SELECT i.id, i.perceptual_hash
+            r#"SELECT
+                    i.id,
+                    i.perceptual_hash,
+                    i.perceptual_hash_center,
+                    i.perceptual_hash_tl,
+                    i.perceptual_hash_tr,
+                    i.perceptual_hash_bl,
+                    i.perceptual_hash_br
                FROM images i
                JOIN media_images mi ON i.id = mi.image_id
                JOIN media_files mf ON mi.media_id = mf.id
-               WHERE i.perceptual_hash IS NOT NULL"#
+               WHERE (
+                    i.perceptual_hash IS NOT NULL OR
+                    i.perceptual_hash_center IS NOT NULL OR
+                    i.perceptual_hash_tl IS NOT NULL OR
+                    i.perceptual_hash_tr IS NOT NULL OR
+                    i.perceptual_hash_bl IS NOT NULL OR
+                    i.perceptual_hash_br IS NOT NULL
+               )"#
         )
         .fetch_all(self.get_read_conn())
         .await?;
@@ -1185,12 +1241,31 @@ impl MediaRepository {
         Ok(rows
             .into_iter()
             .filter_map(|row| {
-                row.perceptual_hash
-                    .and_then(|hash| {
-                        uuid::Uuid::from_slice(&row.id)
-                            .ok()
-                            .map(|id| (id, hash))
-                    })
+                let id = uuid::Uuid::from_slice(&row.id).ok()?;
+                let mut hashes = Vec::with_capacity(6);
+                if let Some(v) = row.perceptual_hash {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_center {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tr {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_bl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_br {
+                    hashes.push(v);
+                }
+                if hashes.is_empty() {
+                    None
+                } else {
+                    Some((id, hashes))
+                }
             })
             .collect())
     }
@@ -1347,12 +1422,26 @@ impl MediaRepository {
         Ok((cluster_members_deleted, images_deleted))
     }
 
-    pub async fn get_cluster_representatives(&self) -> Result<Vec<(i64, i64)>> {
+    pub async fn get_cluster_representatives(&self) -> Result<Vec<(i64, Vec<i64>)>> {
         let rows = sqlx::query!(
-            r#"SELECT c.cluster_id, i.perceptual_hash
+            r#"SELECT
+                    c.cluster_id,
+                    i.perceptual_hash,
+                    i.perceptual_hash_center,
+                    i.perceptual_hash_tl,
+                    i.perceptual_hash_tr,
+                    i.perceptual_hash_bl,
+                    i.perceptual_hash_br
                FROM image_clusters c
                JOIN images i ON c.representative_image_id = i.id
-               WHERE i.perceptual_hash IS NOT NULL"#
+               WHERE (
+                    i.perceptual_hash IS NOT NULL OR
+                    i.perceptual_hash_center IS NOT NULL OR
+                    i.perceptual_hash_tl IS NOT NULL OR
+                    i.perceptual_hash_tr IS NOT NULL OR
+                    i.perceptual_hash_bl IS NOT NULL OR
+                    i.perceptual_hash_br IS NOT NULL
+               )"#
         )
         .fetch_all(self.get_read_conn())
         .await?;
@@ -1360,20 +1449,59 @@ impl MediaRepository {
         Ok(rows
             .into_iter()
             .filter_map(|row| {
-                row.perceptual_hash
-                    .map(|hash| (row.cluster_id, hash))
+                let mut hashes = Vec::with_capacity(6);
+                if let Some(v) = row.perceptual_hash {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_center {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tr {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_bl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_br {
+                    hashes.push(v);
+                }
+                if hashes.is_empty() {
+                    None
+                } else {
+                    Some((row.cluster_id, hashes))
+                }
             })
             .collect())
     }
 
-    pub async fn get_cluster_members_with_hashes(&self, cluster_id: i64) -> Result<Vec<(uuid::Uuid, i64)>> {
+    pub async fn get_cluster_members_with_hashes(
+        &self,
+        cluster_id: i64,
+    ) -> Result<Vec<(uuid::Uuid, Vec<i64>)>> {
         let rows = sqlx::query!(
-            r#"SELECT i.id, i.perceptual_hash
+            r#"SELECT
+                    i.id,
+                    i.perceptual_hash,
+                    i.perceptual_hash_center,
+                    i.perceptual_hash_tl,
+                    i.perceptual_hash_tr,
+                    i.perceptual_hash_bl,
+                    i.perceptual_hash_br
                FROM cluster_members cm
                JOIN images i ON cm.image_id = i.id
                JOIN media_images mi ON i.id = mi.image_id
                JOIN media_files mf ON mi.media_id = mf.id
-               WHERE cm.cluster_id = ? AND i.perceptual_hash IS NOT NULL"#,
+               WHERE cm.cluster_id = ? AND (
+                    i.perceptual_hash IS NOT NULL OR
+                    i.perceptual_hash_center IS NOT NULL OR
+                    i.perceptual_hash_tl IS NOT NULL OR
+                    i.perceptual_hash_tr IS NOT NULL OR
+                    i.perceptual_hash_bl IS NOT NULL OR
+                    i.perceptual_hash_br IS NOT NULL
+               )"#,
             cluster_id
         )
         .fetch_all(self.get_read_conn())
@@ -1382,9 +1510,31 @@ impl MediaRepository {
         Ok(rows
             .into_iter()
             .filter_map(|row| {
-                uuid::Uuid::from_slice(&row.id).ok().and_then(|id| {
-                    row.perceptual_hash.map(|hash| (id, hash))
-                })
+                let id = uuid::Uuid::from_slice(&row.id).ok()?;
+                let mut hashes = Vec::with_capacity(6);
+                if let Some(v) = row.perceptual_hash {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_center {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tr {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_bl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_br {
+                    hashes.push(v);
+                }
+                if hashes.is_empty() {
+                    None
+                } else {
+                    Some((id, hashes))
+                }
             })
             .collect())
     }
