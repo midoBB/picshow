@@ -1446,12 +1446,10 @@ impl MediaRepository {
 
     pub async fn delete_cluster(&self, cluster_id: i64) -> Result<()> {
         let write_conn = self.get_write_conn().await?;
-        sqlx::query(
-            "DELETE FROM image_clusters WHERE cluster_id = ?",
-        )
-        .bind(cluster_id)
-        .execute(write_conn.as_ref())
-        .await?;
+        sqlx::query("DELETE FROM image_clusters WHERE cluster_id = ?")
+            .bind(cluster_id)
+            .execute(write_conn.as_ref())
+            .await?;
 
         Ok(())
     }
@@ -1478,12 +1476,11 @@ impl MediaRepository {
         }
 
         let added_at = chrono::Utc::now().to_rfc3339();
-        let rep_bytes = representative_id.as_bytes();
 
         let cluster_id: i64 = sqlx::query(
-            "INSERT INTO image_clusters (representative_image_id, created_at) VALUES (?, ?)",
+            "INSERT INTO image_clusters (representative_image_id, created_at, is_resolved) VALUES (?, ?, 0)",
         )
-        .bind(&rep_bytes[..])
+        .bind(representative_id)
         .bind(&added_at)
         .execute(&mut *tx)
         .await?
@@ -1514,47 +1511,45 @@ impl MediaRepository {
     }
 
     pub async fn get_all_clusters_with_members(&self) -> Result<Vec<super::ExistingCluster>> {
-        let clusters = sqlx::query(
+        let rows = sqlx::query(
             r#"SELECT
-                   c.cluster_id,
-                   c.representative_image_id
-               FROM image_clusters c"#,
+                   ic.cluster_id,
+                   ic.representative_image_id,
+                   cm.image_id,
+                   cm.hamming_distance
+               FROM image_clusters ic
+               JOIN cluster_members cm ON cm.cluster_id = ic.cluster_id
+               ORDER BY ic.cluster_id"#,
         )
         .fetch_all(self.get_read_conn())
         .await?;
 
-        let mut result = Vec::with_capacity(clusters.len());
+        let mut result: Vec<super::ExistingCluster> = Vec::new();
+        let mut current_cluster_id: Option<i64> = None;
 
-        for row in clusters {
+        for row in rows {
             let cluster_id: i64 = row.get("cluster_id");
-            let rep_bytes: Vec<u8> = row.get("representative_image_id");
-            let representative_id = Uuid::from_slice(&rep_bytes)
-                .map_err(|e| anyhow::anyhow!("Invalid UUID: {}", e))?;
 
-            let members_rows = sqlx::query(
-                r#"SELECT image_id, hamming_distance
-                   FROM cluster_members
-                   WHERE cluster_id = ?"#,
-            )
-            .bind(cluster_id)
-            .fetch_all(self.get_read_conn())
-            .await?;
+            if current_cluster_id != Some(cluster_id) {
+                let rep_bytes: Vec<u8> = row.get("representative_image_id");
+                let representative_id = Uuid::from_slice(&rep_bytes)
+                    .map_err(|e| anyhow::anyhow!("Invalid UUID: {}", e))?;
 
-            let members: Vec<(Uuid, u32)> = members_rows
-                .into_iter()
-                .filter_map(|m| {
-                    let id_bytes: Vec<u8> = m.get("image_id");
-                    let id = Uuid::from_slice(&id_bytes).ok()?;
-                    let dist: i32 = m.get("hamming_distance");
-                    Some((id, dist as u32))
-                })
-                .collect();
+                result.push(super::ExistingCluster {
+                    cluster_id,
+                    representative_id,
+                    members: Vec::new(),
+                });
+                current_cluster_id = Some(cluster_id);
+            }
 
-            result.push(super::ExistingCluster {
-                cluster_id,
-                representative_id,
-                members,
-            });
+            let id_bytes: Vec<u8> = row.get("image_id");
+            if let Ok(id) = Uuid::from_slice(&id_bytes) {
+                let dist: i32 = row.get("hamming_distance");
+                if let Some(last) = result.last_mut() {
+                    last.members.push((id, dist as u32));
+                }
+            }
         }
 
         Ok(result)
@@ -1735,18 +1730,21 @@ impl MediaRepository {
     ) -> Result<(Pagination, Vec<crate::server::ClusterDTO>)> {
         use crate::server::ClusterDTO;
 
-        // Get total count
-        let count_row =
-            sqlx::query!("SELECT COUNT(*) as count FROM image_clusters WHERE is_resolved = 0")
-                .fetch_one(self.get_read_conn())
-                .await?;
-
-        let total_count = count_row.count as u32;
+        // Get total count — match the main query's JOIN so empty clusters don't cause drift
+        let count_row = sqlx::query(
+            r#"SELECT COUNT(DISTINCT c.cluster_id) as count
+               FROM image_clusters c
+               JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
+               WHERE c.is_resolved = 0"#,
+        )
+        .fetch_one(self.get_read_conn())
+        .await?;
+        let total_count: i64 = count_row.get("count");
         let total_pages = (total_count as f64 / page_size as f64).ceil() as u32;
         let offset = (page - 1) * page_size;
 
         let pagination = Pagination {
-            count: total_count,
+            count: total_count as u32,
             current_page: page,
             total_pages,
             prev_page: if page > 1 { Some(page - 1) } else { None },
@@ -1777,25 +1775,49 @@ impl MediaRepository {
         .fetch_all(self.get_read_conn())
         .await?;
 
-        let mut clusters = Vec::new();
-        for row in rows {
-            // Get first 4 thumbnails for preview
-            let thumbnail_rows = sqlx::query!(
-                r#"SELECT t.data
+        // Batch-fetch thumbnails for all clusters on this page (single query)
+        let cluster_ids: Vec<i64> = rows.iter().map(|r| r.cluster_id).collect();
+        let mut thumb_map: std::collections::HashMap<i64, Vec<String>> =
+            std::collections::HashMap::new();
+
+        if !cluster_ids.is_empty() {
+            // Emit IN clause placeholders manually
+            let placeholders: Vec<String> = std::iter::repeat("?".to_string())
+                .take(cluster_ids.len())
+                .collect();
+            let in_clause = placeholders.join(",");
+            let query_str = format!(
+                r#"SELECT cm.cluster_id, t.data
                    FROM cluster_members cm
                    JOIN images i ON cm.image_id = i.id
                    JOIN thumbnails t ON i.thumbnail_id = t.id
-                   WHERE cm.cluster_id = ?
-                   LIMIT 4"#,
-                row.cluster_id
-            )
-            .fetch_all(self.get_read_conn())
-            .await?;
+                   WHERE cm.cluster_id IN ({})
+                   ORDER BY cm.cluster_id"#,
+                in_clause
+            );
 
-            let preview_thumbnails: Vec<String> = thumbnail_rows
-                .into_iter()
-                .map(|t| format!("data:image/jpeg;base64,{}", BASE64_STANDARD.encode(t.data)))
-                .collect();
+            let mut q = sqlx::query(&query_str);
+            for id in &cluster_ids {
+                q = q.bind(id);
+            }
+            let thumb_rows = q.fetch_all(self.get_read_conn()).await?;
+
+            for trow in thumb_rows {
+                let cid: i64 = trow.get("cluster_id");
+                let data: Vec<u8> = trow.get("data");
+                let entry = thumb_map.entry(cid).or_default();
+                if entry.len() < 4 {
+                    entry.push(format!(
+                        "data:image/jpeg;base64,{}",
+                        BASE64_STANDARD.encode(&data)
+                    ));
+                }
+            }
+        }
+
+        let mut clusters = Vec::new();
+        for row in rows {
+            let preview_thumbnails = thumb_map.remove(&row.cluster_id).unwrap_or_default();
 
             if let Ok(rep_id) = uuid::Uuid::from_slice(&row.representative_image_id) {
                 clusters.push(ClusterDTO {
@@ -1891,6 +1913,9 @@ impl MediaRepository {
     }
 
     pub async fn resolve_cluster(&self, cluster_id: i64) -> Result<Vec<uuid::Uuid>> {
+        let write_conn = self.get_write_conn().await?;
+        let mut tx = write_conn.begin().await?;
+
         // Get all media_file IDs for images in this cluster that are NOT the best shot
         let rows = sqlx::query!(
             r#"SELECT mf.id
@@ -1901,7 +1926,7 @@ impl MediaRepository {
                WHERE cm.cluster_id = ? AND cm.is_best_shot = 0"#,
             cluster_id
         )
-        .fetch_all(self.get_read_conn())
+        .fetch_all(&mut *tx)
         .await?;
 
         let media_file_ids: Vec<uuid::Uuid> = rows
@@ -1910,13 +1935,14 @@ impl MediaRepository {
             .collect();
 
         // Mark cluster as resolved
-        let write_conn = self.get_write_conn().await?;
         sqlx::query!(
             "UPDATE image_clusters SET is_resolved = 1 WHERE cluster_id = ?",
             cluster_id
         )
-        .execute(write_conn.as_ref())
+        .execute(&mut *tx)
         .await?;
+
+        tx.commit().await?;
 
         Ok(media_file_ids)
     }
