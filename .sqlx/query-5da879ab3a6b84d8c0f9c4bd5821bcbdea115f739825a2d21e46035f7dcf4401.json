@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE media_files SET filename = ?, last_modified = ?, size = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "5da879ab3a6b84d8c0f9c4bd5821bcbdea115f739825a2d21e46035f7dcf4401"
+}

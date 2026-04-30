@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                   ic.cluster_id,\n                   ic.representative_image_id,\n                   cm.image_id,\n                   cm.hamming_distance\n               FROM image_clusters ic\n               JOIN cluster_members cm ON cm.cluster_id = ic.cluster_id\n               ORDER BY ic.cluster_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "cluster_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "representative_image_id",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "image_id",
+        "ordinal": 2,
+        "type_info": "Blob"
+      },
+      {
+        "name": "hamming_distance",
+        "ordinal": 3,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "acb6d2ea89fb2cc7bd1c9fee844e1adaa789dfcf9ee7b87b934e7ea4764738e9"
+}

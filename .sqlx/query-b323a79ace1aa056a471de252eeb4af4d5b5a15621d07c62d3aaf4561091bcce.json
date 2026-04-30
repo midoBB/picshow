@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE stats SET count = count + 1, images = images + 1 WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "b323a79ace1aa056a471de252eeb4af4d5b5a15621d07c62d3aaf4561091bcce"
+}

@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(DISTINCT c.cluster_id) as count\n               FROM image_clusters c\n               JOIN cluster_members cm ON c.cluster_id = cm.cluster_id\n               WHERE c.is_resolved = 0",
+  "describe": {
+    "columns": [
+      {
+        "name": "count",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "f40773acba52166dfb8a5bc0637bdf4a5a025898dd6144fa0b4389205e432e27"
+}
