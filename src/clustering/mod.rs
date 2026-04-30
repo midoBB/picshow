@@ -6,13 +6,6 @@ use uuid::Uuid;
 use crate::config::{AppConfig, ClusterAlgorithm};
 use crate::data::repository::MediaRepository;
 
-#[derive(Debug, Clone)]
-pub struct ExistingCluster {
-    pub cluster_id: i64,
-    pub representative_id: Uuid,
-    pub members: Vec<(Uuid, u32)>,
-}
-
 pub struct ClusterBuilder {
     repository: Arc<MediaRepository>,
     algorithm: ClusterAlgorithm,
@@ -30,6 +23,13 @@ pub struct ClusterStats {
 }
 
 const CLUSTERING_PARAMS_KEY: &str = "clustering_params";
+
+#[derive(Clone, PartialEq)]
+enum VisitStatus {
+    Unvisited,
+    Noise,
+    Clustered(usize),
+}
 
 fn serialize_clustering_params(
     algo: ClusterAlgorithm,
@@ -79,7 +79,11 @@ impl ClusterBuilder {
 
     // --- Public entry point ---
 
-    pub async fn build_clusters(&self, force_rebuild: bool, save_state: bool) -> Result<ClusterStats> {
+    pub async fn build_clusters(
+        &self,
+        force_rebuild: bool,
+        save_state: bool,
+    ) -> Result<ClusterStats> {
         let current_params = serialize_clustering_params(
             self.algorithm,
             self.hamming_threshold,
@@ -88,7 +92,9 @@ impl ClusterBuilder {
         );
 
         let params_changed = if !force_rebuild {
-            if let Ok(Some(prev_params)) = self.repository.get_app_state(CLUSTERING_PARAMS_KEY).await {
+            if let Ok(Some(prev_params)) =
+                self.repository.get_app_state(CLUSTERING_PARAMS_KEY).await
+            {
                 if prev_params != current_params {
                     info!(
                         "Clustering params changed: {} -> {}",
@@ -108,14 +114,22 @@ impl ClusterBuilder {
         let should_force = force_rebuild || params_changed;
 
         if should_force && save_state {
-            if let Err(e) = self.repository.set_app_state(CLUSTERING_PARAMS_KEY, &current_params).await {
+            if let Err(e) = self
+                .repository
+                .set_app_state(CLUSTERING_PARAMS_KEY, &current_params)
+                .await
+            {
                 warn!("Failed to save clustering params: {}", e);
             }
         }
 
         info!(
             "Starting cluster build (algo: {:?}, threshold: {}, min_pts: {}, k: {}, force: {})",
-            self.algorithm, self.hamming_threshold, self.dbscan_min_points, self.kmeans_k, should_force
+            self.algorithm,
+            self.hamming_threshold,
+            self.dbscan_min_points,
+            self.kmeans_k,
+            should_force
         );
 
         debug!("Cleaning up orphaned data");
@@ -153,10 +167,8 @@ impl ClusterBuilder {
             ClusterAlgorithm::Kmeans => self.cluster_kmeans(&images_u64),
         };
 
-        let new_clusters_filtered: Vec<_> = new_clusters
-            .into_iter()
-            .filter(|c| c.len() > 1)
-            .collect();
+        let new_clusters_filtered: Vec<_> =
+            new_clusters.into_iter().filter(|c| c.len() > 1).collect();
 
         if should_force {
             debug!("Force rebuild: clearing all clusters");
@@ -200,10 +212,7 @@ impl ClusterBuilder {
             });
 
             if is_unchanged {
-                debug!(
-                    "Skipping unchanged cluster (rep: {})",
-                    representative_id
-                );
+                debug!("Skipping unchanged cluster (rep: {})", representative_id);
                 skipped += 1;
                 images_clustered += cluster.len();
                 continue;
@@ -217,7 +226,8 @@ impl ClusterBuilder {
                 })
                 .collect();
 
-            let old_cluster_ids: Vec<i64> = existing.iter()
+            let old_cluster_ids: Vec<i64> = existing
+                .iter()
                 .filter(|ec| {
                     let existing_ids: Vec<Uuid> = ec.members.iter().map(|(id, _)| *id).collect();
                     member_ids.iter().any(|id| existing_ids.contains(id))
@@ -226,10 +236,14 @@ impl ClusterBuilder {
                 .collect();
 
             let db_cluster_id = if let Some(_old_id) = old_cluster_ids.first() {
-                self.repository.replace_clusters(&old_cluster_ids, representative_id, &members_with_distances).await?
+                self.repository
+                    .replace_clusters(&old_cluster_ids, representative_id, &members_with_distances)
+                    .await?
             } else {
                 let id = self.repository.create_cluster(representative_id).await?;
-                self.repository.add_batch_to_cluster(id, &members_with_distances).await?;
+                self.repository
+                    .add_batch_to_cluster(id, &members_with_distances)
+                    .await?;
                 id
             };
 
@@ -258,10 +272,7 @@ impl ClusterBuilder {
         Ok(stats)
     }
 
-    async fn write_clusters(
-        &self,
-        clusters: &[Vec<(Uuid, Vec<u64>)>],
-    ) -> Result<(usize, usize)> {
+    async fn write_clusters(&self, clusters: &[Vec<(Uuid, Vec<u64>)>]) -> Result<(usize, usize)> {
         let mut final_clusters_created = 0;
         let mut images_clustered = 0;
 
@@ -395,24 +406,23 @@ impl ClusterBuilder {
             }
         }
 
-        // None  = unprocessed noise / not yet assigned
-        let mut assigned: Vec<Option<usize>> = vec![None; n];
+        // Track visit status: Unvisited, Noise, or Clustered(cluster_index)
+        let mut assigned: Vec<VisitStatus> = vec![VisitStatus::Unvisited; n];
         let mut raw_clusters: Vec<Vec<usize>> = Vec::new();
 
         for i in 0..n {
-            if assigned[i].is_some() {
+            if assigned[i] != VisitStatus::Unvisited {
                 continue;
             }
 
             if neighbours[i].len() + 1 < min_pts {
-                // Mark as noise so we don't revisit it.
-                assigned[i] = None;
+                assigned[i] = VisitStatus::Noise;
                 continue;
             }
 
             let cluster_id = raw_clusters.len();
             raw_clusters.push(vec![i]);
-            assigned[i] = Some(cluster_id);
+            assigned[i] = VisitStatus::Clustered(cluster_id);
 
             // BFS expansion
             let mut seeds = neighbours[i].clone();
@@ -422,10 +432,10 @@ impl ClusterBuilder {
             }
 
             while let Some(q) = seeds.pop() {
-                if assigned[q].is_some() {
+                if assigned[q] != VisitStatus::Unvisited {
                     continue;
                 }
-                assigned[q] = Some(cluster_id);
+                assigned[q] = VisitStatus::Clustered(cluster_id);
                 raw_clusters[cluster_id].push(q);
 
                 if neighbours[q].len() + 1 >= min_pts {
@@ -487,7 +497,11 @@ impl ClusterBuilder {
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.subsec_nanos() as u64)
                     .unwrap_or(42);
-                if raw == 0 { 42 } else { raw }
+                if raw == 0 {
+                    42
+                } else {
+                    raw
+                }
             };
             let mut xorshift = move || {
                 s ^= s << 13;
