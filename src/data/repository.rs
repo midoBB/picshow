@@ -250,6 +250,32 @@ impl MediaRepository {
         debug!("Database cleanup completed");
         Ok(())
     }
+
+    pub async fn get_app_state(&self, key: &str) -> Result<Option<String>> {
+        let row = sqlx::query("SELECT value FROM app_state WHERE key = ?")
+            .bind(key)
+            .fetch_optional(self.get_read_conn())
+            .await?;
+        Ok(row.map(|r| r.get::<String, _>("value")))
+    }
+
+    pub async fn set_app_state(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query("INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)")
+            .bind(key)
+            .bind(value)
+            .execute(self.get_write_conn().await?.borrow())
+            .await?;
+        Ok(())
+    }
+
+    pub async fn remove_app_state(&self, key: &str) -> Result<()> {
+        sqlx::query("DELETE FROM app_state WHERE key = ?")
+            .bind(key)
+            .execute(self.get_write_conn().await?.borrow())
+            .await?;
+        Ok(())
+    }
+
     pub async fn lock_writes(&self) -> Result<()> {
         trace!("Locking writes");
         // Force acquire the lock semaphore first
@@ -1369,6 +1395,53 @@ impl MediaRepository {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn get_all_clusters_with_members(&self) -> Result<Vec<super::ExistingCluster>> {
+        let clusters = sqlx::query(
+            r#"SELECT
+                   c.cluster_id,
+                   c.representative_image_id
+               FROM image_clusters c"#,
+        )
+        .fetch_all(self.get_read_conn())
+        .await?;
+
+        let mut result = Vec::with_capacity(clusters.len());
+
+        for row in clusters {
+            let cluster_id: i64 = row.get("cluster_id");
+            let rep_bytes: Vec<u8> = row.get("representative_image_id");
+            let representative_id = Uuid::from_slice(&rep_bytes)
+                .map_err(|e| anyhow::anyhow!("Invalid UUID: {}", e))?;
+
+            let members_rows = sqlx::query(
+                r#"SELECT image_id, hamming_distance
+                   FROM cluster_members
+                   WHERE cluster_id = ?"#,
+            )
+            .bind(cluster_id)
+            .fetch_all(self.get_read_conn())
+            .await?;
+
+            let members: Vec<(Uuid, u32)> = members_rows
+                .into_iter()
+                .filter_map(|m| {
+                    let id_bytes: Vec<u8> = m.get("image_id");
+                    let id = Uuid::from_slice(&id_bytes).ok()?;
+                    let dist: i32 = m.get("hamming_distance");
+                    Some((id, dist as u32))
+                })
+                .collect();
+
+            result.push(super::ExistingCluster {
+                cluster_id,
+                representative_id,
+                members,
+            });
+        }
+
+        Ok(result)
     }
 
     pub async fn clear_clusters(&self) -> Result<()> {

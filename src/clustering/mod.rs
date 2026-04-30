@@ -6,9 +6,12 @@ use uuid::Uuid;
 use crate::config::{AppConfig, ClusterAlgorithm};
 use crate::data::repository::MediaRepository;
 
-// ---------------------------------------------------------------------------
-// ClusterBuilder
-// ---------------------------------------------------------------------------
+#[derive(Debug, Clone)]
+pub struct ExistingCluster {
+    pub cluster_id: i64,
+    pub representative_id: Uuid,
+    pub members: Vec<(Uuid, u32)>,
+}
 
 pub struct ClusterBuilder {
     repository: Arc<MediaRepository>,
@@ -24,6 +27,17 @@ pub struct ClusterStats {
     pub images_with_hash: usize,
     pub clusters_created: usize,
     pub images_clustered: usize,
+}
+
+const CLUSTERING_PARAMS_KEY: &str = "clustering_params";
+
+fn serialize_clustering_params(
+    algo: ClusterAlgorithm,
+    threshold: u32,
+    min_pts: usize,
+    k: usize,
+) -> String {
+    format!("{:?},{},{},{}", algo, threshold, min_pts, k)
 }
 
 impl ClusterBuilder {
@@ -65,13 +79,45 @@ impl ClusterBuilder {
 
     // --- Public entry point ---
 
-    pub async fn build_clusters(&self) -> Result<ClusterStats> {
-        info!(
-            "Starting cluster build (algo: {:?}, threshold: {}, min_pts: {}, k: {})",
-            self.algorithm, self.hamming_threshold, self.dbscan_min_points, self.kmeans_k
+    pub async fn build_clusters(&self, force_rebuild: bool, save_state: bool) -> Result<ClusterStats> {
+        let current_params = serialize_clustering_params(
+            self.algorithm,
+            self.hamming_threshold,
+            self.dbscan_min_points,
+            self.kmeans_k,
         );
 
-        // Step 0: Clean up orphaned data
+        let params_changed = if !force_rebuild {
+            if let Ok(Some(prev_params)) = self.repository.get_app_state(CLUSTERING_PARAMS_KEY).await {
+                if prev_params != current_params {
+                    info!(
+                        "Clustering params changed: {} -> {}",
+                        prev_params, current_params
+                    );
+                    true
+                } else {
+                    false
+                }
+            } else {
+                true
+            }
+        } else {
+            false
+        };
+
+        let should_force = force_rebuild || params_changed;
+
+        if should_force && save_state {
+            if let Err(e) = self.repository.set_app_state(CLUSTERING_PARAMS_KEY, &current_params).await {
+                warn!("Failed to save clustering params: {}", e);
+            }
+        }
+
+        info!(
+            "Starting cluster build (algo: {:?}, threshold: {}, min_pts: {}, k: {}, force: {})",
+            self.algorithm, self.hamming_threshold, self.dbscan_min_points, self.kmeans_k, should_force
+        );
+
         debug!("Cleaning up orphaned data");
         let (orphaned_members, orphaned_images) = self.repository.cleanup_orphaned_data().await?;
         if orphaned_members > 0 || orphaned_images > 0 {
@@ -81,11 +127,6 @@ impl ClusterBuilder {
             );
         }
 
-        // Step 1: Clear existing clusters
-        debug!("Clearing existing clusters");
-        self.repository.clear_clusters().await?;
-
-        // Step 2: Fetch ALL hashes
         debug!("Fetching all perceptual hashes");
         let all_images = self.repository.get_all_perceptual_hashes().await?;
         let total_images = all_images.len();
@@ -100,30 +141,120 @@ impl ClusterBuilder {
             });
         }
 
-        // Convert to u64
         let images_u64: Vec<(Uuid, Vec<u64>)> = all_images
             .into_iter()
             .map(|(id, hashes)| (id, hashes.into_iter().map(|h| h as u64).collect()))
             .collect();
 
-        // Step 3: Cluster using selected algorithm
-        let clusters: Vec<Vec<(Uuid, Vec<u64>)>> = match self.algorithm {
+        let new_clusters: Vec<Vec<(Uuid, Vec<u64>)>> = match self.algorithm {
             ClusterAlgorithm::Single => self.cluster_single(&images_u64),
             ClusterAlgorithm::Complete => self.cluster_complete(&images_u64),
             ClusterAlgorithm::Dbscan => self.cluster_dbscan(&images_u64),
             ClusterAlgorithm::Kmeans => self.cluster_kmeans(&images_u64),
         };
 
-        // Step 4: Write to database (skip singletons)
-        debug!("Writing {} in-memory clusters to database", clusters.len());
+        let new_clusters_filtered: Vec<_> = new_clusters
+            .into_iter()
+            .filter(|c| c.len() > 1)
+            .collect();
+
+        if should_force {
+            debug!("Force rebuild: clearing all clusters");
+            self.repository.clear_clusters().await?;
+
+            let (created, clustered) = self.write_clusters(&new_clusters_filtered).await?;
+            let stats = ClusterStats {
+                total_images,
+                images_with_hash: total_images,
+                clusters_created: created,
+                images_clustered: clustered,
+            };
+            info!(
+                "Clustering complete: {} clusters / {} images / {} total (algo: {:?})",
+                stats.clusters_created, stats.images_clustered, stats.total_images, self.algorithm
+            );
+            return Ok(stats);
+        }
+
+        debug!("Incremental rebuild: fetching existing clusters");
+        let existing = self.repository.get_all_clusters_with_members().await?;
+
+        let mut final_clusters_created = 0;
+        let mut images_clustered = 0;
+        let mut skipped = 0;
+
+        for cluster in new_clusters_filtered {
+            let representative_id = cluster[0].0;
+            let representative_hashes = &cluster[0].1;
+            let member_ids: Vec<Uuid> = cluster.iter().map(|(id, _)| *id).collect();
+
+            let is_unchanged = existing.iter().any(|ec| {
+                if ec.representative_id != representative_id {
+                    return false;
+                }
+                if ec.members.len() != member_ids.len() {
+                    return false;
+                }
+                let existing_ids: Vec<Uuid> = ec.members.iter().map(|(id, _)| *id).collect();
+                member_ids.iter().all(|id| existing_ids.contains(id))
+            });
+
+            if is_unchanged {
+                debug!(
+                    "Skipping unchanged cluster (rep: {})",
+                    representative_id
+                );
+                skipped += 1;
+                images_clustered += cluster.len();
+                continue;
+            }
+
+            let members_with_distances: Vec<(Uuid, u32)> = cluster
+                .iter()
+                .filter_map(|(id, hashes)| {
+                    let distance = Self::min_distance(hashes, representative_hashes)?;
+                    Some((*id, distance))
+                })
+                .collect();
+
+            let db_cluster_id = self.repository.create_cluster(representative_id).await?;
+            self.repository
+                .add_batch_to_cluster(db_cluster_id, &members_with_distances)
+                .await?;
+
+            final_clusters_created += 1;
+            images_clustered += cluster.len();
+
+            debug!(
+                "Created cluster {} with {} members",
+                db_cluster_id,
+                cluster.len()
+            );
+        }
+
+        let stats = ClusterStats {
+            total_images,
+            images_with_hash: total_images,
+            clusters_created: final_clusters_created,
+            images_clustered,
+        };
+
+        info!(
+            "Clustering complete (incremental): {} created, {} unchanged, {} images clustered / {} total (algo: {:?})",
+            final_clusters_created, skipped, images_clustered, total_images, self.algorithm
+        );
+
+        Ok(stats)
+    }
+
+    async fn write_clusters(
+        &self,
+        clusters: &[Vec<(Uuid, Vec<u64>)>],
+    ) -> Result<(usize, usize)> {
         let mut final_clusters_created = 0;
         let mut images_clustered = 0;
 
         for cluster in clusters {
-            if cluster.len() <= 1 {
-                continue;
-            }
-
             let representative_id = cluster[0].0;
             let representative_hashes = &cluster[0].1;
 
@@ -143,27 +274,9 @@ impl ClusterBuilder {
                 .await?;
 
             images_clustered += cluster.len();
-
-            debug!(
-                "Created cluster {} with {} members",
-                db_cluster_id,
-                cluster.len()
-            );
         }
 
-        let stats = ClusterStats {
-            total_images,
-            images_with_hash: total_images,
-            clusters_created: final_clusters_created,
-            images_clustered,
-        };
-
-        info!(
-            "Clustering complete: {} clusters / {} images / {} total (algo: {:?})",
-            stats.clusters_created, stats.images_clustered, stats.total_images, self.algorithm
-        );
-
-        Ok(stats)
+        Ok((final_clusters_created, images_clustered))
     }
 
     // ------------------------------------------------------------------

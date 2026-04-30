@@ -663,7 +663,7 @@ async fn rebuild_clusters_handler(State(state): State<Arc<AppState>>) -> impl In
 
     let builder = ClusterBuilder::new(state.repo.clone(), &state.config);
 
-    match builder.build_clusters().await {
+    match builder.build_clusters(true, false).await {
         Ok(stats) => {
             info!(
                 "Cluster rebuild complete: {} clusters, {} images clustered",

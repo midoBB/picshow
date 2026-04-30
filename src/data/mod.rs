@@ -10,6 +10,14 @@ use sqlx::{
     prelude::{FromRow, Type},
     Database, Sqlite,
 };
+use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct ExistingCluster {
+    pub cluster_id: i64,
+    pub representative_id: Uuid,
+    pub members: Vec<(Uuid, u32)>,
+}
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
 pub struct UnfilledMediaFile {
