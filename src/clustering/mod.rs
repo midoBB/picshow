@@ -359,10 +359,11 @@ impl ClusterBuilder {
             // Simple xorshift seeded from wall-clock nanos.
             let mut s = {
                 use std::time::{SystemTime, UNIX_EPOCH};
-                SystemTime::now()
+                let raw = SystemTime::now()
                     .duration_since(UNIX_EPOCH)
                     .map(|d| d.subsec_nanos() as u64)
-                    .unwrap_or(42)
+                    .unwrap_or(42);
+                if raw == 0 { 42 } else { raw }
             };
             let mut xorshift = move || {
                 s ^= s << 13;
