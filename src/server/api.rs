@@ -549,10 +549,7 @@ async fn get_cluster_detail_handler(
 ) -> impl IntoResponse {
     match state.repo.get_cluster_images(cluster_id).await {
         Ok(images) => {
-            let response = super::ClusterDetailResponse {
-                cluster_id,
-                images,
-            };
+            let response = super::ClusterDetailResponse { cluster_id, images };
             axum::Json(response).into_response()
         }
         Err(e) => {
@@ -611,8 +608,12 @@ async fn resolve_cluster_handler(
         // Get delete mode from settings
         let settings = state.settings.get().await;
         let delete_mode = match settings.delete_mode {
-            crate::config::DeleteMode::MoveToTrash => crate::files::processor::DeleteMode::MoveToTrash,
-            crate::config::DeleteMode::DeletePermanently => crate::files::processor::DeleteMode::DeletePermanently,
+            crate::config::DeleteMode::MoveToTrash => {
+                crate::files::processor::DeleteMode::MoveToTrash
+            }
+            crate::config::DeleteMode::DeletePermanently => {
+                crate::files::processor::DeleteMode::DeletePermanently
+            }
         };
 
         // Send delete command to processor

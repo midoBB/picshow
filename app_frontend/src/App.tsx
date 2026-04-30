@@ -216,24 +216,24 @@ export default function App() {
 
       {viewMode === "gallery" && (
         <LightboxContainer
-        open={isOpen}
-        onClose={() => {
-          setIsOpen(false);
-          // Scroll to the current lightbox index when closing
-          rowVirtualizer.scrollToIndex(currentIndex, {
-            align: "center",
-            behavior: "smooth",
-          });
-        }}
-        currentIndex={currentIndex}
-        onIndexChange={setCurrentIndex}
-        slides={slides}
-        isShowingControls={isShowingControls}
-        onControlsToggle={() => setIsShowingControls(!isShowingControls)}
-        onViewChange={handleViewChange}
-        slideShowRef={slideShowRef}
-        onCurrentSlideDelete={handleLightboxDelete}
-      />
+          open={isOpen}
+          onClose={() => {
+            setIsOpen(false);
+            // Scroll to the current lightbox index when closing
+            rowVirtualizer.scrollToIndex(currentIndex, {
+              align: "center",
+              behavior: "smooth",
+            });
+          }}
+          currentIndex={currentIndex}
+          onIndexChange={setCurrentIndex}
+          slides={slides}
+          isShowingControls={isShowingControls}
+          onControlsToggle={() => setIsShowingControls(!isShowingControls)}
+          onViewChange={handleViewChange}
+          slideShowRef={slideShowRef}
+          onCurrentSlideDelete={handleLightboxDelete}
+        />
       )}
 
       {viewMode === "clusters" ? (
@@ -316,8 +316,7 @@ export default function App() {
             )}
           </div>
         </>
-      )
-      }
+      )}
 
       <ConfirmDialog
         isOpen={deleteDialogState.isOpen}

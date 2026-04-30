@@ -302,9 +302,19 @@ const Navbar = ({
                     <FaTh className="w-4 h-4 sm:w-5 sm:h-5" />
                   )
                 }
-                label={viewMode === "gallery" ? "View Similar Photos" : "View Gallery"}
-                onClick={() => setViewMode(viewMode === "gallery" ? "clusters" : "gallery")}
-                ariaLabel={viewMode === "gallery" ? "View similar photos clusters" : "View gallery"}
+                label={
+                  viewMode === "gallery"
+                    ? "View Similar Photos"
+                    : "View Gallery"
+                }
+                onClick={() =>
+                  setViewMode(viewMode === "gallery" ? "clusters" : "gallery")
+                }
+                ariaLabel={
+                  viewMode === "gallery"
+                    ? "View similar photos clusters"
+                    : "View gallery"
+                }
                 isDarkMode={isDarkMode}
               />
               <TooltipButton

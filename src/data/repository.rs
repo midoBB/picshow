@@ -1547,11 +1547,10 @@ impl MediaRepository {
         use crate::server::ClusterDTO;
 
         // Get total count
-        let count_row = sqlx::query!(
-            "SELECT COUNT(*) as count FROM image_clusters WHERE is_resolved = 0"
-        )
-        .fetch_one(self.get_read_conn())
-        .await?;
+        let count_row =
+            sqlx::query!("SELECT COUNT(*) as count FROM image_clusters WHERE is_resolved = 0")
+                .fetch_one(self.get_read_conn())
+                .await?;
 
         let total_count = count_row.count as u32;
         let total_pages = (total_count as f64 / page_size as f64).ceil() as u32;
@@ -1616,7 +1615,10 @@ impl MediaRepository {
                     representative_image_id: rep_id.to_string(),
                     preview_thumbnails,
                     is_resolved: row.is_resolved != 0,
-                    created_at: row.created_at.parse().unwrap_or_else(|_| chrono::Utc::now()),
+                    created_at: row
+                        .created_at
+                        .parse()
+                        .unwrap_or_else(|_| chrono::Utc::now()),
                 });
             }
         }
@@ -1654,18 +1656,20 @@ impl MediaRepository {
         Ok(rows
             .into_iter()
             .filter_map(|row| {
-                uuid::Uuid::from_slice(&row.id).ok().map(|id| ClusterImageDTO {
-                    id: id.to_string(),
-                    filename: row.filename,
-                    hamming_distance: row.hamming_distance as i32,
-                    is_best_shot: row.is_best_shot != 0,
-                    thumbnail: format!(
-                        "data:image/jpeg;base64,{}",
-                        BASE64_STANDARD.encode(row.thumbnail_data)
-                    ),
-                    width: row.width as i32,
-                    height: row.height as i32,
-                })
+                uuid::Uuid::from_slice(&row.id)
+                    .ok()
+                    .map(|id| ClusterImageDTO {
+                        id: id.to_string(),
+                        filename: row.filename,
+                        hamming_distance: row.hamming_distance as i32,
+                        is_best_shot: row.is_best_shot != 0,
+                        thumbnail: format!(
+                            "data:image/jpeg;base64,{}",
+                            BASE64_STANDARD.encode(row.thumbnail_data)
+                        ),
+                        width: row.width as i32,
+                        height: row.height as i32,
+                    })
             })
             .collect())
     }
