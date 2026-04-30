@@ -124,7 +124,16 @@ const Navbar = ({
   sortType: "created_at" | "random";
   selectedCategory: "all" | "video" | "image" | "favorite";
   viewMode: "gallery" | "clusters";
-  setViewMode: (mode: "gallery" | "clusters") => void;
+  setViewMode: (
+    value:
+      | "gallery"
+      | "clusters"
+      | ((
+          old: "gallery" | "clusters",
+        ) => "gallery" | "clusters" | null)
+      | null,
+    options?: Options,
+  ) => Promise<URLSearchParams>;
 }) => {
   const [isStatsOpen, setIsStatsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);

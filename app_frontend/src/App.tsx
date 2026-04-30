@@ -28,7 +28,6 @@ export default function App() {
   const navbarRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const isFirstRun = useRef(true);
-  const [viewMode, setViewMode] = useState<"gallery" | "clusters">("gallery");
 
   // App state
   const {
@@ -62,6 +61,8 @@ export default function App() {
     isLoading: isLoadingFiles,
     isError: isErrorFiles,
     error: errorFiles,
+    viewMode,
+    setViewMode,
   } = useGalleryFiltering();
 
   // Initialize seed on first run
