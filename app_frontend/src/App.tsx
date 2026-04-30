@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LuX } from "react-icons/lu";
+import { Toaster } from "sonner";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
 import { GalleryGrid } from "@/components/GalleryGrid";
 import { EmptyState } from "@/components/GalleryGrid/EmptyState";
@@ -343,6 +344,7 @@ export default function App() {
             : []
         }
       />
+      <Toaster />
     </div>
   );
 }
