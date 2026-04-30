@@ -30,7 +30,7 @@ impl ClusterBuilder {
     pub fn new(repository: Arc<MediaRepository>, config: &AppConfig) -> Self {
         Self {
             repository,
-            algorithm: config.cluster_algorithm.clone(),
+            algorithm: config.cluster_algorithm,
             hamming_threshold: config.cluster_threshold,
             dbscan_min_points: config.cluster_dbscan_min_pts,
             kmeans_k: config.cluster_kmeans_k,
@@ -73,8 +73,7 @@ impl ClusterBuilder {
 
         // Step 0: Clean up orphaned data
         debug!("Cleaning up orphaned data");
-        let (orphaned_members, orphaned_images) =
-            self.repository.cleanup_orphaned_data().await?;
+        let (orphaned_members, orphaned_images) = self.repository.cleanup_orphaned_data().await?;
         if orphaned_members > 0 || orphaned_images > 0 {
             info!(
                 "Cleaned up {} orphaned cluster members and {} orphaned images",
@@ -116,10 +115,7 @@ impl ClusterBuilder {
         };
 
         // Step 4: Write to database (skip singletons)
-        debug!(
-            "Writing {} in-memory clusters to database",
-            clusters.len()
-        );
+        debug!("Writing {} in-memory clusters to database", clusters.len());
         let mut final_clusters_created = 0;
         let mut images_clustered = 0;
 
@@ -131,15 +127,13 @@ impl ClusterBuilder {
             let representative_id = cluster[0].0;
             let representative_hashes = &cluster[0].1;
 
-            let db_cluster_id =
-                self.repository.create_cluster(representative_id).await?;
+            let db_cluster_id = self.repository.create_cluster(representative_id).await?;
             final_clusters_created += 1;
 
             let members_with_distances: Vec<(Uuid, u32)> = cluster
                 .iter()
                 .filter_map(|(id, hashes)| {
-                    let distance =
-                        Self::min_distance(hashes, representative_hashes)?;
+                    let distance = Self::min_distance(hashes, representative_hashes)?;
                     Some((*id, distance))
                 })
                 .collect();
@@ -166,10 +160,7 @@ impl ClusterBuilder {
 
         info!(
             "Clustering complete: {} clusters / {} images / {} total (algo: {:?})",
-            stats.clusters_created,
-            stats.images_clustered,
-            stats.total_images,
-            self.algorithm
+            stats.clusters_created, stats.images_clustered, stats.total_images, self.algorithm
         );
 
         Ok(stats)
@@ -179,10 +170,7 @@ impl ClusterBuilder {
     // Algorithm: Single-linkage
     // ------------------------------------------------------------------
 
-    fn cluster_single(
-        &self,
-        images: &[(Uuid, Vec<u64>)],
-    ) -> Vec<Vec<(Uuid, Vec<u64>)>> {
+    fn cluster_single(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
         let mut clusters: Vec<Vec<(Uuid, Vec<u64>)>> = Vec::new();
 
         for (image_id, hashes) in images {
@@ -191,13 +179,10 @@ impl ClusterBuilder {
 
             for (cluster_idx, cluster) in clusters.iter().enumerate() {
                 for (_, member_hashes) in cluster {
-                    let Some(distance) = Self::min_distance(hashes, member_hashes)
-                    else {
+                    let Some(distance) = Self::min_distance(hashes, member_hashes) else {
                         continue;
                     };
-                    if distance < self.hamming_threshold
-                        && distance < best_distance
-                    {
+                    if distance < self.hamming_threshold && distance < best_distance {
                         best_distance = distance;
                         best_cluster_idx = Some(cluster_idx);
                         if distance == 0 {
@@ -220,10 +205,7 @@ impl ClusterBuilder {
     // Algorithm: Complete-linkage
     // ------------------------------------------------------------------
 
-    fn cluster_complete(
-        &self,
-        images: &[(Uuid, Vec<u64>)],
-    ) -> Vec<Vec<(Uuid, Vec<u64>)>> {
+    fn cluster_complete(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
         let mut clusters: Vec<Vec<(Uuid, Vec<u64>)>> = Vec::new();
 
         for (image_id, hashes) in images {
@@ -235,8 +217,7 @@ impl ClusterBuilder {
                 let mut all_within = true;
 
                 for (_, member_hashes) in cluster {
-                    let Some(distance) = Self::min_distance(hashes, member_hashes)
-                    else {
+                    let Some(distance) = Self::min_distance(hashes, member_hashes) else {
                         all_within = false;
                         break;
                     };
@@ -268,10 +249,7 @@ impl ClusterBuilder {
     // Algorithm: DBSCAN
     // ------------------------------------------------------------------
 
-    fn cluster_dbscan(
-        &self,
-        images: &[(Uuid, Vec<u64>)],
-    ) -> Vec<Vec<(Uuid, Vec<u64>)>> {
+    fn cluster_dbscan(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
         let n = images.len();
         let eps = self.hamming_threshold;
         let min_pts = self.dbscan_min_points;
@@ -355,10 +333,7 @@ impl ClusterBuilder {
     // and assignment.  Centroid update = bitwise majority vote (k-modes).
     // ------------------------------------------------------------------
 
-    fn cluster_kmeans(
-        &self,
-        images: &[(Uuid, Vec<u64>)],
-    ) -> Vec<Vec<(Uuid, Vec<u64>)>> {
+    fn cluster_kmeans(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
         let n = images.len();
         if n == 0 {
             return Vec::new();
@@ -373,8 +348,10 @@ impl ClusterBuilder {
 
         // Each image’s first hash (full hash).  Images with no hash use
         // u64::MAX as sentinel – virtually impossible to collide.
-        let hashes: Vec<u64> =
-            images.iter().map(|(_, hs)| *hs.first().unwrap_or(&u64::MAX)).collect();
+        let hashes: Vec<u64> = images
+            .iter()
+            .map(|(_, hs)| *hs.first().unwrap_or(&u64::MAX))
+            .collect();
 
         // --- Initialisation (k-means++) ---
         let mut centroids: Vec<u64> = Vec::with_capacity(k);
@@ -435,8 +412,8 @@ impl ClusterBuilder {
             for i in 0..n {
                 let mut best_c = 0;
                 let mut best_d = u32::MAX;
-                for c in 0..k {
-                    let d = (hashes[i] ^ centroids[c]).count_ones();
+                for (c, centroid) in centroids.iter().enumerate() {
+                    let d = (hashes[i] ^ centroid).count_ones();
                     if d < best_d {
                         best_d = d;
                         best_c = c;
@@ -456,8 +433,8 @@ impl ClusterBuilder {
                 for i in 0..n {
                     if labels[i] == c {
                         total += 1;
-                        for bit in 0..64 {
-                            counts[bit] += ((hashes[i] >> bit) & 1) as u32;
+                        for (bit, count) in counts.iter_mut().enumerate() {
+                            *count += ((hashes[i] >> bit) & 1) as u32;
                         }
                     }
                 }
@@ -467,12 +444,9 @@ impl ClusterBuilder {
                 }
 
                 let mut new_hash = 0u64;
-                for bit in 0..64 {
-                    let ones = counts[bit];
+                for (bit, &ones) in counts.iter().enumerate() {
                     let zeros = total as u32 - ones;
-                    if ones > zeros
-                        || (ones == zeros && (prev[c] >> bit) & 1 == 1)
-                    {
+                    if ones > zeros || (ones == zeros && (prev[c] >> bit) & 1 == 1) {
                         new_hash |= 1 << bit;
                     }
                 }
@@ -499,15 +473,9 @@ impl ClusterBuilder {
     // Incremental clustering
     // ------------------------------------------------------------------
 
-    pub async fn add_to_clusters_multi(
-        &self,
-        image_id: Uuid,
-        hashes: &[i64],
-    ) -> Result<()> {
+    pub async fn add_to_clusters_multi(&self, image_id: Uuid, hashes: &[i64]) -> Result<()> {
         let effective_algo = match self.algorithm {
-            ClusterAlgorithm::Single | ClusterAlgorithm::Complete => {
-                self.algorithm
-            }
+            ClusterAlgorithm::Single | ClusterAlgorithm::Complete => self.algorithm,
             ClusterAlgorithm::Dbscan | ClusterAlgorithm::Kmeans => {
                 warn!(
                     "Incremental clustering with {:?} is not meaningful; \
@@ -523,20 +491,17 @@ impl ClusterBuilder {
             image_id, effective_algo
         );
 
-        let representatives =
-            self.repository.get_cluster_representatives().await?;
+        let representatives = self.repository.get_cluster_representatives().await?;
         if representatives.is_empty() {
             debug!("No existing clusters, skipping incremental clustering");
             return Ok(());
         }
 
-        let hashes_u64: Vec<u64> =
-            hashes.iter().copied().map(|h| h as u64).collect();
+        let hashes_u64: Vec<u64> = hashes.iter().copied().map(|h| h as u64).collect();
         let mut best_match: Option<(i64, u32)> = None;
 
         for (cluster_id, rep_hashes) in representatives {
-            let rep_u64: Vec<u64> =
-                rep_hashes.into_iter().map(|h| h as u64).collect();
+            let rep_u64: Vec<u64> = rep_hashes.into_iter().map(|h| h as u64).collect();
             let Some(distance) = Self::min_distance(&hashes_u64, &rep_u64) else {
                 continue;
             };

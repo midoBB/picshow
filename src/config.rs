@@ -144,10 +144,10 @@ impl AppConfig {
         // config back so the user can discover and tweak the fields.
         let needs_rewrite = {
             let raw: serde_json::Value = serde_json::from_str(&config_str)?;
-            !raw.get("clusterAlgorithm").is_some()
-                || !raw.get("clusterThreshold").is_some()
-                || !raw.get("clusterDbscanMinPts").is_some()
-                || !raw.get("clusterKmeansK").is_some()
+            raw.get("clusterAlgorithm").is_none()
+                || raw.get("clusterThreshold").is_none()
+                || raw.get("clusterDbscanMinPts").is_none()
+                || raw.get("clusterKmeansK").is_none()
         };
 
         let config: Self = serde_json::from_str(&config_str)
