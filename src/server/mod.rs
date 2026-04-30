@@ -384,7 +384,7 @@ pub struct ClusterDetailResponse {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolveClusterRequest {
-    pub best_shot_id: String,
+    pub best_shot_ids: Vec<String>,
     pub delete_others: bool,
 }
 

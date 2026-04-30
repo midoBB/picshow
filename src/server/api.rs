@@ -568,25 +568,33 @@ async fn resolve_cluster_handler(
     Path(cluster_id): Path<i64>,
     Json(payload): Json<super::ResolveClusterRequest>,
 ) -> impl IntoResponse {
-    // Parse best shot ID
-    let best_shot_id = match Uuid::parse_str(&payload.best_shot_id) {
-        Ok(id) => id,
-        Err(e) => {
-            error!("Failed to parse best_shot_id: {:?}", e);
-            return (
-                StatusCode::BAD_REQUEST,
-                axum::Json(json!({"error": "Invalid best_shot_id"})),
-            )
-                .into_response();
-        }
-    };
+    // Parse best shot IDs
+    let best_shot_ids: Vec<Uuid> = payload
+        .best_shot_ids
+        .iter()
+        .filter_map(|id| match Uuid::parse_str(id) {
+            Ok(uuid) => Some(uuid),
+            Err(e) => {
+                error!("Failed to parse best_shot_id: {:?}", e);
+                None
+            }
+        })
+        .collect();
 
-    // Mark the best shot
-    if let Err(e) = state.repo.mark_best_shot(cluster_id, best_shot_id).await {
-        error!("Failed to mark best shot: {:?}", e);
+    if best_shot_ids.is_empty() {
+        return (
+            StatusCode::BAD_REQUEST,
+            axum::Json(json!({"error": "No valid best_shot_ids provided"})),
+        )
+            .into_response();
+    }
+
+    // Mark the best shots
+    if let Err(e) = state.repo.mark_best_shots(cluster_id, &best_shot_ids).await {
+        error!("Failed to mark best shots: {:?}", e);
         return (
             StatusCode::INTERNAL_SERVER_ERROR,
-            axum::Json(json!({"error": "Failed to mark best shot"})),
+            axum::Json(json!({"error": "Failed to mark best shots"})),
         )
             .into_response();
     }

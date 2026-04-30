@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useState } from "react";
 import { FaCheck } from "react-icons/fa";
 import { toast } from "sonner";
 import { useClusterDetail, useResolveCluster } from "@/queries/loaders";
@@ -15,19 +15,19 @@ export const ClusterDetailDialog = ({
 }: ClusterDetailDialogProps) => {
   const { data: clusterDetail, isLoading } = useClusterDetail(clusterId);
   const resolveClusterMutation = useResolveCluster();
-  const [selectedBest, setSelectedBest] = useState<string | null>(null);
+  const [selectedBest, setSelectedBest] = useState<Set<string>>(new Set());
   const isDarkMode = useAppState((state) => state.isDarkMode);
 
   const handleResolve = async () => {
-    if (!selectedBest) {
-      toast.error("Please select a photo to keep");
+    if (selectedBest.size === 0) {
+      toast.error("Please select at least one photo to keep");
       return;
     }
 
     try {
       await resolveClusterMutation.mutateAsync({
         clusterId,
-        bestShotId: selectedBest,
+        bestShotIds: Array.from(selectedBest),
         deleteOthers: true,
       });
       toast.success("Cluster resolved successfully");
@@ -37,6 +37,18 @@ export const ClusterDetailDialog = ({
       console.error(error);
     }
   };
+
+  const toggleSelection = useCallback((id: string) => {
+    setSelectedBest((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else {
+        next.add(id);
+      }
+      return next;
+    });
+  }, []);
 
   const handleBackdropClick = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget) {
@@ -113,11 +125,11 @@ export const ClusterDetailDialog = ({
                 <div
                   key={img.id}
                   className={`group relative cursor-pointer overflow-hidden rounded-lg border-4 transition-all ${
-                    selectedBest === img.id
+                    selectedBest.has(img.id)
                       ? "border-blue-500 shadow-lg"
                       : "border-transparent hover:border-gray-300"
                   }`}
-                  onClick={() => setSelectedBest(img.id)}
+                  onClick={() => toggleSelection(img.id)}
                 >
                   <div className="relative aspect-square">
                     <img
@@ -134,7 +146,7 @@ export const ClusterDetailDialog = ({
                     )}
 
                     {/* Selection checkmark */}
-                    {selectedBest === img.id && (
+                    {selectedBest.has(img.id) && (
                       <div className="absolute inset-0 flex items-center justify-center bg-blue-500 bg-opacity-20">
                         <div className="rounded-full bg-blue-500 p-3">
                           <FaCheck className="h-6 w-6 text-white" />
@@ -170,9 +182,9 @@ export const ClusterDetailDialog = ({
             <p
               className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
             >
-              {selectedBest
-                ? "Click 'Keep Selected' to save this photo and move others to trash"
-                : "Select a photo to keep"}
+              {selectedBest.size > 0
+                ? `${selectedBest.size} photo${selectedBest.size > 1 ? "s" : ""} selected — others will be deleted`
+                : "Select photos to keep"}
             </p>
             <div className="flex gap-2">
               <button
@@ -187,9 +199,11 @@ export const ClusterDetailDialog = ({
               </button>
               <button
                 onClick={handleResolve}
-                disabled={!selectedBest || resolveClusterMutation.isPending}
+                disabled={
+                  selectedBest.size === 0 || resolveClusterMutation.isPending
+                }
                 className={`rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors ${
-                  !selectedBest || resolveClusterMutation.isPending
+                  selectedBest.size === 0 || resolveClusterMutation.isPending
                     ? "cursor-not-allowed bg-gray-400"
                     : "bg-blue-600 hover:bg-blue-700"
                 }`}

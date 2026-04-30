@@ -1674,7 +1674,7 @@ impl MediaRepository {
             .collect())
     }
 
-    pub async fn mark_best_shot(&self, cluster_id: i64, image_id: uuid::Uuid) -> Result<()> {
+    pub async fn mark_best_shots(&self, cluster_id: i64, image_ids: &[uuid::Uuid]) -> Result<()> {
         let write_conn = self.get_write_conn().await?;
 
         // Reset all best_shot flags for this cluster
@@ -1685,14 +1685,16 @@ impl MediaRepository {
         .execute(write_conn.as_ref())
         .await?;
 
-        // Set the new best shot
-        sqlx::query!(
-            "UPDATE cluster_members SET is_best_shot = 1 WHERE cluster_id = ? AND image_id = ?",
-            cluster_id,
-            image_id
-        )
-        .execute(write_conn.as_ref())
-        .await?;
+        // Set the new best shots
+        for image_id in image_ids {
+            sqlx::query!(
+                "UPDATE cluster_members SET is_best_shot = 1 WHERE cluster_id = ? AND image_id = ?",
+                cluster_id,
+                image_id
+            )
+            .execute(write_conn.as_ref())
+            .await?;
+        }
 
         Ok(())
     }

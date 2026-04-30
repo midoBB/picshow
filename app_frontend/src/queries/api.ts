@@ -119,11 +119,11 @@ export const fetchClusterDetail = async (
 
 export const resolveCluster = async (payload: {
   clusterId: number;
-  bestShotId: string;
+  bestShotIds: string[];
   deleteOthers: boolean;
 }): Promise<void> => {
   await api.post(`/clusters/${payload.clusterId}/resolve`, {
-    bestShotId: payload.bestShotId,
+    bestShotIds: payload.bestShotIds,
     deleteOthers: payload.deleteOthers,
   });
 };
