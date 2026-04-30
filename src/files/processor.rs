@@ -20,7 +20,7 @@ use tokio::{
     sync::{Mutex, Semaphore},
     time::Instant,
 };
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use super::handler::Handler;
 use walkdir::{DirEntry, WalkDir};
@@ -170,6 +170,47 @@ impl Processor {
                 );
                 // Add to processed hashes for cleanup
                 processed_hashes.lock().await.insert(key);
+
+                // Backfill perceptual hashes for existing images that don't have them
+                if existing_file.media_type == MediaType::Image {
+                    let image_id = existing_file.id;
+                    if !self.repository.has_missing_perceptual_hashes(image_id).await.unwrap_or(true) {
+                        debug!("Image {} already has perceptual hashes, skipping", filename);
+                        return Ok(MediaFile::Unfilled(existing_file));
+                    }
+                    if let Ok(hashes) = self
+                        .handler
+                        .compute_perceptual_hashes(file_path)
+                        .await
+                    {
+                        if hashes.0.is_some()
+                            || hashes.1.is_some()
+                            || hashes.2.is_some()
+                            || hashes.3.is_some()
+                            || hashes.4.is_some()
+                            || hashes.5.is_some()
+                        {
+                            if let Err(e) = self
+                                .repository
+                                .update_image_perceptual_hashes(
+                                    image_id,
+                                    hashes.0,
+                                    hashes.1,
+                                    hashes.2,
+                                    hashes.3,
+                                    hashes.4,
+                                    hashes.5,
+                                )
+                                .await
+                            {
+                                warn!("Failed to backfill perceptual hashes for {}: {}", filename, e);
+                            } else {
+                                debug!("Backfilled perceptual hashes for existing image {}", filename);
+                            }
+                        }
+                    }
+                }
+
                 return Ok(MediaFile::Unfilled(existing_file));
             }
         }

@@ -1076,6 +1076,65 @@ impl MediaRepository {
         tx.commit().await?;
         Ok(())
     }
+
+    pub async fn has_missing_perceptual_hashes(&self, media_file_id: Uuid) -> Result<bool> {
+        let has_missing: bool = sqlx::query_scalar(
+            r#"SELECT EXISTS(
+                SELECT 1 FROM media_images mi
+                JOIN images i ON i.id = mi.image_id
+                WHERE mi.media_id = ?
+                AND (
+                    i.perceptual_hash IS NULL
+                    OR i.perceptual_hash_center IS NULL
+                    OR i.perceptual_hash_tl IS NULL
+                    OR i.perceptual_hash_tr IS NULL
+                    OR i.perceptual_hash_bl IS NULL
+                    OR i.perceptual_hash_br IS NULL
+                )
+            )"#,
+        )
+        .bind(media_file_id)
+        .fetch_one(self.get_read_conn())
+        .await?;
+        Ok(has_missing)
+    }
+
+    pub async fn update_image_perceptual_hashes(
+        &self,
+        media_file_id: Uuid,
+        perceptual_hash: Option<i64>,
+        perceptual_hash_center: Option<i64>,
+        perceptual_hash_tl: Option<i64>,
+        perceptual_hash_tr: Option<i64>,
+        perceptual_hash_bl: Option<i64>,
+        perceptual_hash_br: Option<i64>,
+    ) -> Result<()> {
+        let mut tx = self.get_write_conn().await?.begin().await?;
+        sqlx::query(
+            r#"UPDATE images SET
+                    perceptual_hash = ?,
+                    perceptual_hash_center = ?,
+                    perceptual_hash_tl = ?,
+                    perceptual_hash_tr = ?,
+                    perceptual_hash_bl = ?,
+                    perceptual_hash_br = ?
+                WHERE id = (
+                    SELECT image_id FROM media_images WHERE media_id = ?
+                )"#,
+        )
+        .bind(perceptual_hash)
+        .bind(perceptual_hash_center)
+        .bind(perceptual_hash_tl)
+        .bind(perceptual_hash_tr)
+        .bind(perceptual_hash_bl)
+        .bind(perceptual_hash_br)
+        .bind(media_file_id)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn get_files(
         &self,
         query: FilledFileQuery,
