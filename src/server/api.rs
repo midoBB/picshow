@@ -661,7 +661,7 @@ async fn resolve_cluster_handler(
 async fn rebuild_clusters_handler(State(state): State<Arc<AppState>>) -> impl IntoResponse {
     use crate::clustering::ClusterBuilder;
 
-    let builder = ClusterBuilder::new(state.repo.clone());
+    let builder = ClusterBuilder::new(state.repo.clone(), &state.config);
 
     match builder.build_clusters().await {
         Ok(stats) => {

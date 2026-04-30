@@ -8,6 +8,17 @@ pub fn get_default_port() -> u16 {
     DEFAULT_PORT
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "lowercase")]
+#[derive(Default)]
+pub enum ClusterAlgorithm {
+    #[default]
+    Single,
+    Complete,
+    Dbscan,
+    Kmeans,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
@@ -51,6 +62,15 @@ pub struct AppConfig {
     pub auto_refresh_enabled: bool,
     #[serde(default = "default_auto_refresh_duration")]
     pub auto_refresh_duration: u16,
+    // Cluster config (not exposed in frontend settings — edit config.json directly)
+    #[serde(default = "default_cluster_algorithm")]
+    pub cluster_algorithm: ClusterAlgorithm,
+    #[serde(default = "default_cluster_threshold")]
+    pub cluster_threshold: u32,
+    #[serde(default = "default_cluster_dbscan_min_pts")]
+    pub cluster_dbscan_min_pts: usize,
+    #[serde(default = "default_cluster_kmeans_k")]
+    pub cluster_kmeans_k: usize,
 }
 
 fn default_auto_refresh_enabled() -> bool {
@@ -59,6 +79,22 @@ fn default_auto_refresh_enabled() -> bool {
 
 fn default_auto_refresh_duration() -> u16 {
     1 // Default: 1 hour
+}
+
+fn default_cluster_algorithm() -> ClusterAlgorithm {
+    ClusterAlgorithm::Complete
+}
+
+fn default_cluster_threshold() -> u32 {
+    10
+}
+
+fn default_cluster_dbscan_min_pts() -> usize {
+    3
+}
+
+fn default_cluster_kmeans_k() -> usize {
+    10
 }
 
 impl Default for AppConfig {
@@ -78,6 +114,10 @@ impl Default for AppConfig {
             delete_mode: DeleteMode::default(),
             auto_refresh_enabled: default_auto_refresh_enabled(),
             auto_refresh_duration: default_auto_refresh_duration(),
+            cluster_algorithm: default_cluster_algorithm(),
+            cluster_threshold: default_cluster_threshold(),
+            cluster_dbscan_min_pts: default_cluster_dbscan_min_pts(),
+            cluster_kmeans_k: default_cluster_kmeans_k(),
         }
     }
 }
@@ -96,10 +136,29 @@ impl AppConfig {
         if !config_path.exists() {
             return Err(anyhow::anyhow!("Configuration file does not exist"));
         }
-        let config_str = std::fs::read_to_string(config_path)
+        let config_str = std::fs::read_to_string(&config_path)
             .map_err(|e| anyhow::anyhow!("Error reading configuration file: {}", e))?;
-        serde_json::from_str(&config_str)
-            .map_err(|e| anyhow::anyhow!("Error parsing configuration file: {}", e))
+
+        // On disk the following keys may be missing for users upgrading from
+        // an older version.  serde fills in defaults, but we write the merged
+        // config back so the user can discover and tweak the fields.
+        let needs_rewrite = {
+            let raw: serde_json::Value = serde_json::from_str(&config_str)?;
+            !raw.get("clusterAlgorithm").is_some()
+                || !raw.get("clusterThreshold").is_some()
+                || !raw.get("clusterDbscanMinPts").is_some()
+                || !raw.get("clusterKmeansK").is_some()
+        };
+
+        let config: Self = serde_json::from_str(&config_str)
+            .map_err(|e| anyhow::anyhow!("Error parsing configuration file: {}", e))?;
+
+        if needs_rewrite {
+            tracing::info!("Adding cluster config defaults to existing config file");
+            config.save()?;
+        }
+
+        Ok(config)
     }
 
     pub fn save(&self) -> Result<()> {
