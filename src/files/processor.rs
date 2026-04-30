@@ -27,9 +27,9 @@ use walkdir::{DirEntry, WalkDir};
 
 #[derive(Clone)]
 pub struct Processor {
-    config: Arc<AppConfig>,
+    pub(crate) config: Arc<AppConfig>,
     handler: Handler,
-    repository: Arc<MediaRepository>,
+    pub(crate) repository: Arc<MediaRepository>,
     duplicate_path: Arc<PathBuf>,
 }
 
