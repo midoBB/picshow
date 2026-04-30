@@ -1446,14 +1446,71 @@ impl MediaRepository {
 
     pub async fn delete_cluster(&self, cluster_id: i64) -> Result<()> {
         let write_conn = self.get_write_conn().await?;
-        sqlx::query!(
+        sqlx::query(
             "DELETE FROM image_clusters WHERE cluster_id = ?",
-            cluster_id
         )
+        .bind(cluster_id)
         .execute(write_conn.as_ref())
         .await?;
 
         Ok(())
+    }
+
+    pub async fn replace_clusters(
+        &self,
+        old_cluster_ids: &[i64],
+        representative_id: Uuid,
+        members: &[(Uuid, u32)],
+    ) -> Result<i64> {
+        let write_conn = self.get_write_conn().await?;
+        let mut tx = write_conn.begin().await?;
+
+        for old_cluster_id in old_cluster_ids {
+            sqlx::query("DELETE FROM cluster_members WHERE cluster_id = ?")
+                .bind(old_cluster_id)
+                .execute(&mut *tx)
+                .await?;
+
+            sqlx::query("DELETE FROM image_clusters WHERE cluster_id = ?")
+                .bind(old_cluster_id)
+                .execute(&mut *tx)
+                .await?;
+        }
+
+        let added_at = chrono::Utc::now().to_rfc3339();
+        let rep_bytes = representative_id.as_bytes();
+
+        let cluster_id: i64 = sqlx::query(
+            "INSERT INTO image_clusters (representative_image_id, created_at) VALUES (?, ?)",
+        )
+        .bind(&rep_bytes[..])
+        .bind(&added_at)
+        .execute(&mut *tx)
+        .await?
+        .last_insert_rowid();
+
+        if !members.is_empty() {
+            let mut query = String::from(
+                "INSERT INTO cluster_members (cluster_id, image_id, hamming_distance, is_best_shot, added_at) VALUES "
+            );
+            let placeholders: Vec<String> = (0..members.len())
+                .map(|_| "(?, ?, ?, 0, ?)".to_string())
+                .collect();
+            query.push_str(&placeholders.join(", "));
+
+            let mut query_builder = sqlx::query(&query);
+            for (image_id, distance) in members {
+                query_builder = query_builder
+                    .bind(cluster_id)
+                    .bind(*image_id)
+                    .bind(*distance as i32)
+                    .bind(&added_at);
+            }
+            query_builder.execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(cluster_id)
     }
 
     pub async fn get_all_clusters_with_members(&self) -> Result<Vec<super::ExistingCluster>> {

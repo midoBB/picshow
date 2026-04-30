@@ -217,10 +217,21 @@ impl ClusterBuilder {
                 })
                 .collect();
 
-            let db_cluster_id = self.repository.create_cluster(representative_id).await?;
-            self.repository
-                .add_batch_to_cluster(db_cluster_id, &members_with_distances)
-                .await?;
+            let old_cluster_ids: Vec<i64> = existing.iter()
+                .filter(|ec| {
+                    let existing_ids: Vec<Uuid> = ec.members.iter().map(|(id, _)| *id).collect();
+                    member_ids.iter().any(|id| existing_ids.contains(id))
+                })
+                .map(|ec| ec.cluster_id)
+                .collect();
+
+            let db_cluster_id = if let Some(_old_id) = old_cluster_ids.first() {
+                self.repository.replace_clusters(&old_cluster_ids, representative_id, &members_with_distances).await?
+            } else {
+                let id = self.repository.create_cluster(representative_id).await?;
+                self.repository.add_batch_to_cluster(id, &members_with_distances).await?;
+                id
+            };
 
             final_clusters_created += 1;
             images_clustered += cluster.len();
