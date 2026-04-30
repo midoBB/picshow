@@ -280,7 +280,7 @@ impl ClusterBuilder {
                 continue;
             }
 
-            if neighbours[i].len() < min_pts {
+            if neighbours[i].len() + 1 < min_pts {
                 // Mark as noise so we don't revisit it.
                 assigned[i] = None;
                 continue;
