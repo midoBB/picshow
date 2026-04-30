@@ -304,7 +304,7 @@ impl ClusterBuilder {
                 assigned[q] = Some(cluster_id);
                 raw_clusters[cluster_id].push(q);
 
-                if neighbours[q].len() >= min_pts {
+                if neighbours[q].len() + 1 >= min_pts {
                     for &nbr in &neighbours[q] {
                         if !in_seeds[nbr] {
                             in_seeds[nbr] = true;
