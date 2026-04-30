@@ -12,8 +12,8 @@ pub fn get_default_port() -> u16 {
 #[serde(rename_all = "lowercase")]
 #[derive(Default)]
 pub enum ClusterAlgorithm {
-    #[default]
     Single,
+    #[default]
     Complete,
     Dbscan,
     Kmeans,
