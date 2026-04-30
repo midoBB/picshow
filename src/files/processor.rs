@@ -174,15 +174,16 @@ impl Processor {
                 // Backfill perceptual hashes for existing images that don't have them
                 if existing_file.media_type == MediaType::Image {
                     let image_id = existing_file.id;
-                    if !self.repository.has_missing_perceptual_hashes(image_id).await.unwrap_or(true) {
+                    if !self
+                        .repository
+                        .has_missing_perceptual_hashes(image_id)
+                        .await
+                        .unwrap_or(true)
+                    {
                         debug!("Image {} already has perceptual hashes, skipping", filename);
                         return Ok(MediaFile::Unfilled(existing_file));
                     }
-                    if let Ok(hashes) = self
-                        .handler
-                        .compute_perceptual_hashes(file_path)
-                        .await
-                    {
+                    if let Ok(hashes) = self.handler.compute_perceptual_hashes(file_path).await {
                         if hashes.0.is_some()
                             || hashes.1.is_some()
                             || hashes.2.is_some()
@@ -193,19 +194,40 @@ impl Processor {
                             if let Err(e) = self
                                 .repository
                                 .update_image_perceptual_hashes(
-                                    image_id,
-                                    hashes.0,
-                                    hashes.1,
-                                    hashes.2,
-                                    hashes.3,
-                                    hashes.4,
+                                    image_id, hashes.0, hashes.1, hashes.2, hashes.3, hashes.4,
                                     hashes.5,
                                 )
                                 .await
                             {
-                                warn!("Failed to backfill perceptual hashes for {}: {}", filename, e);
+                                warn!(
+                                    "Failed to backfill perceptual hashes for {}: {}",
+                                    filename, e
+                                );
                             } else {
-                                debug!("Backfilled perceptual hashes for existing image {}", filename);
+                                debug!(
+                                    "Backfilled perceptual hashes for existing image {}",
+                                    filename
+                                );
+                                // Trigger incremental clustering for the newly hashed image
+                                let hash_vec: Vec<i64> =
+                                    [hashes.0, hashes.1, hashes.2, hashes.3, hashes.4, hashes.5]
+                                        .into_iter()
+                                        .flatten()
+                                        .collect();
+                                if !hash_vec.is_empty() {
+                                    let builder = crate::clustering::ClusterBuilder::new(
+                                        self.repository.clone(),
+                                        &self.config,
+                                    );
+                                    if let Err(e) =
+                                        builder.add_to_clusters_multi(image_id, &hash_vec).await
+                                    {
+                                        warn!(
+                                            "Failed to cluster backfilled image {}: {}",
+                                            filename, e
+                                        );
+                                    }
+                                }
                             }
                         }
                     }
