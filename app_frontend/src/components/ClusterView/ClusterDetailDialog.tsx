@@ -1,7 +1,7 @@
 import { useCallback, useState } from "react";
 import { FaCheck } from "react-icons/fa";
 import { toast } from "sonner";
-import { useClusterDetail, useResolveCluster } from "@/queries/loaders";
+import { useClusterDetail, useMarkClusterResolved, useResolveCluster } from "@/queries/loaders";
 import useAppState from "@/state";
 
 interface ClusterDetailDialogProps {
@@ -15,6 +15,7 @@ export const ClusterDetailDialog = ({
 }: ClusterDetailDialogProps) => {
   const { data: clusterDetail, isLoading } = useClusterDetail(clusterId);
   const resolveClusterMutation = useResolveCluster();
+  const markResolvedMutation = useMarkClusterResolved();
   const [selectedBest, setSelectedBest] = useState<Set<string>>(new Set());
   const isDarkMode = useAppState((state) => state.isDarkMode);
 
@@ -34,6 +35,27 @@ export const ClusterDetailDialog = ({
       onClose();
     } catch (error) {
       toast.error("Failed to resolve cluster");
+      console.error(error);
+    }
+  };
+
+  const handleMarkResolved = async () => {
+    const allIds = clusterDetail?.images.map((img) => img.id) ?? [];
+
+    if (allIds.length === 0) {
+      toast.error("No images in this cluster");
+      return;
+    }
+
+    try {
+      await markResolvedMutation.mutateAsync({
+        clusterId,
+        bestShotIds: allIds,
+      });
+      toast.success("Cluster marked as resolved");
+      onClose();
+    } catch (error) {
+      toast.error("Failed to mark cluster as resolved");
       console.error(error);
     }
   };
@@ -58,18 +80,17 @@ export const ClusterDetailDialog = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black bg-opacity-50 p-4"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4"
       onClick={handleBackdropClick}
     >
       <div
-        className={`relative max-h-[90vh] w-full max-w-6xl overflow-hidden rounded-lg shadow-xl ${
+        className={`relative max-h-[90vh] w-full max-w-6xl overflow-hidden rounded-2xl shadow-2xl ${
           isDarkMode ? "bg-gray-900" : "bg-white"
         }`}
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Header */}
         <div
-          className={`border-b p-4 ${isDarkMode ? "border-gray-700" : "border-gray-200"}`}
+          className={`border-b px-6 py-4 ${isDarkMode ? "border-gray-700" : "border-gray-200"}`}
         >
           <div className="flex items-center justify-between">
             <div>
@@ -109,8 +130,7 @@ export const ClusterDetailDialog = ({
           </div>
         </div>
 
-        {/* Content */}
-        <div className="max-h-[calc(90vh-180px)] overflow-y-auto p-4">
+        <div className="max-h-[calc(90vh-180px)] overflow-y-auto p-6">
           {isLoading ? (
             <div className="flex h-64 items-center justify-center">
               <div
@@ -124,10 +144,12 @@ export const ClusterDetailDialog = ({
               {clusterDetail?.images.map((img) => (
                 <div
                   key={img.id}
-                  className={`group relative cursor-pointer overflow-hidden rounded-lg border-4 transition-all ${
+                  className={`group relative cursor-pointer overflow-hidden rounded-xl border-2 transition-all duration-200 ${
                     selectedBest.has(img.id)
-                      ? "border-blue-500 shadow-lg"
-                      : "border-transparent hover:border-gray-300"
+                      ? "border-blue-500 shadow-lg shadow-blue-500/20"
+                      : isDarkMode
+                        ? "border-gray-700 hover:border-gray-500"
+                        : "border-gray-200 hover:border-gray-400"
                   }`}
                   onClick={() => toggleSelection(img.id)}
                 >
@@ -138,33 +160,27 @@ export const ClusterDetailDialog = ({
                       alt={img.filename}
                     />
 
-                    {/* Best shot indicator */}
                     {img.isBestShot && (
-                      <div className="absolute left-2 top-2 rounded bg-green-500 px-2 py-1 text-xs font-medium text-white">
+                      <div className="absolute left-2 top-2 rounded-full bg-emerald-500 px-2 py-0.5 text-xs font-medium text-white shadow-lg">
                         Current Best
                       </div>
                     )}
 
-                    {/* Selection checkmark */}
                     {selectedBest.has(img.id) && (
-                      <div className="absolute inset-0 flex items-center justify-center bg-blue-500 bg-opacity-20">
-                        <div className="rounded-full bg-blue-500 p-3">
-                          <FaCheck className="h-6 w-6 text-white" />
+                      <div className="absolute inset-0 flex items-center justify-center bg-blue-500/20">
+                        <div className="rounded-full bg-blue-500 p-2.5 shadow-lg">
+                          <FaCheck className="h-5 w-5 text-white" />
                         </div>
                       </div>
                     )}
 
-                    {/* Hover overlay with info */}
-                    <div className="absolute bottom-0 left-0 right-0 bg-black bg-opacity-70 p-2 opacity-0 transition-opacity group-hover:opacity-100">
-                      <div className="truncate text-xs text-white">
+                    <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 to-transparent p-3 opacity-0 transition-opacity group-hover:opacity-100">
+                      <div className="truncate text-xs font-medium text-white">
                         {img.filename}
                       </div>
-                      <div className="mt-1 text-xs text-gray-300">
-                        Similarity:{" "}
+                      <div className="mt-0.5 text-xs text-gray-300">
                         {Math.round((1 - img.hammingDistance / 64) * 100)}%
-                      </div>
-                      <div className="text-xs text-gray-300">
-                        {img.width} × {img.height}
+                        match · {img.width}x{img.height}
                       </div>
                     </div>
                   </div>
@@ -174,9 +190,8 @@ export const ClusterDetailDialog = ({
           )}
         </div>
 
-        {/* Footer */}
         <div
-          className={`border-t p-4 ${isDarkMode ? "border-gray-700" : "border-gray-200"}`}
+          className={`border-t px-6 py-4 ${isDarkMode ? "border-gray-700" : "border-gray-200"}`}
         >
           <div className="flex items-center justify-between">
             <p
@@ -187,6 +202,19 @@ export const ClusterDetailDialog = ({
                 : "Select photos to keep"}
             </p>
             <div className="flex gap-2">
+              <button
+                onClick={handleMarkResolved}
+                disabled={markResolvedMutation.isPending}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition-all ${
+                  markResolvedMutation.isPending
+                    ? "cursor-not-allowed bg-gray-400 text-white"
+                    : isDarkMode
+                      ? "bg-gray-700 text-gray-200 hover:bg-gray-600"
+                      : "bg-gray-200 text-gray-700 hover:bg-gray-300"
+                }`}
+              >
+                {markResolvedMutation.isPending ? "Marking..." : "Mark Resolved"}
+              </button>
               <button
                 onClick={onClose}
                 className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
@@ -202,10 +230,10 @@ export const ClusterDetailDialog = ({
                 disabled={
                   selectedBest.size === 0 || resolveClusterMutation.isPending
                 }
-                className={`rounded-lg px-4 py-2 text-sm font-medium text-white transition-colors ${
+                className={`rounded-lg px-4 py-2 text-sm font-medium text-white transition-all ${
                   selectedBest.size === 0 || resolveClusterMutation.isPending
                     ? "cursor-not-allowed bg-gray-400"
-                    : "bg-blue-600 hover:bg-blue-700"
+                    : "bg-blue-600 hover:bg-blue-700 hover:shadow-lg hover:shadow-blue-500/25"
                 }`}
               >
                 {resolveClusterMutation.isPending

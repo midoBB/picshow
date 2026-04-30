@@ -128,6 +128,16 @@ export const resolveCluster = async (payload: {
   });
 };
 
+export const markClusterResolved = async (payload: {
+  clusterId: number;
+  bestShotIds: string[];
+}): Promise<void> => {
+  await api.post(`/clusters/${payload.clusterId}/resolve`, {
+    bestShotIds: payload.bestShotIds,
+    deleteOthers: false,
+  });
+};
+
 export const rebuildClusters = async (): Promise<void> => {
   await api.post("/internal/rebuild-clusters");
 };

@@ -16,6 +16,7 @@ import {
   type PaginationParams,
   rebuildClusters,
   resolveCluster,
+  markClusterResolved,
   toggleFavorite,
   triggerScan,
   updateSettings,
@@ -23,7 +24,6 @@ import {
 import type {
   AppSettings,
   ClusterDetailResponse,
-  ClustersResponse,
   Stats,
 } from "@/queries/model";
 
@@ -203,6 +203,16 @@ export const useResolveCluster = () => {
       queryClient.invalidateQueries({ queryKey: ["clusters"] });
       queryClient.invalidateQueries({ queryKey: ["files"] });
       queryClient.invalidateQueries({ queryKey: ["stats"] });
+    },
+  });
+};
+
+export const useMarkClusterResolved = () => {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: markClusterResolved,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["clusters"] });
     },
   });
 };
