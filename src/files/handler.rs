@@ -36,7 +36,7 @@ impl Handler {
             .unwrap_or(1)
             / 2;
 
-        let phash_concurrency = (config.concurrency as usize).min(available_concurrency);
+        let phash_concurrency = (config.concurrency as usize).min(available_concurrency).max(1);
         Self {
             config,
             identify_regex: Regex::new(r"^(?P<width>\d+)x(?P<height>\d+)$")
