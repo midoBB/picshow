@@ -26,6 +26,7 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
             config.port
         ));
     }
+    info!("PicShow v{} is starting", env!("VERGEN_GIT_DESCRIBE"));
     let channels = CommandChannels::default();
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
     let processor_shutdown = shutdown_tx.subscribe();
@@ -38,7 +39,10 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     let cache = AppCache::new(config.cache_size_mb as u64);
     let repository = Arc::new(MediaRepository::new(cache.clone(), config.clone()).await?);
     if let Ok(stats) = repository.get_stats().await {
-        info!("Loaded {} files ({} images, {} videos, {} favorites)", stats.count, stats.images, stats.videos, stats.favorites);
+        info!(
+            "Loaded {} files ({} images, {} videos, {} favorites)",
+            stats.count, stats.images, stats.videos, stats.favorites
+        );
     }
     let status_tx = channels.status_tx.clone();
     let mut command_handler = CommandHandler::new(

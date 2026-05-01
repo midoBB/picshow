@@ -89,7 +89,7 @@ run:
 
 .PHONY: run-front
 run-front:
-	@cd $(FRONTEND_DIR) && pnpm start
+	@cd $(FRONTEND_DIR) && pnpm run dev
 
 gen-docs: Cargo.toml Cargo.lock
 	@cargo doc --no-deps
