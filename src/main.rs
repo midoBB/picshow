@@ -36,7 +36,7 @@ async fn main() -> Result<()> {
     };
     if should_run_first_time {
         warn!("First time running the application, starting first run server");
-        info!("Picshow v{}", env!("APP_VERSION"));
+        info!("Picshow {}", env!("APP_VERSION"));
         config = first_run::run_server(config.clone()).await?;
         let cli_port = match cli.command {
             Some(Commands::Serve { port }) => port,

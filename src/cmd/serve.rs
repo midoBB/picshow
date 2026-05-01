@@ -26,7 +26,7 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
             config.port
         ));
     }
-    info!("PicShow v{} is starting", env!("APP_VERSION"));
+    info!("PicShow {} is starting", env!("APP_VERSION"));
     let channels = CommandChannels::default();
     let (shutdown_tx, _) = tokio::sync::broadcast::channel::<()>(1);
     let processor_shutdown = shutdown_tx.subscribe();
