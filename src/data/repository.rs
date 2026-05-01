@@ -429,6 +429,15 @@ impl MediaRepository {
         self.cache.set(cache_key, &(img_vid_id, thumb_id)).await;
         Ok((img_vid_id, thumb_id))
     }
+    pub async fn resolve_image_id(&self, media_file_id: Uuid) -> Result<Uuid> {
+        let image_id: Uuid =
+            sqlx::query_scalar("SELECT image_id FROM media_images WHERE media_id = ?")
+                .bind(media_file_id)
+                .fetch_one(self.get_read_conn())
+                .await?;
+        Ok(image_id)
+    }
+
     pub async fn get_file_by_id(&self, id: uuid::Uuid, with_media: bool) -> Result<MediaFile> {
         self.get_file(FindBy::Id(id), with_media).await
     }

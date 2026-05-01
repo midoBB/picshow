@@ -173,10 +173,10 @@ impl Processor {
 
                 // Backfill perceptual hashes for existing images that don't have them
                 if existing_file.media_type == MediaType::Image {
-                    let image_id = existing_file.id;
+                    let media_file_id = existing_file.id;
                     if !self
                         .repository
-                        .has_missing_perceptual_hashes(image_id)
+                        .has_missing_perceptual_hashes(media_file_id)
                         .await
                         .unwrap_or(true)
                     {
@@ -194,7 +194,12 @@ impl Processor {
                             if let Err(e) = self
                                 .repository
                                 .update_image_perceptual_hashes(
-                                    image_id, hashes.0, hashes.1, hashes.2, hashes.3, hashes.4,
+                                    media_file_id,
+                                    hashes.0,
+                                    hashes.1,
+                                    hashes.2,
+                                    hashes.3,
+                                    hashes.4,
                                     hashes.5,
                                 )
                                 .await
@@ -215,16 +220,26 @@ impl Processor {
                                         .flatten()
                                         .collect();
                                 if !hash_vec.is_empty() {
-                                    let builder = crate::clustering::ClusterBuilder::new(
-                                        self.repository.clone(),
-                                        &self.config,
-                                    );
-                                    if let Err(e) =
-                                        builder.add_to_clusters_multi(image_id, &hash_vec).await
+                                    if let Ok(actual_image_id) =
+                                        self.repository.resolve_image_id(media_file_id).await
                                     {
+                                        let builder = crate::clustering::ClusterBuilder::new(
+                                            self.repository.clone(),
+                                            &self.config,
+                                        );
+                                        if let Err(e) = builder
+                                            .add_to_clusters_multi(actual_image_id, &hash_vec)
+                                            .await
+                                        {
+                                            warn!(
+                                                "Failed to cluster backfilled image {}: {}",
+                                                filename, e
+                                            );
+                                        }
+                                    } else {
                                         warn!(
-                                            "Failed to cluster backfilled image {}: {}",
-                                            filename, e
+                                            "Failed to resolve image ID for backfilled image {}",
+                                            filename
                                         );
                                     }
                                 }
