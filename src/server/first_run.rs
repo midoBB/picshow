@@ -1,4 +1,8 @@
-use std::{env, fs, path::Path, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::Result;
 use axum::{
@@ -99,17 +103,14 @@ pub async fn run_server(cfg: AppConfig) -> Result<AppConfig> {
         anyhow::anyhow!("Error loading configuration")
     })
 }
-fn get_start_dir() -> String {
-    match env::var("HOME") {
-        Ok(path) => path,
-        Err(_) => "/".to_string(),
-    }
+fn get_start_dir() -> PathBuf {
+    dirs::home_dir().unwrap_or_else(|| PathBuf::from("/"))
 }
 async fn browse_directory(Json(payload): Json<BrowseRequest>) -> impl IntoResponse {
     let path = if payload.path.is_empty() {
         get_start_dir()
     } else {
-        payload.path
+        PathBuf::from(payload.path)
     };
     let dir_path = Path::new(&path);
     if !dir_path.exists() || !dir_path.is_dir() {
@@ -150,7 +151,7 @@ async fn browse_directory(Json(payload): Json<BrowseRequest>) -> impl IntoRespon
             items.sort();
 
             // Add parent directory option for navigation (except at root)
-            if path != "/" {
+            if path != Path::new("/") {
                 if let Some(parent) = Path::new(&path).parent() {
                     let parent_path = parent.to_string_lossy().to_string();
                     items.insert(
