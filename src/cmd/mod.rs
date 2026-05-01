@@ -14,7 +14,7 @@ use crate::logging::LogLevel;
 #[derive(Parser)]
 #[command(
     author,
-    version,
+    version = env!("APP_VERSION"),
     about = "Picshow is a self-hosted image and video gallery",
     long_about = "Picshow is a self-hosted image and video gallery. It allows you to upload and organize your photos and videos. You can favorite images and videos. Picshow is built with Rust."
 )]

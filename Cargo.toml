@@ -11,9 +11,6 @@ codegen-units = 1
 panic = 'abort'
 strip = true
 
-[build-dependencies]
-vergen = { version = "8", features = ["git", "build", "gitcl"] }
-
 [dependencies]
 # General dependencies
 clap = { version = "^4.5", features = ["derive"] }
