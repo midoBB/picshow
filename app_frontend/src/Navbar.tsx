@@ -128,9 +128,7 @@ const Navbar = ({
     value:
       | "gallery"
       | "clusters"
-      | ((
-          old: "gallery" | "clusters",
-        ) => "gallery" | "clusters" | null)
+      | ((old: "gallery" | "clusters") => "gallery" | "clusters" | null)
       | null,
     options?: Options,
   ) => Promise<URLSearchParams>;

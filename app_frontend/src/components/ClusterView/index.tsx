@@ -6,17 +6,28 @@ import { ClusterCard } from "./ClusterCard";
 const ClusterCardSkeleton = ({ isDarkMode }: { isDarkMode: boolean }) => (
   <div
     className={`overflow-hidden rounded-xl border shadow-md ${
-      isDarkMode ? "border-gray-700/50 bg-gray-800/80" : "border-gray-200 bg-white"
+      isDarkMode
+        ? "border-gray-700/50 bg-gray-800/80"
+        : "border-gray-200 bg-white"
     }`}
   >
-    <div className={`grid grid-cols-2 gap-0.5 ${isDarkMode ? "bg-gray-900" : "bg-gray-100"}`}>
+    <div
+      className={`grid grid-cols-2 gap-0.5 ${isDarkMode ? "bg-gray-900" : "bg-gray-100"}`}
+    >
       {[0, 1, 2, 3].map((i) => (
-        <div key={i} className={`aspect-square animate-pulse ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`} />
+        <div
+          key={i}
+          className={`aspect-square animate-pulse ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`}
+        />
       ))}
     </div>
     <div className="p-3">
-      <div className={`h-4 w-24 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`} />
-      <div className={`mt-2 h-3 w-16 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`} />
+      <div
+        className={`h-4 w-24 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`}
+      />
+      <div
+        className={`mt-2 h-3 w-16 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`}
+      />
     </div>
   </div>
 );
@@ -24,7 +35,9 @@ const ClusterCardSkeleton = ({ isDarkMode }: { isDarkMode: boolean }) => (
 const LoadingMoreSpinner = ({ isDarkMode }: { isDarkMode: boolean }) => (
   <div className="flex items-center justify-center gap-2 py-6">
     <div className="h-5 w-5 animate-spin rounded-full border-2 border-t-transparent border-blue-500" />
-    <span className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}>
+    <span
+      className={`text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
+    >
       Loading more clusters
     </span>
   </div>
@@ -66,10 +79,16 @@ export const ClusterView = () => {
 
   if (isLoading) {
     return (
-      <div className={`h-full overflow-y-auto ${isDarkMode ? "bg-slate-800" : "bg-gray-100"}`}>
+      <div
+        className={`h-full overflow-y-auto ${isDarkMode ? "bg-slate-800" : "bg-gray-100"}`}
+      >
         <div className="mb-6 px-4 pt-6">
-          <div className={`h-8 w-48 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`} />
-          <div className={`mt-2 h-4 w-32 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`} />
+          <div
+            className={`h-8 w-48 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`}
+          />
+          <div
+            className={`mt-2 h-4 w-32 animate-pulse rounded ${isDarkMode ? "bg-gray-700" : "bg-gray-200"}`}
+          />
         </div>
         <div className="grid grid-cols-1 gap-5 px-4 pb-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
           {Array.from({ length: 8 }).map((_, i) => (
@@ -110,7 +129,8 @@ export const ClusterView = () => {
         <p
           className={`mt-1 text-sm ${isDarkMode ? "text-gray-400" : "text-gray-600"}`}
         >
-          {totalClusters} group{totalClusters !== 1 ? "s" : ""} of similar images
+          {totalClusters} group{totalClusters !== 1 ? "s" : ""} of similar
+          images
         </p>
       </div>
 

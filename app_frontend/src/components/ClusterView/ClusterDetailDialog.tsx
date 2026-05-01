@@ -1,7 +1,11 @@
 import { useCallback, useState } from "react";
 import { FaCheck } from "react-icons/fa";
 import { toast } from "sonner";
-import { useClusterDetail, useMarkClusterResolved, useResolveCluster } from "@/queries/loaders";
+import {
+  useClusterDetail,
+  useMarkClusterResolved,
+  useResolveCluster,
+} from "@/queries/loaders";
 import useAppState from "@/state";
 
 interface ClusterDetailDialogProps {
@@ -213,7 +217,9 @@ export const ClusterDetailDialog = ({
                       : "bg-gray-200 text-gray-700 hover:bg-gray-300"
                 }`}
               >
-                {markResolvedMutation.isPending ? "Marking..." : "Mark Resolved"}
+                {markResolvedMutation.isPending
+                  ? "Marking..."
+                  : "Mark Resolved"}
               </button>
               <button
                 onClick={onClose}
