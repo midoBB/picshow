@@ -45,10 +45,10 @@ impl OperationLock {
 
             tokio::select! {
                 _ = sigint.recv() => {
-                    tracing::info!("Received SIGINT, cleaning up lock file");
+                    tracing::info!("Received SIGINT, shutting down");
                 },
                 _ = sigterm.recv() => {
-                    tracing::info!("Received SIGTERM, cleaning up lock file");
+                    tracing::info!("Received SIGTERM, shutting down");
                 },
             }
 

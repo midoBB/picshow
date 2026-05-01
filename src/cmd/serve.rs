@@ -37,6 +37,9 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
 
     let cache = AppCache::new(config.cache_size_mb as u64);
     let repository = Arc::new(MediaRepository::new(cache.clone(), config.clone()).await?);
+    if let Ok(stats) = repository.get_stats().await {
+        info!("Loaded {} files ({} images, {} videos, {} favorites)", stats.count, stats.images, stats.videos, stats.favorites);
+    }
     let status_tx = channels.status_tx.clone();
     let mut command_handler = CommandHandler::new(
         config.clone(),
@@ -123,12 +126,14 @@ async fn process_files(
                     }
                     // Send processing started status
                     let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingStarted);
+                    info!("Processing started");
                     let (media_files_count, _) = processor.process(shutdown_rx).await?;
-                    info!("Found {} files", media_files_count);
+                    info!("Processing complete: {} files found", media_files_count);
                     // Rebuild clusters after scan
                     rebuild_clusters(&processor).await;
                     // Send processing finished status
                     let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
+                    info!("Processing finished");
                 }
             }
             config_result = config_change_rx.recv() => {
@@ -164,12 +169,14 @@ async fn process_files(
                 }
                 // Send processing started status
                 let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingStarted);
+                info!("Processing started");
                 let (media_files_count, exit_option) = processor.process(shutdown_rx).await?;
-                info!("Found {} files", media_files_count);
+                info!("Processing complete: {} files found", media_files_count);
                 // Rebuild clusters after scan
                 rebuild_clusters(&processor).await;
                 // Send processing finished status
                 let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
+                info!("Processing finished");
                 if exit_option.is_some() {
                     break Ok(());
                 }

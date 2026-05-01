@@ -8,7 +8,7 @@ use crate::{
 };
 use anyhow::Result;
 use chrono::Local;
-use tracing::info;
+use tracing::{debug, info};
 
 pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> Result<()> {
     let _lock = OperationLock::new()
@@ -40,6 +40,6 @@ pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> R
             make_lock_request(&config, InternalOP::Unlock).await?;
         }
     }
-    info!("Shutdown complete");
+    debug!("Shutdown complete");
     Ok(())
 }

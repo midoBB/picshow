@@ -664,7 +664,7 @@ impl ClusterBuilder {
             self.repository
                 .add_to_cluster(cluster_id, image_id, distance)
                 .await?;
-            info!(
+            debug!(
                 "Added image {} to cluster {} (distance: {})",
                 image_id, cluster_id, distance
             );

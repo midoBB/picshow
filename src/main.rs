@@ -7,7 +7,7 @@ use picshow::cmd::{Cli, Commands};
 use picshow::config::AppConfig;
 use picshow::logging;
 use picshow::server::first_run;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -36,6 +36,7 @@ async fn main() -> Result<()> {
     };
     if should_run_first_time {
         warn!("First time running the application, starting first run server");
+        info!("Picshow v{}", env!("CARGO_PKG_VERSION"));
         config = first_run::run_server(config.clone()).await?;
         let cli_port = match cli.command {
             Some(Commands::Serve { port }) => port,

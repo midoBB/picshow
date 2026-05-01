@@ -299,7 +299,7 @@ impl MediaRepository {
     }
 
     pub async fn unlock_writes(&self) -> Result<()> {
-        info!("Unlocking writes");
+        debug!("Unlocking writes");
         let mut conn = self.write_pool.acquire().await?;
         sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
             .execute(&mut *conn)
@@ -502,7 +502,7 @@ impl MediaRepository {
         let cache_key = cache::get_favorite_status_cache_key(&file_id);
 
         if let Some(status) = self.cache.get::<bool>(cache_key.clone()).await {
-            info!(
+            debug!(
                 "Cache hit for favorite status for file {} with status {}",
                 file_id, status
             );
@@ -1128,7 +1128,7 @@ impl MediaRepository {
         .await?;
         self.cache.invalidate_stats_cache();
         self.cache.invalidate_file_cache(&file_id);
-        info!(
+        debug!(
             "Toggling favorite status for file {} with status {}",
             file_id, !is_favorite
         );

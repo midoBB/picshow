@@ -88,6 +88,7 @@ pub async fn run_server(
         .with_state(state.clone());
 
     let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", state.config.port)).await?;
+    info!("Server listening on port {}", state.config.port);
     info!("Server is running on:");
     info!("  ➜  Local:   http://localhost:{}/", state.config.port);
     for (_, ip) in list_afinet_netifas()?

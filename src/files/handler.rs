@@ -275,7 +275,7 @@ impl Handler {
             perceptual_hash_bl,
             perceptual_hash_br,
         ) = self.compute_perceptual_hashes(path).await?;
-        tracing::info!("Perceptual hash (full): {}", perceptual_hash.unwrap_or(-1));
+        debug!("Perceptual hash (full): {}", perceptual_hash.unwrap_or(-1));
 
         let (thumb_width, thumb_height) = self.calculate_thumb_size(width, height);
         let temp = tempfile::NamedTempFile::new()?;

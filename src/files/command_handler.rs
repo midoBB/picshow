@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 use tokio::fs;
 
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 use uuid::Uuid;
 
 use crate::{
@@ -39,28 +39,27 @@ impl CommandHandler {
     }
 
     async fn delete_file(&mut self, fileids: Vec<Uuid>, mode: DeleteMode) -> Result<()> {
-        warn!(
-            "Deleting files with ids {:?}, with mode {:?}",
-            fileids, mode
+        info!(
+            "Deleting {} file(s) with mode {:?}",
+            fileids.len(),
+            mode
         );
         ensure_path(self.trash_path.clone()).await?;
         for id in fileids {
-            info!("Getting file with id {}", id);
+            debug!("Getting file with id {}", id);
             let file = self.repository.get_file_by_id(id, false).await?;
             let file = UnfilledMediaFile::from(file);
-            info!("File {:?} found", file.filename);
+            debug!("File {:?} found", file.filename);
             let file_path = PathBuf::from(self.config.clone().folder_path.as_str())
                 .join(file.filename.as_str());
             let filename = file.filename.as_str();
             match mode {
                 DeleteMode::MoveToTrash => {
-                    info!("Moving {} to trash", filename);
                     let trash_path = self.trash_path.join(filename);
                     fs::rename(file_path.as_path(), trash_path.as_path()).await?;
                     info!("Moved {} to trash", filename);
                 }
                 DeleteMode::DeletePermanently => {
-                    info!("Deleting {}", filename);
                     fs::remove_file(file_path.as_path()).await?;
                     info!("Deleted {}", filename);
                 }
@@ -81,23 +80,22 @@ impl CommandHandler {
                 command = self.command_rx.recv() => {
                     match command {
                         Ok(command) => {
-                            info!("Received {:?} command from processor", command);
+                            debug!("Received command: {:?}", command);
                             match &command {
                                 ProcessorCommand::DeleteFiles { ids, mode } => {
                                     match self.delete_file(ids.clone(), mode.clone()).await {
                                         Err(e) => {
-                                            info!("Error for DeleteFiles command: {}", e);
+                                            debug!("Error for DeleteFiles command: {}", e);
                                             let _ = self.status_tx.send(ProcessorStatus::ProcessingError { error: e.to_string() });
                                         },
                                        _ => {
                                             let _ = self.status_tx.send(ProcessorStatus::TaskDone { command });
-                                            info!("Ok for DeleteFiles command");
+                                            debug!("DeleteFiles command completed");
                                         }
                                     }
                                 }
                                 ProcessorCommand::TriggerScan => {
-                                    // Trigger scan is handled by the processor itself
-                                    info!("TriggerScan command received");
+                                    debug!("TriggerScan command received");
                                 }
                             }
                         },
