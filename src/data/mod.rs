@@ -10,6 +10,14 @@ use sqlx::{
     prelude::{FromRow, Type},
     Database, Sqlite,
 };
+use uuid::Uuid;
+
+#[derive(Debug, Clone)]
+pub struct ExistingCluster {
+    pub cluster_id: i64,
+    pub representative_id: Uuid,
+    pub members: Vec<(Uuid, u32)>,
+}
 
 #[derive(Clone, Serialize, Deserialize, FromRow)]
 pub struct UnfilledMediaFile {
@@ -224,18 +232,55 @@ pub struct Image {
     pub id: uuid::Uuid,
     pub width: u32,
     pub height: u32,
+    /// Perceptual hashes used for similarity clustering.
+    ///
+    /// `perceptual_hash` is the legacy/full hash; the *_* variants are crop hashes.
+    pub perceptual_hash: Option<i64>,
+    pub perceptual_hash_center: Option<i64>,
+    pub perceptual_hash_tl: Option<i64>,
+    pub perceptual_hash_tr: Option<i64>,
+    pub perceptual_hash_bl: Option<i64>,
+    pub perceptual_hash_br: Option<i64>,
     #[sqlx(skip)]
     pub thumbnail: Thumbnail,
 }
 
 impl Image {
-    pub fn new(id: uuid::Uuid, width: u32, height: u32, thumbnail: Thumbnail) -> Self {
+    pub fn new(
+        id: uuid::Uuid,
+        width: u32,
+        height: u32,
+        perceptual_hash: Option<i64>,
+        perceptual_hash_center: Option<i64>,
+        perceptual_hash_tl: Option<i64>,
+        perceptual_hash_tr: Option<i64>,
+        perceptual_hash_bl: Option<i64>,
+        perceptual_hash_br: Option<i64>,
+        thumbnail: Thumbnail,
+    ) -> Self {
         Self {
             id,
             width,
             height,
+            perceptual_hash,
+            perceptual_hash_center,
+            perceptual_hash_tl,
+            perceptual_hash_tr,
+            perceptual_hash_bl,
+            perceptual_hash_br,
             thumbnail,
         }
+    }
+
+    pub fn perceptual_hashes(&self) -> [Option<i64>; 6] {
+        [
+            self.perceptual_hash,
+            self.perceptual_hash_center,
+            self.perceptual_hash_tl,
+            self.perceptual_hash_tr,
+            self.perceptual_hash_bl,
+            self.perceptual_hash_br,
+        ]
     }
 }
 

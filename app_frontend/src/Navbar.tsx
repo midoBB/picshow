@@ -7,6 +7,7 @@ import {
   FaChevronDown,
   FaCog,
   FaDice,
+  FaLayerGroup,
   FaMoon,
   FaRegCalendarAlt,
   FaSortAmountDown,
@@ -14,6 +15,7 @@ import {
   FaSpinner,
   FaSun,
   FaSync,
+  FaTh,
   FaTrash,
   FaUndo,
 } from "react-icons/fa";
@@ -82,6 +84,8 @@ const Navbar = ({
   sortDirection,
   sortType,
   selectedCategory,
+  viewMode,
+  setViewMode,
 }: {
   onDelete: () => void;
   setSeed: (
@@ -119,6 +123,17 @@ const Navbar = ({
   sortDirection: "asc" | "desc";
   sortType: "created_at" | "random";
   selectedCategory: "all" | "video" | "image" | "favorite";
+  viewMode: "gallery" | "clusters";
+  setViewMode: (
+    value:
+      | "gallery"
+      | "clusters"
+      | ((
+          old: "gallery" | "clusters",
+        ) => "gallery" | "clusters" | null)
+      | null,
+    options?: Options,
+  ) => Promise<URLSearchParams>;
 }) => {
   const [isStatsOpen, setIsStatsOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -286,6 +301,29 @@ const Navbar = ({
                 }
                 onClick={toggleSortType}
                 ariaLabel={`Sort by ${sortType === "created_at" ? "date" : "random"}`}
+                isDarkMode={isDarkMode}
+              />
+              <TooltipButton
+                icon={
+                  viewMode === "gallery" ? (
+                    <FaLayerGroup className="w-4 h-4 sm:w-5 sm:h-5" />
+                  ) : (
+                    <FaTh className="w-4 h-4 sm:w-5 sm:h-5" />
+                  )
+                }
+                label={
+                  viewMode === "gallery"
+                    ? "View Similar Photos"
+                    : "View Gallery"
+                }
+                onClick={() =>
+                  setViewMode(viewMode === "gallery" ? "clusters" : "gallery")
+                }
+                ariaLabel={
+                  viewMode === "gallery"
+                    ? "View similar photos clusters"
+                    : "View gallery"
+                }
                 isDarkMode={isDarkMode}
               />
               <TooltipButton

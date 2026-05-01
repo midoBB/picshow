@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM cluster_members\n               WHERE image_id NOT IN (\n                   SELECT i.id FROM images i\n                   JOIN media_images mi ON i.id = mi.image_id\n                   JOIN media_files mf ON mi.media_id = mf.id\n               )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "3c286b9da8a9b663f3e633cdd9a3e900d397de8949664016c5c2ffb9a41de8b2"
+}

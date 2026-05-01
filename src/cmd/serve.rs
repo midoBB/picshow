@@ -5,10 +5,11 @@ use tokio::{
     time::{self, Interval},
 };
 
-use tracing::{debug, info};
+use tracing::{debug, error, info};
 
 use crate::{
     cache::AppCache,
+    clustering::ClusterBuilder,
     config::{AppConfig, ConfigManager},
     data::repository::MediaRepository,
     files::{command_handler::CommandHandler, processor::Processor},
@@ -124,6 +125,8 @@ async fn process_files(
                     let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingStarted);
                     let (media_files_count, _) = processor.process(shutdown_rx).await?;
                     info!("Found {} files", media_files_count);
+                    // Rebuild clusters after scan
+                    rebuild_clusters(&processor).await;
                     // Send processing finished status
                     let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
                 }
@@ -163,6 +166,8 @@ async fn process_files(
                 let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingStarted);
                 let (media_files_count, exit_option) = processor.process(shutdown_rx).await?;
                 info!("Found {} files", media_files_count);
+                // Rebuild clusters after scan
+                rebuild_clusters(&processor).await;
                 // Send processing finished status
                 let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
                 if exit_option.is_some() {
@@ -179,5 +184,20 @@ fn port_is_available(port: u16) -> bool {
             true
         }
         Err(_) => false,
+    }
+}
+
+async fn rebuild_clusters(processor: &Processor) {
+    let builder = ClusterBuilder::new(processor.repository.clone(), &processor.config);
+    match builder.build_clusters(false, true).await {
+        Ok(stats) => {
+            info!(
+                "Cluster rebuild complete: {} clusters, {} images clustered",
+                stats.clusters_created, stats.images_clustered
+            );
+        }
+        Err(e) => {
+            error!("Failed to rebuild clusters: {:?}", e);
+        }
     }
 }

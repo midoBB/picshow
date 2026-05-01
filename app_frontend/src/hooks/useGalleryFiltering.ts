@@ -29,6 +29,12 @@ export const useGalleryFiltering = () => {
 
   const [seed, setSeed] = useQueryState("seed", parseAsInteger);
 
+  const viewModeOptions = ["gallery", "clusters"] as const;
+  const [viewMode, setViewMode] = useQueryState(
+    "view",
+    parseAsStringLiteral(viewModeOptions).withDefault("gallery"),
+  );
+
   const {
     data,
     fetchNextPage,
@@ -54,6 +60,8 @@ export const useGalleryFiltering = () => {
     setSelectedCategory,
     seed,
     setSeed,
+    viewMode,
+    setViewMode,
     data,
     fetchNextPage,
     hasNextPage,

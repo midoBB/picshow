@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                i.id,\n                mf.filename,\n                cm.hamming_distance,\n                cm.is_best_shot,\n                i.width,\n                i.height,\n                t.data as thumbnail_data\n            FROM cluster_members cm\n            JOIN images i ON cm.image_id = i.id\n            JOIN media_images mi ON i.id = mi.image_id\n            JOIN media_files mf ON mi.media_id = mf.id\n            JOIN thumbnails t ON i.thumbnail_id = t.id\n            WHERE cm.cluster_id = ?\n            ORDER BY cm.is_best_shot DESC, cm.hamming_distance ASC",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Blob"
+      },
+      {
+        "name": "filename",
+        "ordinal": 1,
+        "type_info": "Text"
+      },
+      {
+        "name": "hamming_distance",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "is_best_shot",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "width",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "height",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "thumbnail_data",
+        "ordinal": 6,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "8dea5eb1ba5d1308bdc3eaa704ccba854475acf4716919a2055494d9c29a6747"
+}

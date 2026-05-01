@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM cluster_members WHERE cluster_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "9674022b6ad00175d25bde4944251b1c7c132cc6485cc7f5b4b7b3edb4605cf9"
+}

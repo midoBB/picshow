@@ -4,6 +4,8 @@ import {
   Stats,
   AppSettings,
   PartialAppSettings,
+  ClustersResponse,
+  ClusterDetailResponse,
 } from "@/queries/model";
 
 export const BASE_URL = "/api";
@@ -86,4 +88,56 @@ export const updateSettings = async (
 
 export const triggerScan = async (): Promise<void> => {
   await api.post("/internal/trigger-scan");
+};
+
+// ===== Clustering API Functions =====
+
+export const fetchClusters = async ({
+  page,
+  pageSize,
+}: {
+  page: number;
+  pageSize: number;
+}): Promise<ClustersResponse> => {
+  const { data } = await api.get<ClustersResponse>("/clusters", {
+    params: {
+      page,
+      page_size: pageSize,
+    },
+  });
+  return data;
+};
+
+export const fetchClusterDetail = async (
+  clusterId: number,
+): Promise<ClusterDetailResponse> => {
+  const { data } = await api.get<ClusterDetailResponse>(
+    `/clusters/${clusterId}`,
+  );
+  return data;
+};
+
+export const resolveCluster = async (payload: {
+  clusterId: number;
+  bestShotIds: string[];
+  deleteOthers: boolean;
+}): Promise<void> => {
+  await api.post(`/clusters/${payload.clusterId}/resolve`, {
+    bestShotIds: payload.bestShotIds,
+    deleteOthers: payload.deleteOthers,
+  });
+};
+
+export const markClusterResolved = async (payload: {
+  clusterId: number;
+  bestShotIds: string[];
+}): Promise<void> => {
+  await api.post(`/clusters/${payload.clusterId}/resolve`, {
+    bestShotIds: payload.bestShotIds,
+    deleteOthers: false,
+  });
+};
+
+export const rebuildClusters = async (): Promise<void> => {
+  await api.post("/internal/rebuild-clusters");
 };

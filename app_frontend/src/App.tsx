@@ -1,10 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { LuX } from "react-icons/lu";
+import { Toaster } from "sonner";
 import ConfirmDialog from "@/ConfirmDeleteDialog";
 import { GalleryGrid } from "@/components/GalleryGrid";
 import { EmptyState } from "@/components/GalleryGrid/EmptyState";
 import { FileItemSkeleton } from "@/components/GalleryGrid/FileItemSkeleton";
 import { LightboxContainer } from "@/components/Lightbox";
+import { ClusterView } from "@/components/ClusterView";
 import { useDeleteFile } from "@/queries/loaders";
 import { useDeleteFileHandler } from "@/hooks/useDeleteFileHandler";
 import { useFileSelection } from "@/hooks/useFileSelection";
@@ -59,6 +61,8 @@ export default function App() {
     isLoading: isLoadingFiles,
     isError: isErrorFiles,
     error: errorFiles,
+    viewMode,
+    setViewMode,
   } = useGalleryFiltering();
 
   // Initialize seed on first run
@@ -207,30 +211,36 @@ export default function App() {
           sortDirection={sortDirection}
           sortType={sortType}
           selectedCategory={selectedCategory}
+          viewMode={viewMode}
+          setViewMode={setViewMode}
         />
       </div>
 
-      <LightboxContainer
-        open={isOpen}
-        onClose={() => {
-          setIsOpen(false);
-          // Scroll to the current lightbox index when closing
-          rowVirtualizer.scrollToIndex(currentIndex, {
-            align: "center",
-            behavior: "smooth",
-          });
-        }}
-        currentIndex={currentIndex}
-        onIndexChange={setCurrentIndex}
-        slides={slides}
-        isShowingControls={isShowingControls}
-        onControlsToggle={() => setIsShowingControls(!isShowingControls)}
-        onViewChange={handleViewChange}
-        slideShowRef={slideShowRef}
-        onCurrentSlideDelete={handleLightboxDelete}
-      />
+      {viewMode === "gallery" && (
+        <LightboxContainer
+          open={isOpen}
+          onClose={() => {
+            setIsOpen(false);
+            // Scroll to the current lightbox index when closing
+            rowVirtualizer.scrollToIndex(currentIndex, {
+              align: "center",
+              behavior: "smooth",
+            });
+          }}
+          currentIndex={currentIndex}
+          onIndexChange={setCurrentIndex}
+          slides={slides}
+          isShowingControls={isShowingControls}
+          onControlsToggle={() => setIsShowingControls(!isShowingControls)}
+          onViewChange={handleViewChange}
+          slideShowRef={slideShowRef}
+          onCurrentSlideDelete={handleLightboxDelete}
+        />
+      )}
 
-      {isErrorFiles ? (
+      {viewMode === "clusters" ? (
+        <ClusterView />
+      ) : isErrorFiles ? (
         <div
           className={`flex items-center justify-center h-screen ${isDarkMode ? "bg-gray-900 text-white" : "bg-white text-gray-900"}`}
         >
@@ -335,6 +345,7 @@ export default function App() {
             : []
         }
       />
+      <Toaster />
     </div>
   );
 }

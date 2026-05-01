@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE stats SET count = count + 1, videos = videos + 1 WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "b93b9f87f2b4620b82d9bc1f40e245fae1ee50a47e2f1b99a3c7c49e8e824244"
+}

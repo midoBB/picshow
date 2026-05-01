@@ -1,0 +1,56 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                    c.cluster_id,\n                    i.perceptual_hash,\n                    i.perceptual_hash_center,\n                    i.perceptual_hash_tl,\n                    i.perceptual_hash_tr,\n                    i.perceptual_hash_bl,\n                    i.perceptual_hash_br\n               FROM image_clusters c\n               JOIN images i ON c.representative_image_id = i.id\n               WHERE (\n                    i.perceptual_hash IS NOT NULL OR\n                    i.perceptual_hash_center IS NOT NULL OR\n                    i.perceptual_hash_tl IS NOT NULL OR\n                    i.perceptual_hash_tr IS NOT NULL OR\n                    i.perceptual_hash_bl IS NOT NULL OR\n                    i.perceptual_hash_br IS NOT NULL\n               )",
+  "describe": {
+    "columns": [
+      {
+        "name": "cluster_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash",
+        "ordinal": 1,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_center",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_tl",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_tr",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_bl",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_br",
+        "ordinal": 6,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "d2c4454d3dc56f349013d48b1ce108b62d59560276f720a905efa9a0816b9fa4"
+}

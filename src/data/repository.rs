@@ -1,4 +1,5 @@
 use anyhow::Result;
+use base64::{prelude::BASE64_STANDARD, Engine as _};
 use sqlx::{
     sqlite::{SqliteConnectOptions, SqlitePoolOptions},
     Row,
@@ -249,6 +250,32 @@ impl MediaRepository {
         debug!("Database cleanup completed");
         Ok(())
     }
+
+    pub async fn get_app_state(&self, key: &str) -> Result<Option<String>> {
+        let row = sqlx::query!("SELECT value FROM app_state WHERE key = ?", key)
+            .fetch_optional(self.get_read_conn())
+            .await?;
+        Ok(row.map(|r| r.value))
+    }
+
+    pub async fn set_app_state(&self, key: &str, value: &str) -> Result<()> {
+        sqlx::query!(
+            "INSERT OR REPLACE INTO app_state (key, value) VALUES (?, ?)",
+            key,
+            value
+        )
+        .execute(self.get_write_conn().await?.borrow())
+        .await?;
+        Ok(())
+    }
+
+    pub async fn remove_app_state(&self, key: &str) -> Result<()> {
+        sqlx::query!("DELETE FROM app_state WHERE key = ?", key)
+            .execute(self.get_write_conn().await?.borrow())
+            .await?;
+        Ok(())
+    }
+
     pub async fn lock_writes(&self) -> Result<()> {
         trace!("Locking writes");
         // Force acquire the lock semaphore first
@@ -291,12 +318,18 @@ impl MediaRepository {
         // Single optimized query with JOIN to get both media and thumbnail data
         let query_str = match &media_file.media_type {
             MediaType::Image => {
-                "SELECT i.id, i.width, i.height, 0 as duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+                "SELECT i.id, i.width, i.height,
+                        i.perceptual_hash, i.perceptual_hash_center, i.perceptual_hash_tl, i.perceptual_hash_tr, i.perceptual_hash_bl, i.perceptual_hash_br,
+                        0 as duration_ms,
+                        t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
                  FROM images i JOIN thumbnails t ON i.thumbnail_id = t.id
                  WHERE i.id = ?"
             }
             MediaType::Video => {
-                "SELECT v.id, v.width, v.height, v.duration_ms, t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+                "SELECT v.id, v.width, v.height,
+                        NULL as perceptual_hash, NULL as perceptual_hash_center, NULL as perceptual_hash_tl, NULL as perceptual_hash_tr, NULL as perceptual_hash_bl, NULL as perceptual_hash_br,
+                        v.duration_ms,
+                        t.id as thumb_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
                  FROM videos v JOIN thumbnails t ON v.thumbnail_id = t.id
                  WHERE v.id = ?"
             }
@@ -325,6 +358,12 @@ impl MediaRepository {
                     id: row.get("id"),
                     width: row.get("width"),
                     height: row.get("height"),
+                    perceptual_hash: row.try_get("perceptual_hash").ok(),
+                    perceptual_hash_center: row.try_get("perceptual_hash_center").ok(),
+                    perceptual_hash_tl: row.try_get("perceptual_hash_tl").ok(),
+                    perceptual_hash_tr: row.try_get("perceptual_hash_tr").ok(),
+                    perceptual_hash_bl: row.try_get("perceptual_hash_bl").ok(),
+                    perceptual_hash_br: row.try_get("perceptual_hash_br").ok(),
                     thumbnail,
                 };
                 Ok(media_file.with_image(image, mime_type.clone()))
@@ -394,6 +433,15 @@ impl MediaRepository {
         self.cache.set(cache_key, &(img_vid_id, thumb_id)).await;
         Ok((img_vid_id, thumb_id))
     }
+    pub async fn resolve_image_id(&self, media_file_id: Uuid) -> Result<Uuid> {
+        let image_id: Uuid =
+            sqlx::query_scalar("SELECT image_id FROM media_images WHERE media_id = ?")
+                .bind(media_file_id)
+                .fetch_one(self.get_read_conn())
+                .await?;
+        Ok(image_id)
+    }
+
     pub async fn get_file_by_id(&self, id: uuid::Uuid, with_media: bool) -> Result<MediaFile> {
         self.get_file(FindBy::Id(id), with_media).await
     }
@@ -516,13 +564,13 @@ impl MediaRepository {
             .await?;
 
         // Update stats in single query
-        sqlx::query(
-            "UPDATE stats SET count = count - ?, images = images - ?, videos = videos - ?, favorites = favorites - ? WHERE id = 1"
+        sqlx::query!(
+            "UPDATE stats SET count = count - ?, images = images - ?, videos = videos - ?, favorites = favorites - ? WHERE id = 1",
+            count,
+            img_count,
+            vid_count,
+            fav_count,
         )
-        .bind(count)
-        .bind(img_count)
-        .bind(vid_count)
-        .bind(fav_count)
         .execute(&mut *tx)
         .await?;
 
@@ -656,42 +704,66 @@ impl MediaRepository {
         let image = media_file.media.as_image().expect("Should be an image");
 
         // Insert thumbnail first
-        sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(image.thumbnail.id)
-            .bind(image.thumbnail.width)
-            .bind(image.thumbnail.height)
-            .bind(&image.thumbnail.data)
-            .execute(&mut **tx)
-            .await?;
-
-        sqlx::query(r#"INSERT INTO images (id, width, height, thumbnail_id) VALUES (?, ?, ?, ?)"#)
-            .bind(image.id)
-            .bind(image.width)
-            .bind(image.height)
-            .bind(image.thumbnail.id)
-            .execute(&mut **tx)
-            .await?;
-
-        sqlx::query(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
-        .bind(media_file.id)
-        .bind(&media_file.hash)
-        .bind(media_file.created_at)
-        .bind(&media_file.filename)
-        .bind(&media_file.media_type)
-        .bind(media_file.last_modified)
-        .bind(media_file.size)
-        .bind(&media_file.mime_type)
+        let thumb_id = image.thumbnail.id;
+        let thumb_width = image.thumbnail.width;
+        let thumb_height = image.thumbnail.height;
+        let thumb_data = &image.thumbnail.data;
+        sqlx::query!(
+            r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#,
+            thumb_id,
+            thumb_width,
+            thumb_height,
+            thumb_data,
+        )
         .execute(&mut **tx)
         .await?;
 
-        sqlx::query("INSERT INTO media_images (media_id, image_id) VALUES (?, ?)")
-            .bind(media_file.id)
-            .bind(image.id)
+        sqlx::query!(
+            r#"INSERT INTO images (
+                    id, width, height, thumbnail_id,
+                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            image.id,
+            image.width,
+            image.height,
+            image.thumbnail.id,
+            image.perceptual_hash,
+            image.perceptual_hash_center,
+            image.perceptual_hash_tl,
+            image.perceptual_hash_tr,
+            image.perceptual_hash_bl,
+            image.perceptual_hash_br,
+        )
             .execute(&mut **tx)
             .await?;
 
-        sqlx::query("UPDATE stats SET count = count + 1, images = images + 1 WHERE id = 1")
+        let hash = &media_file.hash;
+        let filename = &media_file.filename;
+        let media_type = &media_file.media_type;
+        let mime_type = &media_file.mime_type;
+        sqlx::query!(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+            media_file.id,
+            hash,
+            media_file.created_at,
+            filename,
+            media_type,
+            media_file.last_modified,
+            media_file.size,
+            mime_type,
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query!(
+            "INSERT INTO media_images (media_id, image_id) VALUES (?, ?)",
+            media_file.id,
+            image.id
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        sqlx::query!("UPDATE stats SET count = count + 1, images = images + 1 WHERE id = 1")
             .execute(&mut **tx)
             .await?;
 
@@ -705,42 +777,62 @@ impl MediaRepository {
 
         let mut tx = self.get_write_conn().await?.begin().await?;
 
-        sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(thumbnail.id)
-            .bind(thumbnail.width)
-            .bind(thumbnail.height)
-            .bind(thumbnail.data)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query(r#"INSERT INTO images (id, width, height, thumbnail_id) VALUES (?, ?, ?, ?)"#)
-            .bind(image.id)
-            .bind(image.width)
-            .bind(image.height)
-            .bind(thumbnail.id)
-            .execute(&mut *tx)
-            .await?;
-
-        sqlx::query(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
-        .bind(media_file.id)
-        .bind(&media_file.hash)
-        .bind(media_file.created_at)
-        .bind(&media_file.filename)
-        .bind(&media_file.media_type)
-        .bind(media_file.last_modified)
-        .bind(media_file.size)
-        .bind(&media_file.mime_type)
+        sqlx::query!(
+            r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#,
+            thumbnail.id,
+            thumbnail.width,
+            thumbnail.height,
+            thumbnail.data,
+        )
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query("INSERT INTO media_images (media_id, image_id) VALUES (?, ?)")
-            .bind(media_file.id)
-            .bind(image.id)
+        sqlx::query!(
+            r#"INSERT INTO images (
+                    id, width, height, thumbnail_id,
+                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            image.id,
+            image.width,
+            image.height,
+            thumbnail.id,
+            image.perceptual_hash,
+            image.perceptual_hash_center,
+            image.perceptual_hash_tl,
+            image.perceptual_hash_tr,
+            image.perceptual_hash_bl,
+            image.perceptual_hash_br,
+        )
             .execute(&mut *tx)
             .await?;
 
-        sqlx::query("UPDATE stats SET count = count + 1, images = images + 1 WHERE id = 1")
+        let hash = &media_file.hash;
+        let filename = &media_file.filename;
+        let media_type = &media_file.media_type;
+        let mime_type = &media_file.mime_type;
+        sqlx::query!(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+            media_file.id,
+            hash,
+            media_file.created_at,
+            filename,
+            media_type,
+            media_file.last_modified,
+            media_file.size,
+            mime_type,
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query!(
+            "INSERT INTO media_images (media_id, image_id) VALUES (?, ?)",
+            media_file.id,
+            image.id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        sqlx::query!("UPDATE stats SET count = count + 1, images = images + 1 WHERE id = 1")
             .execute(&mut *tx)
             .await?;
 
@@ -757,46 +849,60 @@ impl MediaRepository {
         let video = media_file.media.as_video().expect("Should be a video");
 
         // Insert thumbnail first
-        sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(video.thumbnail.id)
-            .bind(video.thumbnail.width)
-            .bind(video.thumbnail.height)
-            .bind(&video.thumbnail.data)
-            .execute(&mut **tx)
-            .await?;
+        let thumb_id = video.thumbnail.id;
+        let thumb_width = video.thumbnail.width;
+        let thumb_height = video.thumbnail.height;
+        let thumb_data = &video.thumbnail.data;
+        sqlx::query!(
+            r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#,
+            thumb_id,
+            thumb_width,
+            thumb_height,
+            thumb_data,
+        )
+        .execute(&mut **tx)
+        .await?;
 
-        sqlx::query(
+        let duration = video.duration_ms as i64;
+        sqlx::query!(
             r#"INSERT INTO videos (id, width, height, duration_ms, thumbnail_id)
                    VALUES (?, ?, ?, ?, ?)"#,
+            video.id,
+            video.width,
+            video.height,
+            duration,
+            video.thumbnail.id,
         )
-        .bind(video.id)
-        .bind(video.width)
-        .bind(video.height)
-        .bind(video.duration_ms as i64)
-        .bind(video.thumbnail.id)
         .execute(&mut **tx)
         .await?;
 
-        sqlx::query(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
-        .bind(media_file.id)
-        .bind(&media_file.hash)
-        .bind(media_file.created_at)
-        .bind(&media_file.filename)
-        .bind(&media_file.media_type)
-        .bind(media_file.last_modified)
-        .bind(media_file.size)
-        .bind(&media_file.mime_type)
+        let hash = &media_file.hash;
+        let filename = &media_file.filename;
+        let media_type = &media_file.media_type;
+        let mime_type = &media_file.mime_type;
+        sqlx::query!(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+            media_file.id,
+            hash,
+            media_file.created_at,
+            filename,
+            media_type,
+            media_file.last_modified,
+            media_file.size,
+            mime_type,
+        )
         .execute(&mut **tx)
         .await?;
 
-        sqlx::query("INSERT INTO media_videos (media_id, video_id) VALUES (?, ?)")
-            .bind(media_file.id)
-            .bind(video.id)
-            .execute(&mut **tx)
-            .await?;
+        sqlx::query!(
+            "INSERT INTO media_videos (media_id, video_id) VALUES (?, ?)",
+            media_file.id,
+            video.id
+        )
+        .execute(&mut **tx)
+        .await?;
 
-        sqlx::query("UPDATE stats SET count = count + 1, videos = videos + 1 WHERE id = 1")
+        sqlx::query!("UPDATE stats SET count = count + 1, videos = videos + 1 WHERE id = 1")
             .execute(&mut **tx)
             .await?;
 
@@ -810,46 +916,56 @@ impl MediaRepository {
 
         let mut tx = self.get_write_conn().await?.begin().await?;
 
-        sqlx::query(r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#)
-            .bind(thumbnail.id)
-            .bind(thumbnail.width)
-            .bind(thumbnail.height)
-            .bind(thumbnail.data)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            r#"INSERT INTO thumbnails (id, width, height, data) VALUES (?, ?, ?, ?)"#,
+            thumbnail.id,
+            thumbnail.width,
+            thumbnail.height,
+            thumbnail.data,
+        )
+        .execute(&mut *tx)
+        .await?;
 
-        sqlx::query(
+        let duration = video.duration_ms as i64;
+        sqlx::query!(
             r#"INSERT INTO videos (id, width, height, duration_ms, thumbnail_id)
                    VALUES (?, ?, ?, ?, ?)"#,
+            video.id,
+            video.width,
+            video.height,
+            duration,
+            thumbnail.id,
         )
-        .bind(video.id)
-        .bind(video.width)
-        .bind(video.height)
-        .bind(video.duration_ms as i64)
-        .bind(thumbnail.id)
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#)
-        .bind(media_file.id)
-        .bind(&media_file.hash)
-        .bind(media_file.created_at)
-        .bind(&media_file.filename)
-        .bind(&media_file.media_type)
-        .bind(media_file.last_modified)
-        .bind(media_file.size)
-        .bind(&media_file.mime_type)
+        let hash = &media_file.hash;
+        let filename = &media_file.filename;
+        let media_type = &media_file.media_type;
+        let mime_type = &media_file.mime_type;
+        sqlx::query!(r#"INSERT INTO media_files (id, hash, created_at, filename, media_type, last_modified, size, mime_type)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)"#,
+            media_file.id,
+            hash,
+            media_file.created_at,
+            filename,
+            media_type,
+            media_file.last_modified,
+            media_file.size,
+            mime_type,
+        )
         .execute(&mut *tx)
         .await?;
 
-        sqlx::query("INSERT INTO media_videos (media_id, video_id) VALUES (?, ?)")
-            .bind(media_file.id)
-            .bind(video.id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "INSERT INTO media_videos (media_id, video_id) VALUES (?, ?)",
+            media_file.id,
+            video.id
+        )
+        .execute(&mut *tx)
+        .await?;
 
-        sqlx::query("UPDATE stats SET count = count + 1, videos = videos + 1 WHERE id = 1")
+        sqlx::query!("UPDATE stats SET count = count + 1, videos = videos + 1 WHERE id = 1")
             .execute(&mut *tx)
             .await?;
 
@@ -864,13 +980,13 @@ impl MediaRepository {
         last_modified: DateTime<Utc>,
         size: i64,
     ) -> Result<()> {
-        sqlx::query(
+        sqlx::query!(
             "UPDATE media_files SET filename = ?, last_modified = ?, size = ? WHERE id = ?",
+            new_file_name,
+            last_modified,
+            size,
+            file_id,
         )
-        .bind(new_file_name)
-        .bind(last_modified)
-        .bind(size)
-        .bind(file_id)
         .execute(&mut **tx)
         .await?;
         Ok(())
@@ -891,8 +1007,7 @@ impl MediaRepository {
 
         if let Some((media_type, is_favorite)) = file_info {
             // Delete the file (cascades to related tables)
-            sqlx::query("DELETE FROM media_files WHERE id = ?")
-                .bind(file_id)
+            sqlx::query!("DELETE FROM media_files WHERE id = ?", file_id)
                 .execute(&mut **tx)
                 .await?;
 
@@ -902,13 +1017,13 @@ impl MediaRepository {
                 MediaType::Video => (0, -1, if is_favorite { -1 } else { 0 }),
             };
 
-            sqlx::query(
-                "UPDATE stats SET count = count + ?, images = images + ?, videos = videos + ?, favorites = favorites + ? WHERE id = 1"
+            sqlx::query!(
+                "UPDATE stats SET count = count + ?, images = images + ?, videos = videos + ?, favorites = favorites + ? WHERE id = 1",
+                -1,
+                img_change,
+                vid_change,
+                fav_change,
             )
-            .bind(-1) // Always decrement count by 1
-            .bind(img_change)
-            .bind(vid_change)
-            .bind(fav_change)
             .execute(&mut **tx)
             .await?;
         }
@@ -923,12 +1038,14 @@ impl MediaRepository {
         last_modified: DateTime<Utc>,
     ) -> Result<()> {
         let mut tx = self.get_write_conn().await?.begin().await?;
-        sqlx::query("UPDATE media_files SET filename = ?, last_modified = ? WHERE id = ?")
-            .bind(new_file_name)
-            .bind(last_modified)
-            .bind(file_id)
-            .execute(&mut *tx)
-            .await?;
+        sqlx::query!(
+            "UPDATE media_files SET filename = ?, last_modified = ? WHERE id = ?",
+            new_file_name,
+            last_modified,
+            file_id
+        )
+        .execute(&mut *tx)
+        .await?;
         tx.commit().await?;
         self.cache.invalidate_file_cache(&file_id);
         self.cache.invalidate_files_cache();
@@ -954,10 +1071,10 @@ impl MediaRepository {
             .fetch_all(self.get_read_conn())
             .await?;
 
-        let count = data.len();
-        let img_count = data.iter().filter(|(t, _)| *t == MediaType::Image).count();
-        let vid_count = data.iter().filter(|(t, _)| *t == MediaType::Video).count();
-        let fav_count = data.iter().filter(|(_, f)| *f).count();
+        let count = data.len() as i64;
+        let img_count = data.iter().filter(|(t, _)| *t == MediaType::Image).count() as i64;
+        let vid_count = data.iter().filter(|(t, _)| *t == MediaType::Video).count() as i64;
+        let fav_count = data.iter().filter(|(_, f)| *f).count() as i64;
 
         let mut tx = self.get_write_conn().await?.begin().await?;
         let query = format!(
@@ -971,13 +1088,13 @@ impl MediaRepository {
             .await?;
 
         // Optimized single stats update query
-        sqlx::query(
-            "UPDATE stats SET count = count - ?, images = images - ?, videos = videos - ?, favorites = favorites - ? WHERE id = 1"
+        sqlx::query!(
+            "UPDATE stats SET count = count - ?, images = images - ?, videos = videos - ?, favorites = favorites - ? WHERE id = 1",
+            count,
+            img_count,
+            vid_count,
+            fav_count,
         )
-        .bind(count as i64)
-        .bind(img_count as i64)
-        .bind(vid_count as i64)
-        .bind(fav_count as i64)
         .execute(&mut *tx)
         .await?;
         tx.commit().await?;
@@ -993,17 +1110,22 @@ impl MediaRepository {
                 .bind(file_id)
                 .fetch_one(&mut *tx)
                 .await?;
-        sqlx::query("UPDATE media_files SET is_favorite = ? WHERE id = ?")
-            .bind(!is_favorite)
-            .bind(file_id)
-            .execute(&mut *tx)
-            .await?;
+        let new_fav = !is_favorite;
+        sqlx::query!(
+            "UPDATE media_files SET is_favorite = ? WHERE id = ?",
+            new_fav,
+            file_id
+        )
+        .execute(&mut *tx)
+        .await?;
         // Optimized stats update - note: count stays the same, only favorites change
-        let fav_change = if !is_favorite { 1 } else { -1 };
-        sqlx::query("UPDATE stats SET favorites = favorites + ? WHERE id = 1")
-            .bind(fav_change)
-            .execute(&mut *tx)
-            .await?;
+        let fav_change = if new_fav { 1 } else { -1 };
+        sqlx::query!(
+            "UPDATE stats SET favorites = favorites + ? WHERE id = 1",
+            fav_change
+        )
+        .execute(&mut *tx)
+        .await?;
         self.cache.invalidate_stats_cache();
         self.cache.invalidate_file_cache(&file_id);
         info!(
@@ -1015,6 +1137,65 @@ impl MediaRepository {
         tx.commit().await?;
         Ok(())
     }
+
+    pub async fn has_missing_perceptual_hashes(&self, media_file_id: Uuid) -> Result<bool> {
+        let has_missing: bool = sqlx::query_scalar(
+            r#"SELECT EXISTS(
+                SELECT 1 FROM media_images mi
+                JOIN images i ON i.id = mi.image_id
+                WHERE mi.media_id = ?
+                AND (
+                    i.perceptual_hash IS NULL
+                    OR i.perceptual_hash_center IS NULL
+                    OR i.perceptual_hash_tl IS NULL
+                    OR i.perceptual_hash_tr IS NULL
+                    OR i.perceptual_hash_bl IS NULL
+                    OR i.perceptual_hash_br IS NULL
+                )
+            )"#,
+        )
+        .bind(media_file_id)
+        .fetch_one(self.get_read_conn())
+        .await?;
+        Ok(has_missing)
+    }
+
+    pub async fn update_image_perceptual_hashes(
+        &self,
+        media_file_id: Uuid,
+        perceptual_hash: Option<i64>,
+        perceptual_hash_center: Option<i64>,
+        perceptual_hash_tl: Option<i64>,
+        perceptual_hash_tr: Option<i64>,
+        perceptual_hash_bl: Option<i64>,
+        perceptual_hash_br: Option<i64>,
+    ) -> Result<()> {
+        let mut tx = self.get_write_conn().await?.begin().await?;
+        sqlx::query!(
+            r#"UPDATE images SET
+                    perceptual_hash = ?,
+                    perceptual_hash_center = ?,
+                    perceptual_hash_tl = ?,
+                    perceptual_hash_tr = ?,
+                    perceptual_hash_bl = ?,
+                    perceptual_hash_br = ?
+                WHERE id = (
+                    SELECT image_id FROM media_images WHERE media_id = ?
+                )"#,
+            perceptual_hash,
+            perceptual_hash_center,
+            perceptual_hash_tl,
+            perceptual_hash_tr,
+            perceptual_hash_bl,
+            perceptual_hash_br,
+            media_file_id,
+        )
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     pub async fn get_files(
         &self,
         query: FilledFileQuery,
@@ -1088,11 +1269,17 @@ impl MediaRepository {
                 mf.id, mf.hash, mf.created_at, mf.filename, mf.size, mf.media_type,
                 mf.last_modified, mf.is_favorite, mf.mime_type,
                 COALESCE(i.id, v.id) as media_id,
-                COALESCE(i.width, v.width) as width,
-                COALESCE(i.height, v.height) as height,
-                COALESCE(v.duration_ms, 0) as duration_ms,
-                t.id as thumbnail_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
-            FROM media_files mf
+                 COALESCE(i.width, v.width) as width,
+                 COALESCE(i.height, v.height) as height,
+                 i.perceptual_hash,
+                 i.perceptual_hash_center,
+                 i.perceptual_hash_tl,
+                 i.perceptual_hash_tr,
+                 i.perceptual_hash_bl,
+                 i.perceptual_hash_br,
+                 COALESCE(v.duration_ms, 0) as duration_ms,
+                 t.id as thumbnail_id, t.width as thumb_width, t.height as thumb_height, t.data as thumb_data
+             FROM media_files mf
             LEFT JOIN media_images mi ON mf.id = mi.media_id
             LEFT JOIN images i ON mi.image_id = i.id
             LEFT JOIN media_videos mv ON mf.id = mv.media_id
@@ -1141,6 +1328,12 @@ impl MediaRepository {
                             id: row.get("media_id"),
                             width: row.get("width"),
                             height: row.get("height"),
+                            perceptual_hash: row.try_get("perceptual_hash").ok(),
+                            perceptual_hash_center: row.try_get("perceptual_hash_center").ok(),
+                            perceptual_hash_tl: row.try_get("perceptual_hash_tl").ok(),
+                            perceptual_hash_tr: row.try_get("perceptual_hash_tr").ok(),
+                            perceptual_hash_bl: row.try_get("perceptual_hash_bl").ok(),
+                            perceptual_hash_br: row.try_get("perceptual_hash_br").ok(),
                             thumbnail,
                         };
                         Ok(media_file.with_image(image, mime_type.clone()))
@@ -1162,6 +1355,670 @@ impl MediaRepository {
         let result = (pagination, filled_files);
         self.cache.set(cache_key, &result).await;
         Ok(result)
+    }
+
+    // ===== Clustering Methods =====
+
+    pub async fn get_all_perceptual_hashes(&self) -> Result<Vec<(uuid::Uuid, Vec<i64>)>> {
+        let rows = sqlx::query!(
+            r#"SELECT
+                    i.id,
+                    i.perceptual_hash,
+                    i.perceptual_hash_center,
+                    i.perceptual_hash_tl,
+                    i.perceptual_hash_tr,
+                    i.perceptual_hash_bl,
+                    i.perceptual_hash_br
+               FROM images i
+               JOIN media_images mi ON i.id = mi.image_id
+               JOIN media_files mf ON mi.media_id = mf.id
+               WHERE (
+                    i.perceptual_hash IS NOT NULL OR
+                    i.perceptual_hash_center IS NOT NULL OR
+                    i.perceptual_hash_tl IS NOT NULL OR
+                    i.perceptual_hash_tr IS NOT NULL OR
+                    i.perceptual_hash_bl IS NOT NULL OR
+                    i.perceptual_hash_br IS NOT NULL
+               )"#
+        )
+        .fetch_all(self.get_read_conn())
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let id = uuid::Uuid::from_slice(&row.id).ok()?;
+                let mut hashes = Vec::with_capacity(6);
+                if let Some(v) = row.perceptual_hash {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_center {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tr {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_bl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_br {
+                    hashes.push(v);
+                }
+                if hashes.is_empty() {
+                    None
+                } else {
+                    Some((id, hashes))
+                }
+            })
+            .collect())
+    }
+
+    pub async fn create_cluster(&self, representative_id: uuid::Uuid) -> Result<i64> {
+        let created_at = chrono::Utc::now().to_rfc3339();
+        let write_conn = self.get_write_conn().await?;
+        let result = sqlx::query!(
+            "INSERT INTO image_clusters (representative_image_id, created_at, is_resolved) VALUES (?, ?, 0)",
+            representative_id,
+            created_at
+        )
+        .execute(write_conn.as_ref())
+        .await?;
+
+        Ok(result.last_insert_rowid())
+    }
+
+    pub async fn add_to_cluster(
+        &self,
+        cluster_id: i64,
+        image_id: uuid::Uuid,
+        distance: u32,
+    ) -> Result<()> {
+        let added_at = chrono::Utc::now().to_rfc3339();
+        let distance_i32 = distance as i32;
+        let write_conn = self.get_write_conn().await?;
+
+        sqlx::query!(
+            "INSERT INTO cluster_members (cluster_id, image_id, hamming_distance, is_best_shot, added_at)
+             VALUES (?, ?, ?, 0, ?)",
+            cluster_id,
+            image_id,
+            distance_i32,
+            added_at
+        )
+        .execute(write_conn.as_ref())
+        .await?;
+
+        Ok(())
+    }
+
+    /// Batch insert cluster members for efficient bulk operations
+    pub async fn add_batch_to_cluster(
+        &self,
+        cluster_id: i64,
+        members: &[(uuid::Uuid, u32)], // (image_id, hamming_distance)
+    ) -> Result<()> {
+        if members.is_empty() {
+            return Ok(());
+        }
+
+        let added_at = chrono::Utc::now().to_rfc3339();
+        let write_conn = self.get_write_conn().await?;
+
+        // Build batch insert query
+        // SQLite supports multi-row INSERT
+        let mut query = String::from(
+            "INSERT INTO cluster_members (cluster_id, image_id, hamming_distance, is_best_shot, added_at) VALUES "
+        );
+
+        let placeholders: Vec<String> = (0..members.len())
+            .map(|_| "(?, ?, ?, 0, ?)".to_string())
+            .collect();
+        query.push_str(&placeholders.join(", "));
+
+        let mut query_builder = sqlx::query(&query);
+
+        // Bind parameters
+        for (image_id, distance) in members {
+            query_builder = query_builder
+                .bind(cluster_id)
+                .bind(*image_id)
+                .bind(*distance as i32)
+                .bind(&added_at);
+        }
+
+        query_builder.execute(write_conn.as_ref()).await?;
+
+        Ok(())
+    }
+
+    pub async fn get_cluster_member_count(&self, cluster_id: i64) -> Result<i64> {
+        let result = sqlx::query!(
+            "SELECT COUNT(*) as count FROM cluster_members WHERE cluster_id = ?",
+            cluster_id
+        )
+        .fetch_one(self.get_read_conn())
+        .await?;
+
+        Ok(result.count as i64)
+    }
+
+    pub async fn delete_cluster(&self, cluster_id: i64) -> Result<()> {
+        let write_conn = self.get_write_conn().await?;
+        sqlx::query!(
+            "DELETE FROM image_clusters WHERE cluster_id = ?",
+            cluster_id
+        )
+        .execute(write_conn.as_ref())
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn replace_clusters(
+        &self,
+        old_cluster_ids: &[i64],
+        representative_id: Uuid,
+        members: &[(Uuid, u32)],
+    ) -> Result<i64> {
+        let write_conn = self.get_write_conn().await?;
+        let mut tx = write_conn.begin().await?;
+
+        for &old_cluster_id in old_cluster_ids {
+            sqlx::query!(
+                "DELETE FROM cluster_members WHERE cluster_id = ?",
+                old_cluster_id
+            )
+            .execute(&mut *tx)
+            .await?;
+
+            sqlx::query!(
+                "DELETE FROM image_clusters WHERE cluster_id = ?",
+                old_cluster_id
+            )
+            .execute(&mut *tx)
+            .await?;
+        }
+
+        let added_at = chrono::Utc::now().to_rfc3339();
+
+        let at = &added_at;
+        let cluster_id: i64 = sqlx::query!(
+            "INSERT INTO image_clusters (representative_image_id, created_at, is_resolved) VALUES (?, ?, 0)",
+            representative_id,
+            at,
+        )
+        .execute(&mut *tx)
+        .await?
+        .last_insert_rowid();
+
+        if !members.is_empty() {
+            let mut query = String::from(
+                "INSERT INTO cluster_members (cluster_id, image_id, hamming_distance, is_best_shot, added_at) VALUES "
+            );
+            let placeholders: Vec<String> = (0..members.len())
+                .map(|_| "(?, ?, ?, 0, ?)".to_string())
+                .collect();
+            query.push_str(&placeholders.join(", "));
+
+            let mut query_builder = sqlx::query(&query);
+            for (image_id, distance) in members {
+                query_builder = query_builder
+                    .bind(cluster_id)
+                    .bind(*image_id)
+                    .bind(*distance as i32)
+                    .bind(&added_at);
+            }
+            query_builder.execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(cluster_id)
+    }
+
+    pub async fn get_all_clusters_with_members(&self) -> Result<Vec<super::ExistingCluster>> {
+        let rows = sqlx::query!(
+            r#"SELECT
+                   ic.cluster_id,
+                   ic.representative_image_id,
+                   cm.image_id,
+                   cm.hamming_distance
+               FROM image_clusters ic
+               JOIN cluster_members cm ON cm.cluster_id = ic.cluster_id
+               ORDER BY ic.cluster_id"#,
+        )
+        .fetch_all(self.get_read_conn())
+        .await?;
+
+        let mut result: Vec<super::ExistingCluster> = Vec::new();
+        let mut current_cluster_id: Option<i64> = None;
+
+        for row in rows {
+            let cluster_id = row.cluster_id;
+
+            if current_cluster_id != Some(cluster_id) {
+                let representative_id = Uuid::from_slice(&row.representative_image_id)
+                    .map_err(|e| anyhow::anyhow!("Invalid UUID: {}", e))?;
+
+                result.push(super::ExistingCluster {
+                    cluster_id,
+                    representative_id,
+                    members: Vec::new(),
+                });
+                current_cluster_id = Some(cluster_id);
+            }
+
+            if let Ok(id) = Uuid::from_slice(&row.image_id) {
+                if let Some(last) = result.last_mut() {
+                    last.members.push((id, row.hamming_distance as u32));
+                }
+            }
+        }
+
+        Ok(result)
+    }
+
+    pub async fn clear_clusters(&self) -> Result<()> {
+        let write_conn = self.get_write_conn().await?;
+
+        sqlx::query!("DELETE FROM cluster_members")
+            .execute(write_conn.as_ref())
+            .await?;
+
+        sqlx::query!("DELETE FROM image_clusters")
+            .execute(write_conn.as_ref())
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn cleanup_orphaned_data(&self) -> Result<(i64, i64)> {
+        let write_conn = self.get_write_conn().await?;
+
+        // Delete orphaned cluster_members (images that no longer exist in media_files)
+        let cluster_members_deleted = sqlx::query!(
+            r#"DELETE FROM cluster_members
+               WHERE image_id NOT IN (
+                   SELECT i.id FROM images i
+                   JOIN media_images mi ON i.id = mi.image_id
+                   JOIN media_files mf ON mi.media_id = mf.id
+               )"#
+        )
+        .execute(write_conn.as_ref())
+        .await?
+        .rows_affected() as i64;
+
+        // Delete orphaned images (no corresponding media_files entry)
+        let images_deleted = sqlx::query!(
+            r#"DELETE FROM images
+               WHERE id NOT IN (
+                   SELECT i.id FROM images i
+                   JOIN media_images mi ON i.id = mi.image_id
+                   JOIN media_files mf ON mi.media_id = mf.id
+               )"#
+        )
+        .execute(write_conn.as_ref())
+        .await?
+        .rows_affected() as i64;
+
+        info!(
+            "Cleaned up {} orphaned cluster members and {} orphaned images",
+            cluster_members_deleted, images_deleted
+        );
+
+        Ok((cluster_members_deleted, images_deleted))
+    }
+
+    pub async fn get_cluster_representatives(&self) -> Result<Vec<(i64, Vec<i64>)>> {
+        let rows = sqlx::query!(
+            r#"SELECT
+                    c.cluster_id,
+                    i.perceptual_hash,
+                    i.perceptual_hash_center,
+                    i.perceptual_hash_tl,
+                    i.perceptual_hash_tr,
+                    i.perceptual_hash_bl,
+                    i.perceptual_hash_br
+               FROM image_clusters c
+               JOIN images i ON c.representative_image_id = i.id
+               WHERE (
+                    i.perceptual_hash IS NOT NULL OR
+                    i.perceptual_hash_center IS NOT NULL OR
+                    i.perceptual_hash_tl IS NOT NULL OR
+                    i.perceptual_hash_tr IS NOT NULL OR
+                    i.perceptual_hash_bl IS NOT NULL OR
+                    i.perceptual_hash_br IS NOT NULL
+               )"#
+        )
+        .fetch_all(self.get_read_conn())
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let mut hashes = Vec::with_capacity(6);
+                if let Some(v) = row.perceptual_hash {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_center {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tr {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_bl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_br {
+                    hashes.push(v);
+                }
+                if hashes.is_empty() {
+                    None
+                } else {
+                    Some((row.cluster_id, hashes))
+                }
+            })
+            .collect())
+    }
+
+    pub async fn get_cluster_members_with_hashes(
+        &self,
+        cluster_id: i64,
+    ) -> Result<Vec<(uuid::Uuid, Vec<i64>)>> {
+        let rows = sqlx::query!(
+            r#"SELECT
+                    i.id,
+                    i.perceptual_hash,
+                    i.perceptual_hash_center,
+                    i.perceptual_hash_tl,
+                    i.perceptual_hash_tr,
+                    i.perceptual_hash_bl,
+                    i.perceptual_hash_br
+               FROM cluster_members cm
+               JOIN images i ON cm.image_id = i.id
+               JOIN media_images mi ON i.id = mi.image_id
+               JOIN media_files mf ON mi.media_id = mf.id
+               WHERE cm.cluster_id = ? AND (
+                    i.perceptual_hash IS NOT NULL OR
+                    i.perceptual_hash_center IS NOT NULL OR
+                    i.perceptual_hash_tl IS NOT NULL OR
+                    i.perceptual_hash_tr IS NOT NULL OR
+                    i.perceptual_hash_bl IS NOT NULL OR
+                    i.perceptual_hash_br IS NOT NULL
+               )"#,
+            cluster_id
+        )
+        .fetch_all(self.get_read_conn())
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                let id = uuid::Uuid::from_slice(&row.id).ok()?;
+                let mut hashes = Vec::with_capacity(6);
+                if let Some(v) = row.perceptual_hash {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_center {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_tr {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_bl {
+                    hashes.push(v);
+                }
+                if let Some(v) = row.perceptual_hash_br {
+                    hashes.push(v);
+                }
+                if hashes.is_empty() {
+                    None
+                } else {
+                    Some((id, hashes))
+                }
+            })
+            .collect())
+    }
+
+    pub async fn get_clusters_paginated(
+        &self,
+        page: u32,
+        page_size: u32,
+    ) -> Result<(Pagination, Vec<crate::server::ClusterDTO>)> {
+        use crate::server::ClusterDTO;
+
+        // Get total count — match the main query's JOIN so empty clusters don't cause drift
+        let count_row = sqlx::query!(
+            r#"SELECT COUNT(DISTINCT c.cluster_id) as count
+               FROM image_clusters c
+               JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
+               WHERE c.is_resolved = 0"#,
+        )
+        .fetch_one(self.get_read_conn())
+        .await?;
+        let total_count: i64 = count_row.count;
+        let total_pages = (total_count as f64 / page_size as f64).ceil() as u32;
+        let offset = (page - 1) * page_size;
+
+        let pagination = Pagination {
+            count: total_count as u32,
+            current_page: page,
+            total_pages,
+            prev_page: if page > 1 { Some(page - 1) } else { None },
+            next_page: if page < total_pages {
+                Some(page + 1)
+            } else {
+                None
+            },
+        };
+
+        // Fetch clusters with preview thumbnails (first 4 images)
+        let rows = sqlx::query!(
+            r#"SELECT
+                c.cluster_id,
+                c.representative_image_id,
+                c.created_at,
+                c.is_resolved,
+                COUNT(DISTINCT cm.image_id) as image_count
+            FROM image_clusters c
+            JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
+            WHERE c.is_resolved = 0
+            GROUP BY c.cluster_id
+            ORDER BY c.created_at DESC
+            LIMIT ? OFFSET ?"#,
+            page_size,
+            offset
+        )
+        .fetch_all(self.get_read_conn())
+        .await?;
+
+        // Batch-fetch thumbnails for all clusters on this page (single query)
+        let cluster_ids: Vec<i64> = rows.iter().map(|r| r.cluster_id).collect();
+        let mut thumb_map: std::collections::HashMap<i64, Vec<String>> =
+            std::collections::HashMap::new();
+
+        if !cluster_ids.is_empty() {
+            // Emit IN clause placeholders manually
+            let placeholders: Vec<String> =
+                std::iter::repeat_n("?".to_string(), cluster_ids.len()).collect();
+            let in_clause = placeholders.join(",");
+            let query_str = format!(
+                r#"SELECT cm.cluster_id, t.data
+                   FROM cluster_members cm
+                   JOIN images i ON cm.image_id = i.id
+                   JOIN thumbnails t ON i.thumbnail_id = t.id
+                   WHERE cm.cluster_id IN ({})
+                   ORDER BY cm.cluster_id"#,
+                in_clause
+            );
+
+            let mut q = sqlx::query(&query_str);
+            for id in &cluster_ids {
+                q = q.bind(id);
+            }
+            let thumb_rows = q.fetch_all(self.get_read_conn()).await?;
+
+            for trow in thumb_rows {
+                let cid: i64 = trow.get("cluster_id");
+                let data: Vec<u8> = trow.get("data");
+                let entry = thumb_map.entry(cid).or_default();
+                if entry.len() < 4 {
+                    entry.push(format!(
+                        "data:image/jpeg;base64,{}",
+                        BASE64_STANDARD.encode(&data)
+                    ));
+                }
+            }
+        }
+
+        let mut clusters = Vec::new();
+        for row in rows {
+            let preview_thumbnails = thumb_map.remove(&row.cluster_id).unwrap_or_default();
+
+            if let Ok(rep_id) = uuid::Uuid::from_slice(&row.representative_image_id) {
+                clusters.push(ClusterDTO {
+                    cluster_id: row.cluster_id,
+                    image_count: row.image_count as i32,
+                    representative_image_id: rep_id.to_string(),
+                    preview_thumbnails,
+                    is_resolved: row.is_resolved != 0,
+                    created_at: row
+                        .created_at
+                        .parse()
+                        .unwrap_or_else(|_| chrono::Utc::now()),
+                });
+            }
+        }
+
+        Ok((pagination, clusters))
+    }
+
+    pub async fn get_cluster_images(
+        &self,
+        cluster_id: i64,
+    ) -> Result<Vec<crate::server::ClusterImageDTO>> {
+        use crate::server::ClusterImageDTO;
+
+        let rows = sqlx::query!(
+            r#"SELECT
+                i.id,
+                mf.filename,
+                cm.hamming_distance,
+                cm.is_best_shot,
+                i.width,
+                i.height,
+                t.data as thumbnail_data
+            FROM cluster_members cm
+            JOIN images i ON cm.image_id = i.id
+            JOIN media_images mi ON i.id = mi.image_id
+            JOIN media_files mf ON mi.media_id = mf.id
+            JOIN thumbnails t ON i.thumbnail_id = t.id
+            WHERE cm.cluster_id = ?
+            ORDER BY cm.is_best_shot DESC, cm.hamming_distance ASC"#,
+            cluster_id
+        )
+        .fetch_all(self.get_read_conn())
+        .await?;
+
+        Ok(rows
+            .into_iter()
+            .filter_map(|row| {
+                uuid::Uuid::from_slice(&row.id)
+                    .ok()
+                    .map(|id| ClusterImageDTO {
+                        id: id.to_string(),
+                        filename: row.filename,
+                        hamming_distance: row.hamming_distance as i32,
+                        is_best_shot: row.is_best_shot != 0,
+                        thumbnail: format!(
+                            "data:image/jpeg;base64,{}",
+                            BASE64_STANDARD.encode(row.thumbnail_data)
+                        ),
+                        width: row.width as i32,
+                        height: row.height as i32,
+                    })
+            })
+            .collect())
+    }
+
+    pub async fn mark_best_shots(&self, cluster_id: i64, image_ids: &[uuid::Uuid]) -> Result<()> {
+        let mut tx = self.get_write_conn().await?.begin().await?;
+
+        // Reset all best_shot flags for this cluster
+        sqlx::query!(
+            "UPDATE cluster_members SET is_best_shot = 0 WHERE cluster_id = ?",
+            cluster_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        // Set the new best shots
+        let mut updated = 0u64;
+        for image_id in image_ids {
+            let result = sqlx::query!(
+                "UPDATE cluster_members SET is_best_shot = 1 WHERE cluster_id = ? AND image_id = ?",
+                cluster_id,
+                image_id
+            )
+            .execute(&mut *tx)
+            .await?;
+            updated += result.rows_affected();
+        }
+
+        if updated == 0 {
+            tx.rollback().await?;
+            return Err(anyhow::anyhow!(
+                "No cluster members matched the provided best shot IDs (cluster {})",
+                cluster_id
+            ));
+        }
+
+        tx.commit().await?;
+
+        Ok(())
+    }
+
+    pub async fn resolve_cluster(&self, cluster_id: i64) -> Result<Vec<uuid::Uuid>> {
+        let write_conn = self.get_write_conn().await?;
+        let mut tx = write_conn.begin().await?;
+
+        // Get all media_file IDs for images in this cluster that are NOT the best shot
+        let rows = sqlx::query!(
+            r#"SELECT mf.id
+               FROM cluster_members cm
+               JOIN images i ON cm.image_id = i.id
+               JOIN media_images mi ON i.id = mi.image_id
+               JOIN media_files mf ON mi.media_id = mf.id
+               WHERE cm.cluster_id = ? AND cm.is_best_shot = 0"#,
+            cluster_id
+        )
+        .fetch_all(&mut *tx)
+        .await?;
+
+        let media_file_ids: Vec<uuid::Uuid> = rows
+            .into_iter()
+            .filter_map(|row| uuid::Uuid::from_slice(&row.id).ok())
+            .collect();
+
+        // Mark cluster as resolved
+        sqlx::query!(
+            "UPDATE image_clusters SET is_resolved = 1 WHERE cluster_id = ?",
+            cluster_id
+        )
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(media_file_ids)
     }
 }
 
