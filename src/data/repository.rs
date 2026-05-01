@@ -1802,9 +1802,8 @@ impl MediaRepository {
 
         if !cluster_ids.is_empty() {
             // Emit IN clause placeholders manually
-            let placeholders: Vec<String> = std::iter::repeat("?".to_string())
-                .take(cluster_ids.len())
-                .collect();
+            let placeholders: Vec<String> =
+                std::iter::repeat_n("?".to_string(), cluster_ids.len()).collect();
             let in_clause = placeholders.join(",");
             let query_str = format!(
                 r#"SELECT cm.cluster_id, t.data
