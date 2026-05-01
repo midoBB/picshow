@@ -37,6 +37,12 @@ async fn main() -> Result<()> {
     if should_run_first_time {
         warn!("First time running the application, starting first run server");
         config = first_run::run_server(config.clone()).await?;
+        let cli_port = match cli.command {
+            Some(Commands::Serve { port }) => port,
+            _ => None,
+        };
+        handle_serve(&config, cli_port).await?;
+        return Ok(());
     }
     if let Some(cmd) = cli.command {
         match cmd {

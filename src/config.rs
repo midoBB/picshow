@@ -101,14 +101,14 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             folder_path: String::new(),
-            db_path: String::new(),
+            db_path: Self::get_default_db_path(),
             concurrency: 4,
             hash_size: 8,
             max_thumbnail_size: 300,
             port: DEFAULT_PORT,
             cache_size_mb: 100,
             log_level: crate::logging::LogLevel::Info,
-            backup_folder_path: String::new(),
+            backup_folder_path: Self::get_default_backup_path(),
             lock_secret: String::new(),
             duplicate_handling: DuplicateHandling::default(),
             delete_mode: DeleteMode::default(),
@@ -128,6 +128,7 @@ impl AppConfig {
         let config_path = config_dir.join("picshow").join("config.json");
         config_path.exists()
     }
+
     pub fn try_load() -> Result<Self> {
         let config_dir = dirs::config_dir()
             .unwrap_or_else(|| PathBuf::from("."))
@@ -139,9 +140,6 @@ impl AppConfig {
         let config_str = std::fs::read_to_string(&config_path)
             .map_err(|e| anyhow::anyhow!("Error reading configuration file: {}", e))?;
 
-        // On disk the following keys may be missing for users upgrading from
-        // an older version.  serde fills in defaults, but we write the merged
-        // config back so the user can discover and tweak the fields.
         let needs_rewrite = {
             let raw: serde_json::Value = serde_json::from_str(&config_str)?;
             raw.get("clusterAlgorithm").is_none()
@@ -159,6 +157,24 @@ impl AppConfig {
         }
 
         Ok(config)
+    }
+
+    fn get_default_db_path() -> String {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("picshow")
+            .join("picshow.db")
+            .to_string_lossy()
+            .to_string()
+    }
+
+    fn get_default_backup_path() -> String {
+        dirs::data_dir()
+            .unwrap_or_else(|| PathBuf::from("."))
+            .join("picshow")
+            .join("picshow.bak")
+            .to_string_lossy()
+            .to_string()
     }
 
     pub fn save(&self) -> Result<()> {

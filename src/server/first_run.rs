@@ -10,7 +10,7 @@ use axum::{
     http::StatusCode,
     middleware,
     response::IntoResponse,
-    routing::post,
+    routing::{get, post},
     Json,
 };
 use local_ip_address::list_afinet_netifas;
@@ -73,7 +73,8 @@ pub async fn run_server(cfg: AppConfig) -> Result<AppConfig> {
     });
     let api_routes = axum::Router::new()
         .route("/config", post(save_config))
-        .route("/browse", post(browse_directory));
+        .route("/browse", post(browse_directory))
+        .route("/defaults", get(get_defaults));
     let app = axum::Router::new()
         .nest("/api", api_routes)
         .with_state(state)
@@ -196,4 +197,20 @@ async fn save_config(
         let _ = tx.send(());
     }
     StatusCode::OK.into_response()
+}
+
+async fn get_defaults() -> impl IntoResponse {
+    let db_path = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("picshow");
+    let backup_path = dirs::data_dir()
+        .unwrap_or_else(|| PathBuf::from("."))
+        .join("picshow.bak");
+    let db_path_str = format!("{}{}", db_path.display(), std::path::MAIN_SEPARATOR);
+    let backup_path_str = format!("{}{}", backup_path.display(), std::path::MAIN_SEPARATOR);
+    Json(json!({
+        "dbPath": db_path_str,
+        "backupFolderPath": backup_path_str
+    }))
+    .into_response()
 }

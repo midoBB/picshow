@@ -10,13 +10,14 @@ import {
   Select,
   IconButton,
 } from "@radix-ui/themes";
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@radix-ui/react-collapsible";
 import "@radix-ui/themes/styles.css";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import FolderBrowserDialog from "./FolderBrowserDialog";
-import { FolderIcon } from "lucide-react";
+import { FolderIcon, ChevronDownIcon, ChevronUpIcon } from "lucide-react";
 
 const isValidLinuxDirectory = (path: string) => {
   return /^\/(?:[^/\0]+\/)+$|^\/?$/gm.test(path);
@@ -78,6 +79,7 @@ function generateUUID() {
 type FolderFieldName = "folderPath" | "dbPath" | "backupFolderPath";
 const ConfigInstallWizard = () => {
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
   const [submitResult, setSubmitResult] = useState<{
     success: boolean;
     message: string;
@@ -105,6 +107,16 @@ const ConfigInstallWizard = () => {
     },
   });
 
+  useEffect(() => {
+    fetch("/api/defaults")
+      .then(res => res.json())
+      .then(data => {
+        setValue("dbPath", data.dbPath);
+        setValue("backupFolderPath", data.backupFolderPath);
+      })
+      .catch(err => console.error("Failed to fetch defaults:", err));
+  }, [setValue]);
+
   const [folderDialogOpen, setFolderDialogOpen] = useState(false);
   const [currentFolderField, setCurrentFolderField] =
     useState<FolderFieldName | null>(null);
@@ -124,7 +136,7 @@ const ConfigInstallWizard = () => {
         setSubmitResult({
           success: true,
           message:
-            "Configuration saved successfully. The application will now restart.",
+            "Configuration saved successfully. The application will now start.",
         });
       } else {
         const errorData = await response.json();
@@ -145,7 +157,7 @@ const ConfigInstallWizard = () => {
 
   const handleDialogClose = () => {
     if (submitResult?.success) {
-      window.location.reload();
+      window.location.href = "/";
     } else {
       setSubmitResult(null);
     }
@@ -209,328 +221,344 @@ const ConfigInstallWizard = () => {
                 )}
               </label>
 
-              <label>
-                <Text as="div" size="2" mb="1" weight="bold">
-                  Database Folder Path Ending In /
-                </Text>
-                <Flex gap="2">
-                  <Controller
-                    name="dbPath"
-                    control={control}
-                    render={({ field }) => (
-                      <TextField.Root
-                        {...field}
-                        placeholder="Select the path for your database"
-                        style={{ width: "100%" }}
-                      />
-                    )}
-                  />
-                  <IconButton
-                    type="button"
-                    onClick={() => openFolderBrowser("dbPath")}
-                    variant="soft"
-                  >
-                    <FolderIcon width="16" height="16" />
-                  </IconButton>
-                </Flex>
-                {errors.dbPath && (
-                  <Text color="red" size="1">
-                    {errors.dbPath.message}
-                  </Text>
-                )}
-              </label>
-
-              <label>
-                <Text as="div" size="2" mb="1" weight="bold">
-                  Backup Folder Path Ending In /
-                </Text>
-                <Flex gap="2">
-                  <Controller
-                    name="backupFolderPath"
-                    control={control}
-                    render={({ field }) => (
-                      <TextField.Root
-                        {...field}
-                        placeholder="Select the path for your backup folder"
-                        style={{ width: "100%" }}
-                      />
-                    )}
-                  />
-                  <IconButton
-                    type="button"
-                    onClick={() => openFolderBrowser("backupFolderPath")}
-                    variant="soft"
-                  >
-                    <FolderIcon width="16" height="16" />
-                  </IconButton>
-                </Flex>
-                {errors.backupFolderPath && (
-                  <Text color="red" size="1">
-                    {errors.backupFolderPath.message}
-                  </Text>
-                )}
-              </label>
-              <Controller
-                name="hashSize"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Hash Size (32-2048 KB)
-                    </Text>
-                    <Flex gap="2" align="center">
-                      <Slider
-                        value={[field.value]}
-                        onValueChange={(value) => field.onChange(value[0])}
-                        min={32}
-                        max={2048}
-                        step={32}
-                        style={{ flexGrow: 1 }}
-                      />
-                      <TextField.Root
-                        style={{ width: "80px" }}
-                        type="number"
-                        value={field.value}
-                        onChange={(e) => field.onChange(Number(e.target.value))}
-                        min={32}
-                        max={2048}
-                      ></TextField.Root>
-                      <Text size="2">KB</Text>
-                    </Flex>
-                    {errors.hashSize && (
-                      <Text color="red" size="1">
-                        {errors.hashSize.message}
+              <Collapsible open={advancedOpen} onOpenChange={setAdvancedOpen}>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" type="button" mb="2">
+                    <Text size="2">Advanced Configuration</Text>
+                    {advancedOpen ? <ChevronUpIcon width="16" height="16" /> : <ChevronDownIcon width="16" height="16" />}
+                  </Button>
+                </CollapsibleTrigger>
+                <CollapsibleContent>
+                  <Flex direction="column" gap="4">
+                    <label>
+                      <Text as="div" size="2" mb="1" weight="bold">
+                        Database Path
                       </Text>
-                    )}
-                  </Flex>
-                )}
-              />
+                      <Flex gap="2">
+                        <Controller
+                          name="dbPath"
+                          control={control}
+                          render={({ field }) => (
+                            <TextField.Root
+                              {...field}
+                              placeholder="Select the path for your database"
+                              style={{ width: "100%" }}
+                            />
+                          )}
+                        />
+                        <IconButton
+                          type="button"
+                          onClick={() => openFolderBrowser("dbPath")}
+                          variant="soft"
+                        >
+                          <FolderIcon width="16" height="16" />
+                        </IconButton>
+                      </Flex>
+                      {errors.dbPath && (
+                        <Text color="red" size="1">
+                          {errors.dbPath.message}
+                        </Text>
+                      )}
+                    </label>
 
-              <Controller
-                name="maxThumbnailSize"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Max Thumbnail Size (240-1024 px)
-                    </Text>
-                    <Flex gap="2" align="center">
-                      <Slider
-                        value={[field.value]}
-                        onValueChange={(value) => field.onChange(value[0])}
-                        min={240}
-                        max={1024}
-                        step={16}
-                        style={{ flexGrow: 1 }}
-                      />
-                      <TextField.Root
-                        style={{ width: "80px" }}
-                        type="number"
-                        value={field.value}
-                        onChange={(e) => field.onChange(Number(e.target.value))}
-                        min={240}
-                        max={1024}
-                      ></TextField.Root>
-                      <Text size="2">px</Text>
-                    </Flex>
-                    {errors.maxThumbnailSize && (
-                      <Text color="red" size="1">
-                        {errors.maxThumbnailSize.message}
+                    <label>
+                      <Text as="div" size="2" mb="1" weight="bold">
+                        Backup Path
                       </Text>
-                    )}
-                  </Flex>
-                )}
-              />
+                      <Flex gap="2">
+                        <Controller
+                          name="backupFolderPath"
+                          control={control}
+                          render={({ field }) => (
+                            <TextField.Root
+                              {...field}
+                              placeholder="Select the path for your backup folder"
+                              style={{ width: "100%" }}
+                            />
+                          )}
+                        />
+                        <IconButton
+                          type="button"
+                          onClick={() => openFolderBrowser("backupFolderPath")}
+                          variant="soft"
+                        >
+                          <FolderIcon width="16" height="16" />
+                        </IconButton>
+                      </Flex>
+                      {errors.backupFolderPath && (
+                        <Text color="red" size="1">
+                          {errors.backupFolderPath.message}
+                        </Text>
+                      )}
+                    </label>
 
-              <Controller
-                name="concurrency"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Concurrency (1-32 threads)
-                    </Text>
-                    <Flex gap="2" align="center">
-                      <Slider
-                        value={[field.value]}
-                        onValueChange={(value) => field.onChange(value[0])}
-                        min={1}
-                        max={32}
-                        step={1}
-                        style={{ flexGrow: 1 }}
-                      />
-                      <TextField.Root
-                        style={{ width: "80px" }}
-                        type="number"
-                        value={field.value}
-                        onChange={(e) => field.onChange(Number(e.target.value))}
-                        min={1}
-                        max={32}
-                      ></TextField.Root>
-                    </Flex>
-                    {errors.concurrency && (
-                      <Text color="red" size="1">
-                        {errors.concurrency.message}
-                      </Text>
-                    )}
-                  </Flex>
-                )}
-              />
-              <Controller
-                name="port"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Port (1024-65535)
-                    </Text>
-                    <TextField.Root
-                      {...field}
-                      type="number"
-                      placeholder="Enter the port number"
+                    <Controller
+                      name="hashSize"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Hash Size (32-2048 KB)
+                          </Text>
+                          <Flex gap="2" align="center">
+                            <Slider
+                              value={[field.value]}
+                              onValueChange={(value) => field.onChange(value[0])}
+                              min={32}
+                              max={2048}
+                              step={32}
+                              style={{ flexGrow: 1 }}
+                            />
+                            <TextField.Root
+                              style={{ width: "80px" }}
+                              type="number"
+                              value={field.value}
+                              onChange={(e) => field.onChange(Number(e.target.value))}
+                              min={32}
+                              max={2048}
+                            />
+                            <Text size="2">KB</Text>
+                          </Flex>
+                          {errors.hashSize && (
+                            <Text color="red" size="1">
+                              {errors.hashSize.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
                     />
-                    {errors.port && (
-                      <Text color="red" size="1">
-                        {errors.port.message}
-                      </Text>
-                    )}
-                  </Flex>
-                )}
-              />
-              <Controller
-                name="batchSize"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Batch Size (1-100 files)
-                    </Text>
-                    <Flex gap="2" align="center">
-                      <Slider
-                        value={[field.value]}
-                        onValueChange={(value) => field.onChange(value[0])}
-                        min={1}
-                        max={100}
-                        step={4}
-                        style={{ flexGrow: 1 }}
-                      />
-                      <TextField.Root
-                        style={{ width: "80px" }}
-                        type="number"
-                        value={field.value}
-                        onChange={(e) => field.onChange(Number(e.target.value))}
-                        min={1}
-                        max={100}
-                      ></TextField.Root>
-                    </Flex>
-                    {errors.batchSize && (
-                      <Text color="red" size="1">
-                        {errors.batchSize.message}
-                      </Text>
-                    )}
-                  </Flex>
-                )}
-              />
-              <Controller
-                name="autoRefreshDuration"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Auto Refresh Duration (1-168 hours / 7 days)
-                    </Text>
-                    <Flex gap="2" align="center">
-                      <Slider
-                        value={[field.value]}
-                        onValueChange={(value) => field.onChange(value[0])}
-                        min={1}
-                        max={168}
-                        step={1}
-                        style={{ flexGrow: 1 }}
-                      />
-                      <TextField.Root
-                        style={{ width: "80px" }}
-                        type="number"
-                        value={field.value}
-                        onChange={(e) => field.onChange(Number(e.target.value))}
-                        min={1}
-                        max={168}
-                      ></TextField.Root>
-                      <Text size="2">hours</Text>
-                    </Flex>
-                    {errors.autoRefreshDuration && (
-                      <Text color="red" size="1">
-                        {errors.autoRefreshDuration.message}
-                      </Text>
-                    )}
-                  </Flex>
-                )}
-              />
 
-              <Controller
-                name="cacheSizeMB"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Cache Size (20-1024 MB)
-                    </Text>
-                    <Flex gap="2" align="center">
-                      <Slider
-                        value={[field.value]}
-                        onValueChange={(value) => field.onChange(value[0])}
-                        min={20}
-                        max={1024}
-                        step={20}
-                        style={{ flexGrow: 1 }}
-                      />
-                      <TextField.Root
-                        style={{ width: "80px" }}
-                        type="number"
-                        value={field.value}
-                        onChange={(e) => field.onChange(Number(e.target.value))}
-                        min={20}
-                        max={1024}
-                      />
-                      <Text size="2">MB</Text>
-                    </Flex>
-                    {errors.cacheSizeMB && (
-                      <Text color="red" size="1">
-                        {errors.cacheSizeMB.message}
-                      </Text>
-                    )}
-                  </Flex>
-                )}
-              />
+                    <Controller
+                      name="maxThumbnailSize"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Max Thumbnail Size (240-1024 px)
+                          </Text>
+                          <Flex gap="2" align="center">
+                            <Slider
+                              value={[field.value]}
+                              onValueChange={(value) => field.onChange(value[0])}
+                              min={240}
+                              max={1024}
+                              step={16}
+                              style={{ flexGrow: 1 }}
+                            />
+                            <TextField.Root
+                              style={{ width: "80px" }}
+                              type="number"
+                              value={field.value}
+                              onChange={(e) => field.onChange(Number(e.target.value))}
+                              min={240}
+                              max={1024}
+                            />
+                            <Text size="2">px</Text>
+                          </Flex>
+                          {errors.maxThumbnailSize && (
+                            <Text color="red" size="1">
+                              {errors.maxThumbnailSize.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
+                    />
 
-              <Controller
-                name="logLevel"
-                control={control}
-                render={({ field }) => (
-                  <Flex direction="column" gap="2">
-                    <Text as="label" size="2" weight="bold">
-                      Log Level
-                    </Text>
-                    <Select.Root
-                      onValueChange={field.onChange}
-                      defaultValue={field.value}
-                    >
-                      <Select.Trigger />
-                      <Select.Content>
-                        <Select.Item value="Debug">Debug</Select.Item>
-                        <Select.Item value="Info">Info</Select.Item>
-                        <Select.Item value="Warn">Warn</Select.Item>
-                        <Select.Item value="Error">Error</Select.Item>
-                      </Select.Content>
-                    </Select.Root>
-                    {errors.logLevel && (
-                      <Text color="red" size="1">
-                        {errors.logLevel.message}
-                      </Text>
-                    )}
+                    <Controller
+                      name="concurrency"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Concurrency (1-32 threads)
+                          </Text>
+                          <Flex gap="2" align="center">
+                            <Slider
+                              value={[field.value]}
+                              onValueChange={(value) => field.onChange(value[0])}
+                              min={1}
+                              max={32}
+                              step={1}
+                              style={{ flexGrow: 1 }}
+                            />
+                            <TextField.Root
+                              style={{ width: "80px" }}
+                              type="number"
+                              value={field.value}
+                              onChange={(e) => field.onChange(Number(e.target.value))}
+                              min={1}
+                              max={32}
+                            />
+                          </Flex>
+                          {errors.concurrency && (
+                            <Text color="red" size="1">
+                              {errors.concurrency.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
+                    />
+
+                    <Controller
+                      name="port"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Port (1024-65535)
+                          </Text>
+                          <TextField.Root
+                            {...field}
+                            type="number"
+                            placeholder="Enter the port number"
+                          />
+                          {errors.port && (
+                            <Text color="red" size="1">
+                              {errors.port.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
+                    />
+
+                    <Controller
+                      name="batchSize"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Batch Size (1-100 files)
+                          </Text>
+                          <Flex gap="2" align="center">
+                            <Slider
+                              value={[field.value]}
+                              onValueChange={(value) => field.onChange(value[0])}
+                              min={1}
+                              max={100}
+                              step={4}
+                              style={{ flexGrow: 1 }}
+                            />
+                            <TextField.Root
+                              style={{ width: "80px" }}
+                              type="number"
+                              value={field.value}
+                              onChange={(e) => field.onChange(Number(e.target.value))}
+                              min={1}
+                              max={100}
+                            />
+                          </Flex>
+                          {errors.batchSize && (
+                            <Text color="red" size="1">
+                              {errors.batchSize.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
+                    />
+
+                    <Controller
+                      name="autoRefreshDuration"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Auto Refresh Duration (1-168 hours / 7 days)
+                          </Text>
+                          <Flex gap="2" align="center">
+                            <Slider
+                              value={[field.value]}
+                              onValueChange={(value) => field.onChange(value[0])}
+                              min={1}
+                              max={168}
+                              step={1}
+                              style={{ flexGrow: 1 }}
+                            />
+                            <TextField.Root
+                              style={{ width: "80px" }}
+                              type="number"
+                              value={field.value}
+                              onChange={(e) => field.onChange(Number(e.target.value))}
+                              min={1}
+                              max={168}
+                            />
+                            <Text size="2">hours</Text>
+                          </Flex>
+                          {errors.autoRefreshDuration && (
+                            <Text color="red" size="1">
+                              {errors.autoRefreshDuration.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
+                    />
+
+                    <Controller
+                      name="cacheSizeMB"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Cache Size (20-1024 MB)
+                          </Text>
+                          <Flex gap="2" align="center">
+                            <Slider
+                              value={[field.value]}
+                              onValueChange={(value) => field.onChange(value[0])}
+                              min={20}
+                              max={1024}
+                              step={20}
+                              style={{ flexGrow: 1 }}
+                            />
+                            <TextField.Root
+                              style={{ width: "80px" }}
+                              type="number"
+                              value={field.value}
+                              onChange={(e) => field.onChange(Number(e.target.value))}
+                              min={20}
+                              max={1024}
+                            />
+                            <Text size="2">MB</Text>
+                          </Flex>
+                          {errors.cacheSizeMB && (
+                            <Text color="red" size="1">
+                              {errors.cacheSizeMB.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
+                    />
+
+                    <Controller
+                      name="logLevel"
+                      control={control}
+                      render={({ field }) => (
+                        <Flex direction="column" gap="2">
+                          <Text as="label" size="2" weight="bold">
+                            Log Level
+                          </Text>
+                          <Select.Root
+                            onValueChange={field.onChange}
+                            defaultValue={field.value}
+                          >
+                            <Select.Trigger />
+                            <Select.Content>
+                              <Select.Item value="Debug">Debug</Select.Item>
+                              <Select.Item value="Info">Info</Select.Item>
+                              <Select.Item value="Warn">Warn</Select.Item>
+                              <Select.Item value="Error">Error</Select.Item>
+                            </Select.Content>
+                          </Select.Root>
+                          {errors.logLevel && (
+                            <Text color="red" size="1">
+                              {errors.logLevel.message}
+                            </Text>
+                          )}
+                        </Flex>
+                      )}
+                    />
                   </Flex>
-                )}
-              />
+                </CollapsibleContent>
+              </Collapsible>
               <Button type="submit" disabled={isSubmitting}>
                 {isSubmitting ? "Saving..." : "Save Configuration"}
               </Button>
@@ -550,8 +578,7 @@ const ConfigInstallWizard = () => {
             {submitResult?.message}
             {submitResult?.success && (
               <Text as="p" style={{ marginTop: "1rem" }}>
-                Click OK to reload the page and start the application with the
-                new configuration.
+                Click OK to continue to the application.
               </Text>
             )}
           </Dialog.Description>
