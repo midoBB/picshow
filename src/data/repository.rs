@@ -1851,12 +1851,14 @@ impl MediaRepository {
                 std::iter::repeat_n("?".to_string(), cluster_ids.len()).collect();
             let in_clause = placeholders.join(",");
             let query_str = format!(
-                r#"SELECT cm.cluster_id, t.data
-                   FROM cluster_members cm
-                   JOIN images i ON cm.image_id = i.id
-                   JOIN thumbnails t ON i.thumbnail_id = t.id
-                   WHERE cm.cluster_id IN ({})
-                   ORDER BY cm.cluster_id"#,
+                r#"SELECT cluster_id, data FROM (
+                       SELECT cm.cluster_id, t.data,
+                           ROW_NUMBER() OVER (PARTITION BY cm.cluster_id ORDER BY cm.hamming_distance) as rn
+                       FROM cluster_members cm
+                       JOIN images i ON cm.image_id = i.id
+                       JOIN thumbnails t ON i.thumbnail_id = t.id
+                       WHERE cm.cluster_id IN ({})
+                   ) WHERE rn <= 4"#,
                 in_clause
             );
 
@@ -1870,12 +1872,10 @@ impl MediaRepository {
                 let cid: i64 = trow.get("cluster_id");
                 let data: Vec<u8> = trow.get("data");
                 let entry = thumb_map.entry(cid).or_default();
-                if entry.len() < 4 {
-                    entry.push(format!(
-                        "data:image/jpeg;base64,{}",
-                        BASE64_STANDARD.encode(&data)
-                    ));
-                }
+                entry.push(format!(
+                    "data:image/jpeg;base64,{}",
+                    BASE64_STANDARD.encode(&data)
+                ));
             }
         }
 
