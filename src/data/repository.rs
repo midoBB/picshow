@@ -1917,14 +1917,24 @@ impl MediaRepository {
         .await?;
 
         // Set the new best shots
+        let mut updated = 0u64;
         for image_id in image_ids {
-            sqlx::query!(
+            let result = sqlx::query!(
                 "UPDATE cluster_members SET is_best_shot = 1 WHERE cluster_id = ? AND image_id = ?",
                 cluster_id,
                 image_id
             )
             .execute(&mut *tx)
             .await?;
+            updated += result.rows_affected();
+        }
+
+        if updated == 0 {
+            tx.rollback().await?;
+            return Err(anyhow::anyhow!(
+                "No cluster members matched the provided best shot IDs (cluster {})",
+                cluster_id
+            ));
         }
 
         tx.commit().await?;
