@@ -433,6 +433,10 @@ impl ClusterBuilder {
 
             while let Some(q) = seeds.pop() {
                 if assigned[q] != VisitStatus::Unvisited {
+                    if assigned[q] == VisitStatus::Noise {
+                        assigned[q] = VisitStatus::Clustered(cluster_id);
+                        raw_clusters[cluster_id].push(q);
+                    }
                     continue;
                 }
                 assigned[q] = VisitStatus::Clustered(cluster_id);
