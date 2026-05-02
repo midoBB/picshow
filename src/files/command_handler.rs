@@ -39,11 +39,7 @@ impl CommandHandler {
     }
 
     async fn delete_file(&mut self, fileids: Vec<Uuid>, mode: DeleteMode) -> Result<()> {
-        info!(
-            "Deleting {} file(s) with mode {:?}",
-            fileids.len(),
-            mode
-        );
+        info!("Deleting {} file(s) with mode {:?}", fileids.len(), mode);
         ensure_path(self.trash_path.clone()).await?;
         for id in fileids {
             debug!("Getting file with id {}", id);
