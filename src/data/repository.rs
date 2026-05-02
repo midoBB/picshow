@@ -1823,24 +1823,25 @@ impl MediaRepository {
         // Fetch clusters with preview thumbnails (first 4 images)
         let rows = sqlx::query!(
             r#"SELECT
-                c.cluster_id,
-                c.representative_image_id,
-                c.created_at,
-                c.is_resolved,
+                c.cluster_id AS "cluster_id!",
+                c.representative_image_id AS "representative_image_id!",
+                c.created_at AS "created_at!",
+                c.is_resolved AS "is_resolved!",
                 COUNT(DISTINCT cm.image_id) as image_count
             FROM image_clusters c
             JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
             WHERE c.is_resolved = 0
             GROUP BY c.cluster_id
-            ORDER BY c.created_at DESC
+            ORDER BY
+                MAX(cm.hamming_distance) ASC,     -- 1. Tightest clusters first (graded by their worst match)
+                COUNT(DISTINCT cm.image_id) DESC, -- 2. Then by largest space savings
+                c.created_at DESC                 -- 3. Then newest
             LIMIT ? OFFSET ?"#,
             page_size,
             offset
         )
         .fetch_all(self.get_read_conn())
         .await?;
-
-        // Batch-fetch thumbnails for all clusters on this page (single query)
         let cluster_ids: Vec<i64> = rows.iter().map(|r| r.cluster_id).collect();
         let mut thumb_map: std::collections::HashMap<i64, Vec<String>> =
             std::collections::HashMap::new();
