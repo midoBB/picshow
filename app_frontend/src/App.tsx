@@ -29,6 +29,16 @@ export default function App() {
   const containerRef = useRef<HTMLDivElement>(null);
   const isFirstRun = useRef(true);
 
+  // Track fullscreen element so portals (dialogs, toasts) can mount inside it
+  const [fullscreenElement, setFullscreenElement] = useState<HTMLElement | null>(null);
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setFullscreenElement(document.fullscreenElement as HTMLElement | null);
+    };
+    document.addEventListener("fullscreenchange", handleFullscreenChange);
+    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+  }, []);
+
   // App state
   const {
     dontAskAgainForDelete,
@@ -239,7 +249,14 @@ export default function App() {
       )}
 
       {viewMode === "clusters" ? (
-        <ClusterView />
+        <div
+          className="w-full mx-auto flex-grow overflow-hidden"
+          style={{
+            height: `calc(100vh - ${navbarRef.current?.clientHeight}px)`,
+          }}
+        >
+          <ClusterView />
+        </div>
       ) : isErrorFiles ? (
         <div
           className={`flex items-center justify-center h-screen ${isDarkMode ? "bg-gray-900 text-white" : "bg-white text-gray-900"}`}
@@ -344,6 +361,7 @@ export default function App() {
                 }))
             : []
         }
+        portalContainer={fullscreenElement}
       />
       <Toaster />
     </div>

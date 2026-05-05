@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useInfiniteClusters } from "@/queries/loaders";
 import useAppState from "@/state";
 import { ClusterCard } from "./ClusterCard";
+import { FaImages } from "react-icons/fa";
 
 const ClusterCardSkeleton = ({ isDarkMode }: { isDarkMode: boolean }) => (
   <div
@@ -105,11 +106,31 @@ export const ClusterView = () => {
         className={`flex h-full items-center justify-center ${isDarkMode ? "bg-slate-800" : "bg-gray-100"}`}
       >
         <div
-          className={`text-center ${isDarkMode ? "text-gray-300" : "text-gray-700"}`}
+          className={`mx-4 flex max-w-md flex-col items-center rounded-2xl border px-8 py-12 text-center shadow-sm ${
+            isDarkMode
+              ? "border-gray-700/50 bg-gray-800/80 text-gray-300"
+              : "border-gray-200 bg-white text-gray-700"
+          }`}
         >
-          <p className="text-lg font-medium">No similar photos found</p>
-          <p className="mt-2 text-sm text-gray-500">
-            Similar photos will appear here automatically as you add images
+          <div
+            className={`mb-6 flex h-20 w-20 items-center justify-center rounded-full ${
+              isDarkMode ? "bg-gray-700/50" : "bg-gray-100"
+            }`}
+          >
+            <FaImages
+              size={36}
+              className={isDarkMode ? "text-gray-400" : "text-gray-400"}
+            />
+          </div>
+          <h3 className="text-xl font-semibold">No similar photos found</h3>
+          <p
+            className={`mt-3 text-sm leading-relaxed ${
+              isDarkMode ? "text-gray-400" : "text-gray-500"
+            }`}
+          >
+            Similar photos will appear here automatically as you add images to
+            your library. We'll group them together so you can easily find
+            duplicates and similar shots.
           </p>
         </div>
       </div>

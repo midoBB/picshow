@@ -15,6 +15,7 @@ interface ConfirmDialogProps {
     Id: string;
     MimeType: string;
   }>;
+  portalContainer?: HTMLElement | null;
 }
 
 const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
@@ -24,6 +25,7 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   dontAskAgain,
   setDontAskAgain,
   files,
+  portalContainer,
 }) => {
   const { isDarkMode } = useAppState();
   const thumbnailQueries = useQueries({
@@ -51,7 +53,7 @@ const ConfirmDialog: React.FC<ConfirmDialogProps> = ({
   }, [thumbnailQueries, files]);
   return (
     <Dialog.Root open={isOpen} onOpenChange={onOpenChange}>
-      <Dialog.Portal>
+      <Dialog.Portal container={portalContainer || undefined}>
         <Dialog.Overlay className="bg-blackA9 data-[state=open]:animate-overlayShow fixed inset-0 z-[2000]" />
         <Dialog.Content
           className={`data-[state=open]:animate-contentShow fixed top-[50%] left-[50%] max-h-[85vh] w-[90vw] max-w-[500px] translate-x-[-50%] translate-y-[-50%] rounded-[6px] ${isDarkMode ? "bg-gray-800 text-white" : "bg-white text-gray-900"} p-[25px] shadow-[hsl(206_22%_7%_/_35%)_0px_10px_38px_-10px,_hsl(206_22%_7%_/_20%)_0px_10px_20px_-15px] focus:outline-none z-[2000]`}
