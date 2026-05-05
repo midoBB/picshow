@@ -135,6 +135,10 @@ async fn process_files(
                     info!("Processing complete: {} files found", media_files_count);
                     // Rebuild clusters after scan
                     rebuild_clusters(&processor).await;
+                    // Recreate stats from actual data after scan
+                    if let Err(e) = processor.repository.recreate_stats().await {
+                        error!("Failed to recreate stats: {:?}", e);
+                    }
                     // Send processing finished status
                     let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
                     info!("Processing finished");
@@ -178,6 +182,10 @@ async fn process_files(
                 info!("Processing complete: {} files found", media_files_count);
                 // Rebuild clusters after scan
                 rebuild_clusters(&processor).await;
+                // Recreate stats from actual data after scan
+                if let Err(e) = processor.repository.recreate_stats().await {
+                    error!("Failed to recreate stats: {:?}", e);
+                }
                 // Send processing finished status
                 let _ = status_tx.send(crate::ipc::ProcessorStatus::ProcessingFinished);
                 info!("Processing finished");

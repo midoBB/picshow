@@ -458,6 +458,22 @@ impl MediaRepository {
             .await
     }
 
+    pub async fn recreate_stats(&self) -> Result<()> {
+        sqlx::query!(
+            r#"UPDATE stats SET
+                count = (SELECT COUNT(*) FROM media_files),
+                images = (SELECT COUNT(*) FROM media_files WHERE media_type = 'Image'),
+                videos = (SELECT COUNT(*) FROM media_files WHERE media_type = 'Video'),
+                favorites = (SELECT COUNT(*) FROM media_files WHERE is_favorite = 1)
+            WHERE id = 1"#
+        )
+        .execute(self.get_write_conn().await?.borrow())
+        .await?;
+        self.cache.invalidate_stats_cache();
+        self.cache.invalidate_files_cache();
+        Ok(())
+    }
+
     pub async fn get_stats(&self) -> Result<Stats> {
         if let Some(stats) = self
             .cache
