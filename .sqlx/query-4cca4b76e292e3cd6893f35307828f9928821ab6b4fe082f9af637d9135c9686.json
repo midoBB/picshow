@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE stats SET\n                count = (SELECT COUNT(*) FROM media_files),\n                images = (SELECT COUNT(*) FROM media_files WHERE media_type = 'Image'),\n                videos = (SELECT COUNT(*) FROM media_files WHERE media_type = 'Video'),\n                favorites = (SELECT COUNT(*) FROM media_files WHERE is_favorite = 1)\n            WHERE id = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "4cca4b76e292e3cd6893f35307828f9928821ab6b4fe082f9af637d9135c9686"
+}
