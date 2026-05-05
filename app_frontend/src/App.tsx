@@ -30,13 +30,15 @@ export default function App() {
   const isFirstRun = useRef(true);
 
   // Track fullscreen element so portals (dialogs, toasts) can mount inside it
-  const [fullscreenElement, setFullscreenElement] = useState<HTMLElement | null>(null);
+  const [fullscreenElement, setFullscreenElement] =
+    useState<HTMLElement | null>(null);
   useEffect(() => {
     const handleFullscreenChange = () => {
       setFullscreenElement(document.fullscreenElement as HTMLElement | null);
     };
     document.addEventListener("fullscreenchange", handleFullscreenChange);
-    return () => document.removeEventListener("fullscreenchange", handleFullscreenChange);
+    return () =>
+      document.removeEventListener("fullscreenchange", handleFullscreenChange);
   }, []);
 
   // App state
