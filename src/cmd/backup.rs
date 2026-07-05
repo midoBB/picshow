@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use crate::{
     cmd::{make_lock_request, InternalOP},
     config::AppConfig,
-    data::{backup_manager::BackupManager, repository::ensure_dir},
+    data::backup_manager::BackupManager,
     ipc::OperationLock,
 };
 use anyhow::Result;
@@ -23,7 +23,9 @@ pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> R
         .to_str()
         .ok_or_else(|| anyhow::anyhow!("Invalid destination path: contains non-UTF-8 characters"))?
         .to_string();
-    ensure_dir(&dest_path).await?;
+    if let Some(parent) = std::path::Path::new(&dest_path).parent() {
+        tokio::fs::create_dir_all(parent).await?;
+    }
     info!("Backing up the database to file: {}", dest_path.clone());
     let db_path = format!("{}picshow.db", config.db_path.clone());
     let repo = BackupManager::new(db_path).await;
@@ -31,14 +33,12 @@ pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> R
         make_lock_request(&config, InternalOP::Unlock).await?;
         return Err(e);
     }
-    match repo?.backup(dest_path).await {
-        Ok(_) => {
-            make_lock_request(&config, InternalOP::Unlock).await?;
-            info!("Backup completed");
-        }
-        Err(_) => {
-            make_lock_request(&config, InternalOP::Unlock).await?;
-        }
+    let backup_result = repo?.backup(dest_path).await;
+    let unlock_result = make_lock_request(&config, InternalOP::Unlock).await;
+    match (backup_result, unlock_result) {
+        (Ok(_), Ok(_)) => info!("Backup completed"),
+        (Err(e), _) => return Err(e),
+        (Ok(_), Err(e)) => return Err(e),
     }
     debug!("Shutdown complete");
     Ok(())

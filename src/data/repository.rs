@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::{path::Path, sync::Arc};
 use tokio::fs;
 use tokio::sync::{RwLock, Semaphore};
-use tracing::{debug, info, trace};
+use tracing::{debug, error, info, trace};
 use uuid::Uuid;
 
 use super::*;
@@ -18,10 +18,6 @@ use crate::cache::{self, AppCache};
 use crate::config::AppConfig;
 use crate::server::{FileQueryType, FilledFileQuery};
 
-// Database configuration constants
-const DEFAULT_CACHE_SIZE: &str = "-64000";
-const DEFAULT_PAGE_SIZE: &str = "4096";
-const DEFAULT_WAL_CHECKPOINT: &str = "1000";
 const DEFAULT_BUSY_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Clone, Debug)]
@@ -31,7 +27,6 @@ pub struct MediaRepository {
     write_semaphore: Arc<RwLock<Semaphore>>,
     lock_semaphore: Arc<Semaphore>,
     cache: AppCache,
-    db_path: String,
 }
 
 impl MediaRepository {
@@ -39,27 +34,14 @@ impl MediaRepository {
         let db_path = format!("{}picshow.db", &config.db_path);
         ensure_dir(db_path.as_str()).await?;
         let url_db_path = &format!("sqlite://{}", db_path);
-        let read_options = SqliteConnectOptions::from_str(&format!("{}?mode=ro", url_db_path))?
-            .pragma("journal_mode", "WAL")
-            .pragma("synchronous", "FULL")
-            .pragma("foreign_keys", "ON")
-            .pragma("cache_size", DEFAULT_CACHE_SIZE)
-            .pragma("temp_store", "MEMORY")
-            .pragma("page_size", DEFAULT_PAGE_SIZE)
-            .pragma("secure_delete", "OFF")
-            .pragma("wal_autocheckpoint", DEFAULT_WAL_CHECKPOINT)
-            .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
-        let write_options = SqliteConnectOptions::from_str(url_db_path)?
-            .pragma("journal_mode", "WAL")
-            .pragma("synchronous", "FULL")
-            .pragma("foreign_keys", "ON")
-            .pragma("cache_size", DEFAULT_CACHE_SIZE)
-            .pragma("temp_store", "MEMORY")
-            .pragma("page_size", DEFAULT_PAGE_SIZE)
-            .pragma("secure_delete", "OFF")
-            .pragma("wal_autocheckpoint", DEFAULT_WAL_CHECKPOINT)
-            .pragma("auto_vacuum", "INCREMENTAL")
-            .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
+        let read_options = super::apply_sqlx_pragmas(
+            SqliteConnectOptions::from_str(&format!("{}?mode=ro", url_db_path))?,
+            false,
+        )
+        .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
+        let write_options =
+            super::apply_sqlx_pragmas(SqliteConnectOptions::from_str(url_db_path)?, true)
+                .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
         let read_pool = SqlitePoolOptions::new()
             .max_connections(10)
             .min_connections(2)
@@ -84,11 +66,10 @@ impl MediaRepository {
             write_semaphore: Arc::new(RwLock::new(Semaphore::new(1))),
             lock_semaphore: Arc::new(Semaphore::new(1)),
             cache,
-            db_path,
         };
 
         repo.init_schema().await?;
-        repo.check_and_repair_corruption().await?;
+        repo.check_database_integrity().await?;
         Ok(repo)
     }
 
@@ -114,84 +95,20 @@ impl MediaRepository {
         Ok(())
     }
 
-    pub async fn check_and_repair_corruption(&self) -> Result<()> {
-        use tracing::{error, info, warn};
-
+    pub async fn check_database_integrity(&self) -> Result<()> {
         info!("Checking database integrity...");
-
-        let quick_check = sqlx::query_scalar::<_, String>("PRAGMA quick_check")
-            .fetch_one(self.get_read_conn())
-            .await;
-
-        match quick_check {
-            Ok(result) if result == "ok" => {
-                info!("Database quick check passed");
-                return Ok(());
-            }
-            Ok(result) => {
-                warn!("Database quick check failed: {}", result);
-            }
-            Err(e) => {
-                error!("Failed to perform quick check: {}", e);
-            }
-        }
-
-        info!("Performing full integrity check...");
-        let integrity_check = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
-            .fetch_one(self.get_read_conn())
-            .await;
-
-        match integrity_check {
-            Ok(result) if result == "ok" => {
-                info!("Database integrity check passed");
-                return Ok(());
-            }
-            Ok(result) => {
-                error!("Database corruption detected: {}", result);
-            }
-            Err(e) => {
-                error!("Failed to perform integrity check: {}", e);
-                return Err(e.into());
-            }
-        }
-
-        warn!("Attempting database repair...");
-
-        if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.get_write_conn().await?.borrow())
+        super::verify_sqlx_wal_mode(self.get_read_conn()).await?;
+        super::check_sqlx_integrity(self.get_read_conn())
             .await
-        {
-            error!("Failed to checkpoint WAL during repair: {}", e);
-        }
-
-        if let Err(e) = sqlx::query("PRAGMA incremental_vacuum")
-            .execute(self.get_write_conn().await?.borrow())
-            .await
-        {
-            error!("Failed to vacuum database during repair: {}", e);
-        }
-
-        let recheck = sqlx::query_scalar::<_, String>("PRAGMA integrity_check")
-            .fetch_one(self.get_read_conn())
-            .await;
-
-        match recheck {
-            Ok(result) if result == "ok" => {
-                info!("Database repair successful");
-                Ok(())
-            }
-            Ok(result) => {
-                error!("Database repair failed, corruption persists: {}", result);
-                Err(anyhow::anyhow!(
-                    "Database corruption could not be repaired: {}",
-                    result
-                ))
-            }
-            Err(e) => {
-                error!("Failed to recheck integrity after repair: {}", e);
-                Err(e.into())
-            }
-        }
+            .map_err(|e| {
+                error!("Database integrity check failed: {}", e);
+                anyhow::anyhow!(
+                    "Database integrity check failed. Refusing to start; restore from a verified backup. {}",
+                    e
+                )
+            })?;
+        info!("Database integrity checks passed");
+        Ok(())
     }
 
     pub async fn perform_maintenance(&self) -> Result<()> {
@@ -200,9 +117,7 @@ impl MediaRepository {
         info!("Starting database maintenance...");
 
         debug!("Checkpointing WAL...");
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(self.get_write_conn().await?.borrow())
-            .await?;
+        super::checkpoint_truncate(self.get_write_conn().await?.borrow()).await?;
 
         debug!("Performing incremental vacuum...");
         sqlx::query("PRAGMA incremental_vacuum")
@@ -230,16 +145,13 @@ impl MediaRepository {
         self.read_pool.close().await;
         loop {
             if Arc::strong_count(&self.write_pool) == 1 {
-                self.write_pool.close().await;
-                let wal_path = format!("{}-wal", self.db_path);
-                let shm_path = format!("{}-shm", self.db_path);
-
-                // Attempt to remove WAL and SHM files
-                for path in [&wal_path, &shm_path] {
-                    if tokio::fs::remove_file(path).await.is_ok() {
-                        trace!("Removed WAL / SHM file {}", path);
+                {
+                    let mut conn = self.write_pool.acquire().await?;
+                    if let Err(e) = super::checkpoint_truncate(&mut *conn).await {
+                        error!("Failed to checkpoint WAL during cleanup: {}", e);
                     }
                 }
+                self.write_pool.close().await;
                 break;
             } else {
                 trace!("Write pool still has other references, skipping write pool cleanup");
@@ -291,9 +203,7 @@ impl MediaRepository {
         // Force reset the write semaphore
         self.write_semaphore.write().await.close();
         let mut conn = self.write_pool.acquire().await?;
-        sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-            .execute(&mut *conn)
-            .await?;
+        super::checkpoint_truncate(&mut *conn).await?;
         drop(conn);
         Ok(())
     }
@@ -1510,6 +1420,48 @@ impl MediaRepository {
         Ok(())
     }
 
+    pub async fn create_cluster_with_members(
+        &self,
+        representative_id: uuid::Uuid,
+        members: &[(uuid::Uuid, u32)],
+    ) -> Result<i64> {
+        let write_conn = self.get_write_conn().await?;
+        let mut tx = write_conn.begin().await?;
+        let created_at = chrono::Utc::now().to_rfc3339();
+
+        let cluster_id = sqlx::query!(
+            "INSERT INTO image_clusters (representative_image_id, created_at, is_resolved) VALUES (?, ?, 0)",
+            representative_id,
+            created_at
+        )
+        .execute(&mut *tx)
+        .await?
+        .last_insert_rowid();
+
+        if !members.is_empty() {
+            let mut query = String::from(
+                "INSERT INTO cluster_members (cluster_id, image_id, hamming_distance, is_best_shot, added_at) VALUES "
+            );
+            let placeholders: Vec<String> = (0..members.len())
+                .map(|_| "(?, ?, ?, 0, ?)".to_string())
+                .collect();
+            query.push_str(&placeholders.join(", "));
+
+            let mut query_builder = sqlx::query(&query);
+            for (image_id, distance) in members {
+                query_builder = query_builder
+                    .bind(cluster_id)
+                    .bind(*image_id)
+                    .bind(*distance as i32)
+                    .bind(&created_at);
+            }
+            query_builder.execute(&mut *tx).await?;
+        }
+
+        tx.commit().await?;
+        Ok(cluster_id)
+    }
+
     pub async fn get_cluster_member_count(&self, cluster_id: i64) -> Result<i64> {
         let result = sqlx::query!(
             "SELECT COUNT(*) as count FROM cluster_members WHERE cluster_id = ?",
@@ -1638,20 +1590,23 @@ impl MediaRepository {
 
     pub async fn clear_clusters(&self) -> Result<()> {
         let write_conn = self.get_write_conn().await?;
+        let mut tx = write_conn.begin().await?;
 
         sqlx::query!("DELETE FROM cluster_members")
-            .execute(write_conn.as_ref())
+            .execute(&mut *tx)
             .await?;
 
         sqlx::query!("DELETE FROM image_clusters")
-            .execute(write_conn.as_ref())
+            .execute(&mut *tx)
             .await?;
 
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn cleanup_orphaned_data(&self) -> Result<(i64, i64)> {
         let write_conn = self.get_write_conn().await?;
+        let mut tx = write_conn.begin().await?;
 
         // Delete orphaned cluster_members (images that no longer exist in media_files)
         let cluster_members_deleted = sqlx::query!(
@@ -1662,7 +1617,7 @@ impl MediaRepository {
                    JOIN media_files mf ON mi.media_id = mf.id
                )"#
         )
-        .execute(write_conn.as_ref())
+        .execute(&mut *tx)
         .await?
         .rows_affected() as i64;
 
@@ -1675,9 +1630,11 @@ impl MediaRepository {
                    JOIN media_files mf ON mi.media_id = mf.id
                )"#
         )
-        .execute(write_conn.as_ref())
+        .execute(&mut *tx)
         .await?
         .rows_affected() as i64;
+
+        tx.commit().await?;
 
         info!(
             "Cleaned up {} orphaned cluster members and {} orphaned images",
@@ -2047,28 +2004,14 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
         fs::create_dir_all(path).await?;
     }
     if !Path::new(db_path).exists() {
-        fs::File::create(db_path).await?;
-        // NOTE: Here we ensure that the DB is already initialized
         let conn = rusqlite::Connection::open_with_flags(
             db_path,
             rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
                 | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
                 | rusqlite::OpenFlags::SQLITE_OPEN_URI,
         )?;
-        conn.execute_batch(&format!(
-            r#"
-                PRAGMA journal_mode = WAL;
-                PRAGMA synchronous = FULL;
-                PRAGMA busy_timeout = 30000;
-                PRAGMA cache_size = {};
-                PRAGMA temp_store = MEMORY;
-                PRAGMA page_size = {};
-                PRAGMA secure_delete = OFF;
-                PRAGMA wal_autocheckpoint = {};
-                PRAGMA auto_vacuum = INCREMENTAL;
-                "#,
-            DEFAULT_CACHE_SIZE, DEFAULT_PAGE_SIZE, DEFAULT_WAL_CHECKPOINT
-        ))?;
+        super::apply_rusqlite_pragmas(&conn, true)?;
+        super::checkpoint_truncate_rusqlite(&conn)?;
     }
     Ok(())
 }

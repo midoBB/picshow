@@ -83,6 +83,7 @@ export default function App() {
       setSeed(Math.floor(Date.now() / 1000));
       isFirstRun.current = false;
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Empty deps - only run once on mount
 
   // Deduplicate files from paginated data
@@ -113,7 +114,9 @@ export default function App() {
     currentIndex,
     setCurrentIndex,
     isShowingControls,
-    setIsShowingControls,
+    isDecluttered,
+    toggleDeclutter,
+    toggleViewerControls,
     slideShowRef,
     isSlideshowPlaying,
     openLightbox,
@@ -243,7 +246,9 @@ export default function App() {
           onIndexChange={setCurrentIndex}
           slides={slides}
           isShowingControls={isShowingControls}
-          onControlsToggle={() => setIsShowingControls(!isShowingControls)}
+          isDecluttered={isDecluttered}
+          onControlsToggle={toggleViewerControls}
+          onDeclutterToggle={toggleDeclutter}
           onViewChange={handleViewChange}
           slideShowRef={slideShowRef}
           onCurrentSlideDelete={handleLightboxDelete}

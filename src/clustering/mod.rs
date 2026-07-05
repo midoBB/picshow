@@ -240,11 +240,9 @@ impl ClusterBuilder {
                     .replace_clusters(&old_cluster_ids, representative_id, &members_with_distances)
                     .await?
             } else {
-                let id = self.repository.create_cluster(representative_id).await?;
                 self.repository
-                    .add_batch_to_cluster(id, &members_with_distances)
-                    .await?;
-                id
+                    .create_cluster_with_members(representative_id, &members_with_distances)
+                    .await?
             };
 
             final_clusters_created += 1;
@@ -280,9 +278,6 @@ impl ClusterBuilder {
             let representative_id = cluster[0].0;
             let representative_hashes = &cluster[0].1;
 
-            let db_cluster_id = self.repository.create_cluster(representative_id).await?;
-            final_clusters_created += 1;
-
             let members_with_distances: Vec<(Uuid, u32)> = cluster
                 .iter()
                 .filter_map(|(id, hashes)| {
@@ -292,8 +287,9 @@ impl ClusterBuilder {
                 .collect();
 
             self.repository
-                .add_batch_to_cluster(db_cluster_id, &members_with_distances)
+                .create_cluster_with_members(representative_id, &members_with_distances)
                 .await?;
+            final_clusters_created += 1;
 
             images_clustered += cluster.len();
         }

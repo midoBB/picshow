@@ -8,6 +8,7 @@ import "yet-another-react-lightbox/styles.css";
 import "yet-another-react-lightbox/plugins/thumbnails.css";
 import type { SlideType } from "@/types/gallery";
 import { CustomSlide } from "./CustomSlide";
+import { DeclutterButton } from "./DeclutterButton";
 import { DeleteButton } from "./DeleteButton";
 import { FavoriteButton } from "./FavoriteButton";
 import { useLightboxKeyboardNavigation } from "@/hooks/useLightboxKeyboardNavigation";
@@ -21,7 +22,9 @@ interface LightboxContainerProps {
   onIndexChange: (index: number) => void;
   slides: SlideType[];
   isShowingControls: boolean;
+  isDecluttered: boolean;
   onControlsToggle: () => void;
+  onDeclutterToggle: () => void;
   onViewChange: ({ index }: { index: number }) => void;
   slideShowRef: React.MutableRefObject<SlideshowRef | null>;
   onCurrentSlideDelete?: (slideId: string) => void;
@@ -34,7 +37,9 @@ export const LightboxContainer = ({
   onIndexChange,
   slides,
   isShowingControls,
+  isDecluttered,
   onControlsToggle,
+  onDeclutterToggle,
   onViewChange,
   slideShowRef,
   onCurrentSlideDelete,
@@ -62,15 +67,28 @@ export const LightboxContainer = ({
           buttons: [
             <FavoriteButton key="favorite" />,
             <DeleteButton key="delete" onDelete={onCurrentSlideDelete} />,
+            <DeclutterButton
+              key="declutter"
+              isDecluttered={isDecluttered}
+              onToggle={onDeclutterToggle}
+            />,
             "close",
           ],
+        }}
+        styles={{
+          toolbar: isDecluttered ? { display: "none" } : undefined,
+          thumbnailsContainer: isDecluttered ? { display: "none" } : undefined,
         }}
         render={{
           slide: CustomSlide,
           buttonPrev:
-            isShowingControls && currentIndex > 0 ? undefined : () => null,
+            !isDecluttered && isShowingControls && currentIndex > 0
+              ? undefined
+              : () => null,
           buttonNext:
-            isShowingControls && currentIndex < slides.length - 1
+            !isDecluttered &&
+            isShowingControls &&
+            currentIndex < slides.length - 1
               ? undefined
               : () => null,
         }}
