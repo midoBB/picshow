@@ -1,15 +1,10 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
-  <defs>
-    <linearGradient id="magical-bg" x1="0%" y1="0%" x2="100%" y2="100%">
-      <stop offset="0%" style="stop-color:#8A2BE2;stop-opacity:1" />
-      <stop offset="100%" style="stop-color:#4B0082;stop-opacity:1" />
-    </linearGradient>
-  </defs>
-  <circle cx="50" cy="50" r="48" fill="url(#magical-bg)" />
-  <circle cx="50" cy="50" r="25" fill="none" stroke="#FFD700" stroke-width="4" />
-  <circle cx="50" cy="50" r="20" fill="none" stroke="#FFD700" stroke-width="2" />
-  <circle cx="50" cy="50" r="15" fill="#FFD700" />
-  <polygon points="80,30 85,35 90,30 85,25" fill="#FFFFFF" />
-  <polygon points="20,70 25,75 30,70 25,65" fill="#FFFFFF" />
-  <polygon points="75,80 78,85 81,80 78,75" fill="#FFFFFF" />
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="PicShow">
+  <rect width="100" height="100" fill="#1D2B53" />
+  <path d="M0 0h100v54L0 82Z" fill="#2775D9" />
+  <path d="M0 0h58L0 58Z" fill="#13B8A7" />
+  <path d="M24 30h52a8 8 0 0 1 8 8v32a8 8 0 0 1-8 8H24a8 8 0 0 1-8-8V38a8 8 0 0 1 8-8Z" fill="#F8FBFF" opacity="0.96" />
+  <path d="M24 70l16-18 11 12 10-11 17 17v1a4 4 0 0 1-4 4H28a4 4 0 0 1-4-4v-1Z" fill="#1D2B53" opacity="0.9" />
+  <circle cx="73" cy="34" r="8" fill="#FFBE55" />
+  <path d="M31 22h39a7 7 0 0 1 7 7v3H23v-2a8 8 0 0 1 8-8Z" fill="#FFFFFF" opacity="0.38" />
+  <path d="M33 46h20a4 4 0 0 1 4 4v1a4 4 0 0 1-4 4H33a4 4 0 0 1-4-4v-1a4 4 0 0 1 4-4Z" fill="#13B8A7" opacity="0.82" />
 </svg>

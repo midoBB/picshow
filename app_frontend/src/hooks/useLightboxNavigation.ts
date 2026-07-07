@@ -70,8 +70,7 @@ export const useLightboxNavigation = () => {
     slideChangesSinceControlsShown.current += 1;
 
     if (
-      slideChangesSinceControlsShown.current >=
-      DECLUTTER_AFTER_SLIDE_CHANGES
+      slideChangesSinceControlsShown.current >= DECLUTTER_AFTER_SLIDE_CHANGES
     ) {
       setIsDecluttered(true);
       setIsShowingControls(false);
