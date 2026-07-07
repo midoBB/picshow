@@ -11,7 +11,6 @@ use axum::{
 };
 use tower::{layer::util::Stack, ServiceBuilder};
 use tower_http::{
-    compression::CompressionLayer,
     cors::{self, CorsLayer},
     request_id::{MakeRequestUuid, PropagateRequestIdLayer, SetRequestIdLayer},
     timeout::TimeoutLayer,
@@ -24,16 +23,20 @@ pub mod first_run;
 
 type Middlewares = ServiceBuilder<
     Stack<
-        CompressionLayer,
+        PropagateRequestIdLayer,
         Stack<
-            PropagateRequestIdLayer,
-            Stack<
-                SetRequestIdLayer<MakeRequestUuid>,
-                Stack<TimeoutLayer, Stack<CorsLayer, tower::layer::util::Identity>>,
-            >,
+            SetRequestIdLayer<MakeRequestUuid>,
+            Stack<TimeoutLayer, Stack<CorsLayer, tower::layer::util::Identity>>,
         >,
     >,
 >;
+
+/// Shared middleware for the whole app. Deliberately excludes compression:
+/// tower_http's `CompressionLayer` strips `Content-Length`/`Accept-Ranges`
+/// from any response to a request that doesn't already carry a `Range`
+/// header, which breaks range-based progressive video streaming for a
+/// player's first (range-less) connection. Compression is applied
+/// separately, only to the JSON API routes (see `api::run_server`).
 pub fn middlewares() -> Middlewares {
     ServiceBuilder::new()
         .layer(
@@ -51,7 +54,6 @@ pub fn middlewares() -> Middlewares {
         .layer(PropagateRequestIdLayer::new(HeaderName::from_static(
             "x-request-id",
         )))
-        .layer(CompressionLayer::new())
 }
 
 fn serve_static_file<T>(uri: &Uri) -> impl IntoResponse

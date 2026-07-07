@@ -29,6 +29,7 @@ use tokio::{
     sync::broadcast,
 };
 use tokio_util::io::ReaderStream;
+use tower_http::compression::CompressionLayer;
 use tracing::{debug, error, info};
 use uuid::Uuid;
 
@@ -65,7 +66,17 @@ pub async fn run_server(
         settings,
         is_processing: Arc::new(tokio::sync::Mutex::new(false)),
     });
-    let api_routes = axum::Router::new()
+    // Media routes are deliberately kept out of the compression layer:
+    // tower_http's CompressionLayer strips `Content-Length`/`Accept-Ranges`
+    // from responses to any request without a `Range` header, which breaks
+    // range-based progressive playback for players (e.g. media_kit/libmpv)
+    // whose first connection is always range-less. These formats are also
+    // already compressed (jpeg/mp4), so re-compressing them is wasted work.
+    let media_routes = axum::Router::new()
+        .route("/image/:id", get(get_image))
+        .route("/video/:id", get(stream_video))
+        .route("/thumbnail/:id", get(get_thumbnail));
+    let json_routes = axum::Router::new()
         .route("/", delete(delete_files))
         .route("/", get(get_files))
         .route("/stats", get(get_stats))
@@ -73,9 +84,6 @@ pub async fn run_server(
         .route("/settings", patch(update_settings))
         .route("/:id/favorite", get(get_favorite_status))
         .route("/:id/favorite", patch(toggle_favorite))
-        .route("/image/:id", get(get_image))
-        .route("/video/:id", get(stream_video))
-        .route("/thumbnail/:id", get(get_thumbnail))
         .route("/processor-status", get(processor_status_stream))
         .route("/internal/trigger-scan", post(trigger_scan))
         .route("/internal/lock/:secret", get(lock))
@@ -83,7 +91,9 @@ pub async fn run_server(
         .route("/clusters", get(get_clusters_handler))
         .route("/clusters/:id", get(get_cluster_detail_handler))
         .route("/clusters/:id/resolve", post(resolve_cluster_handler))
-        .route("/internal/rebuild-clusters", post(rebuild_clusters_handler));
+        .route("/internal/rebuild-clusters", post(rebuild_clusters_handler))
+        .layer(CompressionLayer::new());
+    let api_routes = json_routes.merge(media_routes);
     let app = axum::Router::new()
         .nest("/api", api_routes)
         .fallback(|path: Request| async move { serve_static_file::<FrontendAssets>(path.uri()) })
