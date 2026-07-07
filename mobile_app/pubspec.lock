@@ -386,10 +386,9 @@ packages:
   k_gallery:
     dependency: "direct main"
     description:
-      name: k_gallery
-      sha256: c1fe2bdc64c1698f52df3f4f862e97b49d6a419d115ae60bd03b310cfa5f74f4
-      url: "https://pub.dev"
-    source: hosted
+      path: "vendor/k_gallery"
+      relative: true
+    source: path
     version: "1.1.1"
   leak_tracker:
     dependency: transitive
