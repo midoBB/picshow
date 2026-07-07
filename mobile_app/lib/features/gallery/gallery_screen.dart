@@ -6,7 +6,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 import 'package:k_gallery/k_gallery.dart';
 // ignore: implementation_imports
 import 'package:k_gallery/src/bloc/gallery_bloc.dart' as k_gallery_bloc;
@@ -37,7 +36,6 @@ class GalleryScreen extends ConsumerWidget {
           ? GalleryItemType.video
           : GalleryItemType.image,
       thumbnailUrl: api.thumbnailUrl(file.id),
-      description: DateFormat.yMMMd().add_jm().format(file.createdAt.toLocal()),
     );
   }
 
