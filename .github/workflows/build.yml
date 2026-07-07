@@ -110,3 +110,37 @@ jobs:
           file: picshow_x86
           asset_name: picshow-${{ github.ref_name }}-linux-x86_64
           tag: ${{ github.ref }}
+
+  build-android:
+    name: Build Flutter Android APK
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.32.0"
+          channel: "stable"
+          cache: true
+
+      - name: Install Flutter dependencies
+        working-directory: mobile_app
+        run: flutter pub get
+
+      - name: Build release APK
+        working-directory: mobile_app
+        run: |
+          VERSION="${{ github.ref_name }}"
+          VERSION="${VERSION#v}"
+          echo "Building Flutter APK version $VERSION"
+          flutter build apk --release --build-name="$VERSION" --build-number="${GITHUB_RUN_NUMBER}"
+
+      - name: Upload APK to release
+        uses: svenstaro/upload-release-action@v2
+        with:
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: mobile_app/build/app/outputs/flutter-apk/app-release.apk
+          asset_name: picshow-${{ github.ref_name }}-android.apk
+          tag: ${{ github.ref }}
