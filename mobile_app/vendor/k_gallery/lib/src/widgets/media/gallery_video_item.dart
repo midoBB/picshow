@@ -2,6 +2,7 @@ import 'dart:async';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:media_kit/media_kit.dart' hide PlayerState;
 import 'package:media_kit_video/media_kit_video.dart';
 
@@ -21,6 +22,12 @@ class GalleryVideoItem extends StatefulWidget {
   final String? noInternetMessage;
   final GalleryTheme? theme;
 
+  /// Cache manager used to download and replay the video from a local file
+  /// instead of re-streaming from the network on every view. When `null` (or
+  /// on a download/lookup failure), falls back to streaming [item.url]
+  /// directly, matching the previous behavior.
+  final BaseCacheManager? cacheManager;
+
   const GalleryVideoItem({
     super.key,
     required this.item,
@@ -29,6 +36,7 @@ class GalleryVideoItem extends StatefulWidget {
     required this.galleryBloc,
     this.noInternetMessage,
     this.theme,
+    this.cacheManager,
   });
 
   @override
@@ -101,10 +109,39 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
 
     widget.activePlayerNotifier.value = p;
 
-    p.open(Media(widget.item.url), play: false);
-    _playWithConnectivityCheck();
+    unawaited(_openMedia(p));
 
     if (mounted) setState(() {});
+  }
+
+  /// Resolves [item.url] to a local cache file via [widget.cacheManager]
+  /// (downloading it fully if not already cached) before opening it in the
+  /// player, so a replayed video plays from disk instead of re-streaming.
+  /// Falls back to the raw network URL if no cache manager is set or the
+  /// download/lookup fails.
+  Future<void> _openMedia(Player p) async {
+    var source = widget.item.url;
+    final cacheManager = widget.cacheManager;
+
+    if (cacheManager != null && source.startsWith('http')) {
+      try {
+        final file = await cacheManager.getSingleFile(
+          source,
+          key: 'video-${source.hashCode}',
+        );
+        // Superseded by a swipe-away/dispose while the download was in
+        // flight — the player this call was meant for no longer exists.
+        if (!mounted || _player != p) return;
+        source = file.path;
+      } catch (_) {
+        // Fall back to network streaming (offline-first-play, disk full,
+        // 404, etc.) — same behavior as before caching was added.
+      }
+    }
+
+    if (!mounted || _player != p) return;
+    await p.open(Media(source), play: false);
+    _playWithConnectivityCheck();
   }
 
   void _markVideoDimensionsReady() {

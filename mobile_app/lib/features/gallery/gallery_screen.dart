@@ -25,7 +25,13 @@ class GalleryScreen extends ConsumerWidget {
   const GalleryScreen({super.key});
 
   static const _nearbyPreloadRadius = 3;
+  // Narrower than the image radius: videos run tens to hundreds of MB, so
+  // prefetching at the same radius as images could mean downloading a
+  // gigabyte+ per swipe-through. Radius 1 keeps "swipe to next video"
+  // feeling instant without excessive bandwidth use.
+  static const _videoPreloadRadius = 1;
   static final Set<String> _preloadingImages = <String>{};
+  static final Set<String> _preloadingVideos = <String>{};
 
   GalleryItem _galleryItemFor(MediaFile file, ApiClient api) {
     return GalleryItem(
@@ -52,11 +58,15 @@ class GalleryScreen extends ConsumerWidget {
     return (mediaQuery.size.width * mediaQuery.devicePixelRatio).ceil();
   }
 
-  Iterable<int> _nearbyPreloadIndexes(int currentIndex, int itemCount) sync* {
+  Iterable<int> _nearbyPreloadIndexes(
+    int currentIndex,
+    int itemCount, {
+    int radius = _nearbyPreloadRadius,
+  }) sync* {
     if (currentIndex < 0 || currentIndex >= itemCount) return;
 
     yield currentIndex;
-    for (var offset = 1; offset <= _nearbyPreloadRadius; offset++) {
+    for (var offset = 1; offset <= radius; offset++) {
       final nextIndex = currentIndex + offset;
       if (nextIndex < itemCount) yield nextIndex;
 
@@ -96,6 +106,20 @@ class GalleryScreen extends ConsumerWidget {
     }
   }
 
+  Future<void> _precacheVideo(String url) async {
+    if (!_preloadingVideos.add(url)) return;
+    try {
+      await VideoCacheManager.instance.getSingleFile(
+        url,
+        key: 'video-${url.hashCode}',
+      );
+    } catch (_) {
+      // Best-effort prefetch; playback will fall back to network streaming.
+    } finally {
+      _preloadingVideos.remove(url);
+    }
+  }
+
   void _preloadNearbySlides(
     BuildContext context,
     List<MediaFile> files,
@@ -124,6 +148,17 @@ class GalleryScreen extends ConsumerWidget {
             memCacheWidth: memCacheWidth,
           ),
         );
+      }
+    }
+
+    for (final index in _nearbyPreloadIndexes(
+      currentIndex,
+      files.length,
+      radius: _videoPreloadRadius,
+    )) {
+      final file = files[index];
+      if (file.mediaType == MediaType.video) {
+        unawaited(_precacheVideo(api.videoUrl(file.id)));
       }
     }
   }
@@ -302,6 +337,7 @@ class GalleryScreen extends ConsumerWidget {
         contentList: items,
         initialIndex: startIndex,
         cacheManager: FullImageCacheManager.instance,
+        videoCacheManager: VideoCacheManager.instance,
         memCacheWidth: memCacheWidth,
         noInternetMessage: 'Failed to load media',
         onIndexChanged: (index) {

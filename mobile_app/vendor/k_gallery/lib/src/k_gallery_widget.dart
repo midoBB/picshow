@@ -94,6 +94,14 @@ class KGallery extends StatefulWidget {
   /// `cached_network_image`'s shared `DefaultCacheManager` when `null`.
   final BaseCacheManager? cacheManager;
 
+  /// Cache manager used for network videos.
+  ///
+  /// When provided, a played video is downloaded to disk once via
+  /// [BaseCacheManager.getSingleFile] and played from the local file on
+  /// subsequent views instead of re-streaming from the network. Defaults to
+  /// `null` (no video caching — always streams from the network URL).
+  final BaseCacheManager? videoCacheManager;
+
   /// Caps the width (in pixels) of the bitmap kept in memory for full-screen
   /// network images, forwarded to `CachedNetworkImage.memCacheWidth`.
   ///
@@ -123,6 +131,7 @@ class KGallery extends StatefulWidget {
     this.theme,
     this.actionMenuBuilder,
     this.cacheManager,
+    this.videoCacheManager,
     this.memCacheWidth,
   })  : assert(contentList.length > 0, 'contentList must not be empty'),
         assert(
@@ -186,6 +195,7 @@ class KGallery extends StatefulWidget {
       List<GalleryItem> items,
     )? actionMenuBuilder,
     BaseCacheManager? cacheManager,
+    BaseCacheManager? videoCacheManager,
     int? memCacheWidth,
     Duration transitionDuration = const Duration(milliseconds: 250),
   }) {
@@ -214,6 +224,7 @@ class KGallery extends StatefulWidget {
             theme: theme,
             actionMenuBuilder: actionMenuBuilder,
             cacheManager: cacheManager,
+            videoCacheManager: videoCacheManager,
             memCacheWidth: memCacheWidth,
           ),
         ),
@@ -317,6 +328,7 @@ class _KGalleryState extends State<KGallery> with TickerProviderStateMixin {
                         noInternetMessage: widget.noInternetMessage ?? _effectiveTheme.noInternetMessage,
                         theme: _effectiveTheme,
                         cacheManager: widget.cacheManager,
+                        videoCacheManager: widget.videoCacheManager,
                         memCacheWidth: widget.memCacheWidth,
                       ),
 

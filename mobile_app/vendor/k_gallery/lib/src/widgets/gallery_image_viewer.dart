@@ -42,6 +42,10 @@ class GalleryImageViewer extends StatefulWidget {
   /// audio artwork).
   final BaseCacheManager? cacheManager;
 
+  /// Cache manager forwarded to network video sources, so a played video is
+  /// downloaded to disk once and replayed from the local file afterward.
+  final BaseCacheManager? videoCacheManager;
+
   /// In-memory decode width cap forwarded to full-screen network images.
   final int? memCacheWidth;
 
@@ -57,6 +61,7 @@ class GalleryImageViewer extends StatefulWidget {
     this.noInternetMessage,
     this.theme,
     this.cacheManager,
+    this.videoCacheManager,
     this.memCacheWidth,
   });
 
@@ -376,6 +381,7 @@ class _GalleryImageViewerState extends State<GalleryImageViewer> with SingleTick
             galleryBloc: bloc,
             noInternetMessage: widget.noInternetMessage,
             theme: widget.theme,
+            cacheManager: widget.videoCacheManager,
           ),
         );
       case GalleryItemType.audio:

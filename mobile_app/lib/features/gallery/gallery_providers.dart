@@ -1,8 +1,10 @@
+import 'dart:async';
 import 'dart:math';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
+import 'package:picshow_mobile/core/network/media_cache_evictor.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/widgets/toasts.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
@@ -45,6 +47,17 @@ class PagedFilesNotifier
   @override
   Future<PagedFilesState> build(GalleryQuery arg) async {
     final api = ref.watch(apiClientProvider);
+
+    // Best-effort: if a previous fetch is available (e.g. this is a
+    // refresh), diff ids to evict disk-cached media for files that have
+    // disappeared server-side. See MediaCacheEvictor for details.
+    List<MediaFile>? previousFiles;
+    try {
+      previousFiles = state.valueOrNull?.files;
+    } catch (_) {
+      previousFiles = null;
+    }
+
     final result = await api.listFiles(
       page: 1,
       order: arg.order.apiValue,
@@ -52,6 +65,18 @@ class PagedFilesNotifier
       seed: arg.seed,
       type: arg.filter.apiValue,
     );
+
+    if (previousFiles != null) {
+      final newIds = result.files.map((f) => f.id).toSet();
+      final vanishedIds = previousFiles
+          .map((f) => f.id)
+          .where((id) => !newIds.contains(id));
+      final evictor = MediaCacheEvictor(api);
+      for (final id in vanishedIds) {
+        unawaited(evictor.evict(id));
+      }
+    }
+
     return PagedFilesState(
       files: result.files,
       nextPage: result.pagination.nextPage,
