@@ -13,7 +13,7 @@ use anyhow::Result;
 use axum::{
     body::Body,
     extract::{Path, Query, Request, State},
-    http::{header, HeaderMap, StatusCode},
+    http::{header, HeaderMap, HeaderValue, StatusCode},
     middleware,
     response::{sse::Event, IntoResponse, Sse},
     routing::{delete, get, patch, post},
@@ -23,7 +23,11 @@ use axum::{
 use chrono::DateTime;
 use local_ip_address::list_afinet_netifas;
 use serde_json::json;
-use tokio::{fs::File, sync::broadcast};
+use tokio::{
+    fs::File,
+    io::{AsyncReadExt, AsyncSeekExt, SeekFrom},
+    sync::broadcast,
+};
 use tokio_util::io::ReaderStream;
 use tracing::{debug, error, info};
 use uuid::Uuid;
@@ -259,18 +263,238 @@ async fn get_media_file(state: Arc<AppState>, id: String, headers: HeaderMap) ->
         }
     };
 
+    let file_size = match file.metadata().await {
+        Ok(metadata) => metadata.len(),
+        Err(e) => {
+            tracing::error!("Failed to read file metadata: {:?}", e);
+            return (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                axum::response::Json(json!({"error": "Failed to read file metadata"})),
+            )
+                .into_response();
+        }
+    };
+
+    let range = match headers
+        .get(header::RANGE)
+        .and_then(|h| h.to_str().ok())
+        .map(|range| parse_byte_range(range, file_size))
+    {
+        Some(Ok(range)) => Some(range),
+        Some(Err(e)) => {
+            debug!("Invalid Range header: {}", e);
+            return range_not_satisfiable_response(file_size);
+        }
+        None => None,
+    };
+
+    match range {
+        Some(range) => stream_byte_range(file, &media_file, file_size, range).await,
+        None => stream_full_file(file, &media_file, file_size),
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ByteRange {
+    start: u64,
+    end: u64,
+}
+
+impl ByteRange {
+    fn len(self) -> u64 {
+        self.end - self.start + 1
+    }
+}
+
+fn parse_byte_range(range_header: &str, file_size: u64) -> Result<ByteRange, &'static str> {
+    let range_set = range_header
+        .strip_prefix("bytes=")
+        .ok_or("only bytes ranges are supported")?;
+    if range_set.contains(',') {
+        return Err("multipart ranges are not supported");
+    }
+
+    let (start, end) = range_set
+        .split_once('-')
+        .ok_or("range must contain a dash")?;
+    if start.is_empty() && end.is_empty() {
+        return Err("range start and end are both empty");
+    }
+
+    if start.is_empty() {
+        let suffix_len = end.parse::<u64>().map_err(|_| "invalid suffix length")?;
+        if suffix_len == 0 || file_size == 0 {
+            return Err("suffix range is not satisfiable");
+        }
+        let start = file_size.saturating_sub(suffix_len);
+        return Ok(ByteRange {
+            start,
+            end: file_size - 1,
+        });
+    }
+
+    let start = start.parse::<u64>().map_err(|_| "invalid range start")?;
+    if start >= file_size {
+        return Err("range start is not satisfiable");
+    }
+
+    let end = if end.is_empty() {
+        file_size - 1
+    } else {
+        end.parse::<u64>().map_err(|_| "invalid range end")?
+    };
+    if end < start {
+        return Err("range end is before start");
+    }
+
+    Ok(ByteRange {
+        start,
+        end: end.min(file_size - 1),
+    })
+}
+
+fn media_headers(media_file: &FilledMediaFile, content_length: u64) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_str(&media_file.mime_type)
+            .unwrap_or_else(|_| HeaderValue::from_static("application/octet-stream")),
+    );
+    headers.insert(
+        header::LAST_MODIFIED,
+        HeaderValue::from_str(&media_file.last_modified.to_rfc2822())
+            .expect("RFC 2822 timestamps should be valid header values"),
+    );
+    headers.insert(
+        header::CONTENT_LENGTH,
+        HeaderValue::from_str(&content_length.to_string())
+            .expect("content length should be a valid header value"),
+    );
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static("public, max-age=259200"),
+    );
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    headers
+}
+
+fn stream_full_file(
+    file: File,
+    media_file: &FilledMediaFile,
+    file_size: u64,
+) -> axum::response::Response {
     let stream = ReaderStream::new(file);
     (
         StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, media_file.mime_type),
-            (header::LAST_MODIFIED, media_file.last_modified.to_rfc2822()),
-            (header::CONTENT_LENGTH, media_file.size.to_string()),
-            (header::CACHE_CONTROL, "public, max-age=259200".to_string()),
-        ],
+        media_headers(media_file, file_size),
         Body::from_stream(stream),
     )
         .into_response()
+}
+
+async fn stream_byte_range(
+    mut file: File,
+    media_file: &FilledMediaFile,
+    file_size: u64,
+    range: ByteRange,
+) -> axum::response::Response {
+    if let Err(e) = file.seek(SeekFrom::Start(range.start)).await {
+        tracing::error!("Failed to seek file: {:?}", e);
+        return (
+            axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+            axum::response::Json(json!({"error": "Failed to seek file"})),
+        )
+            .into_response();
+    }
+
+    let mut headers = media_headers(media_file, range.len());
+    headers.insert(
+        header::CONTENT_RANGE,
+        HeaderValue::from_str(&format!(
+            "bytes {}-{}/{}",
+            range.start, range.end, file_size
+        ))
+        .expect("content range should be a valid header value"),
+    );
+
+    let stream = ReaderStream::new(file.take(range.len()));
+    (
+        StatusCode::PARTIAL_CONTENT,
+        headers,
+        Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+fn range_not_satisfiable_response(file_size: u64) -> axum::response::Response {
+    let mut headers = HeaderMap::new();
+    headers.insert(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    headers.insert(
+        header::CONTENT_RANGE,
+        HeaderValue::from_str(&format!("bytes */{}", file_size))
+            .expect("content range should be a valid header value"),
+    );
+    (StatusCode::RANGE_NOT_SATISFIABLE, headers).into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parses_closed_byte_range() {
+        assert_eq!(
+            parse_byte_range("bytes=10-19", 100),
+            Ok(ByteRange { start: 10, end: 19 })
+        );
+    }
+
+    #[test]
+    fn parses_open_ended_byte_range() {
+        assert_eq!(
+            parse_byte_range("bytes=90-", 100),
+            Ok(ByteRange { start: 90, end: 99 })
+        );
+    }
+
+    #[test]
+    fn clamps_range_end_to_file_size() {
+        assert_eq!(
+            parse_byte_range("bytes=90-200", 100),
+            Ok(ByteRange { start: 90, end: 99 })
+        );
+    }
+
+    #[test]
+    fn parses_suffix_byte_range() {
+        assert_eq!(
+            parse_byte_range("bytes=-10", 100),
+            Ok(ByteRange { start: 90, end: 99 })
+        );
+    }
+
+    #[test]
+    fn suffix_range_larger_than_file_returns_whole_file() {
+        assert_eq!(
+            parse_byte_range("bytes=-200", 100),
+            Ok(ByteRange { start: 0, end: 99 })
+        );
+    }
+
+    #[test]
+    fn rejects_unsatisfiable_byte_range() {
+        assert!(parse_byte_range("bytes=100-", 100).is_err());
+        assert!(parse_byte_range("bytes=20-10", 100).is_err());
+        assert!(parse_byte_range("bytes=-0", 100).is_err());
+    }
+
+    #[test]
+    fn rejects_unsupported_range_headers() {
+        assert!(parse_byte_range("items=0-10", 100).is_err());
+        assert!(parse_byte_range("bytes=0-10,20-30", 100).is_err());
+        assert!(parse_byte_range("bytes=-", 100).is_err());
+        assert!(parse_byte_range("bytes=abc-10", 100).is_err());
+    }
 }
 
 async fn get_favorite_status(
