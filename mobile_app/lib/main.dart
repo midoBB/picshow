@@ -17,13 +17,13 @@ void main() async {
   runApp(
     ProviderScope(
       overrides: [appPrefsProvider.overrideWithValue(prefs)],
-      child: const PicshowApp(),
+      child: const PicShowApp(),
     ),
   );
 }
 
-class PicshowApp extends ConsumerWidget {
-  const PicshowApp({super.key});
+class PicShowApp extends ConsumerWidget {
+  const PicShowApp({super.key});
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
@@ -31,7 +31,7 @@ class PicshowApp extends ConsumerWidget {
     final serverUrl = ref.watch(serverUrlProvider);
 
     return MaterialApp(
-      title: 'Picshow',
+      title: 'PicShow',
       debugShowCheckedModeBanner: false,
       scaffoldMessengerKey: scaffoldMessengerKey,
       themeMode: themeMode,

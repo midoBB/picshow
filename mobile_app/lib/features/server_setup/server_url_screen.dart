@@ -25,7 +25,9 @@ class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
       text: widget.isEditing ? (ref.read(serverUrlProvider) ?? '') : 'https://',
     );
     if (!widget.isEditing) {
-      _controller.selection = TextSelection.collapsed(offset: _controller.text.length);
+      _controller.selection = TextSelection.collapsed(
+        offset: _controller.text.length,
+      );
     }
   }
 
@@ -60,7 +62,7 @@ class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
       if (!mounted) return;
       setState(() {
         _isValidating = false;
-        _error = 'Could not reach a Picshow server at that address';
+        _error = 'Could not reach a PicShow server at that address';
       });
       return;
     }
@@ -88,17 +90,23 @@ class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
                 if (!widget.isEditing) ...[
-                  Icon(Icons.photo_library_outlined, size: 56, color: Theme.of(context).colorScheme.primary),
+                  Icon(
+                    Icons.photo_library_outlined,
+                    size: 56,
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                   const SizedBox(height: 16),
                   Text(
-                    'Connect to Picshow',
+                    'Connect to PicShow',
                     style: Theme.of(context).textTheme.headlineSmall,
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Enter the address of your Picshow server',
-                    style: TextStyle(color: Theme.of(context).colorScheme.onSurfaceVariant),
+                    'Enter the address of your PicShow server',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onSurfaceVariant,
+                    ),
                     textAlign: TextAlign.center,
                   ),
                   const SizedBox(height: 24),
@@ -120,7 +128,10 @@ class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
                       ? const SizedBox(
                           width: 20,
                           height: 20,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
                         )
                       : const Text('Connect'),
                 ),

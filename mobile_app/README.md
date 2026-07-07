@@ -1,4 +1,4 @@
-# picshow_mobile
+# PicShow
 
 A new Flutter project.
 

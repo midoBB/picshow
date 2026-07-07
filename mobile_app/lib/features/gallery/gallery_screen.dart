@@ -427,7 +427,7 @@ class GalleryScreen extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Picshow'),
+        title: const Text('PicShow'),
         actions: [
           PopupMenuButton<MediaFilter>(
             icon: const Icon(Icons.filter_list),
