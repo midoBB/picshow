@@ -18,13 +18,17 @@ class MediaGrid extends ConsumerStatefulWidget {
 
   final GalleryQuery query;
   final List<MediaFile> files;
-  final void Function(int index) onOpen;
+  final Future<String?> Function(int index) onOpen;
 
   @override
   ConsumerState<MediaGrid> createState() => _MediaGridState();
 }
 
 class _MediaGridState extends ConsumerState<MediaGrid> {
+  static const _gridPadding = EdgeInsets.all(8);
+  static const _mainAxisSpacing = 8.0;
+  static const _crossAxisSpacing = 8.0;
+
   final _scrollController = ScrollController();
 
   @override
@@ -54,6 +58,68 @@ class _MediaGridState extends ConsumerState<MediaGrid> {
     return 2;
   }
 
+  double _masonryTopForIndex(
+    int targetIndex,
+    int columns,
+    double viewportWidth,
+  ) {
+    final tileWidth =
+        (viewportWidth -
+            _gridPadding.horizontal -
+            _crossAxisSpacing * (columns - 1)) /
+        columns;
+    final columnHeights = List<double>.filled(columns, 0);
+
+    for (var index = 0; index <= targetIndex; index++) {
+      var shortestColumn = 0;
+      for (var column = 1; column < columns; column++) {
+        if (columnHeights[column] < columnHeights[shortestColumn]) {
+          shortestColumn = column;
+        }
+      }
+
+      if (index == targetIndex) return columnHeights[shortestColumn];
+
+      columnHeights[shortestColumn] +=
+          tileWidth / widget.files[index].thumbAspect + _mainAxisSpacing;
+    }
+
+    return 0;
+  }
+
+  void _scrollToFile(String fileId) {
+    if (!_scrollController.hasClients) return;
+
+    final targetIndex = widget.files.indexWhere((file) => file.id == fileId);
+    if (targetIndex == -1) return;
+
+    final viewportWidth =
+        context.size?.width ?? MediaQuery.of(context).size.width;
+    final columns = _columnCount(viewportWidth);
+    final targetTop = _masonryTopForIndex(targetIndex, columns, viewportWidth);
+    final viewportHeight = _scrollController.position.viewportDimension;
+    final targetOffset = targetTop + _gridPadding.top - (viewportHeight * 0.35);
+    final clampedOffset = targetOffset.clamp(
+      _scrollController.position.minScrollExtent,
+      _scrollController.position.maxScrollExtent,
+    );
+
+    _scrollController.animateTo(
+      clampedOffset,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeOutCubic,
+    );
+  }
+
+  Future<void> _openAndSyncToLastSlide(int index) async {
+    final lastFileId = await widget.onOpen(index);
+    if (!mounted || lastFileId == null) return;
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) _scrollToFile(lastFileId);
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final columns = _columnCount(MediaQuery.of(context).size.width);
@@ -65,9 +131,9 @@ class _MediaGridState extends ConsumerState<MediaGrid> {
       child: MasonryGridView.count(
         controller: _scrollController,
         crossAxisCount: columns,
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        padding: const EdgeInsets.all(8),
+        mainAxisSpacing: _mainAxisSpacing,
+        crossAxisSpacing: _crossAxisSpacing,
+        padding: _gridPadding,
         itemCount: widget.files.length,
         itemBuilder: (context, index) {
           final file = widget.files[index];
@@ -77,7 +143,7 @@ class _MediaGridState extends ConsumerState<MediaGrid> {
             heroTag: file.mediaType == MediaType.video
                 ? api.videoUrl(file.id)
                 : api.imageUrl(file.id),
-            onTap: () => widget.onOpen(index),
+            onTap: () => _openAndSyncToLastSlide(index),
           );
         },
       ),

@@ -117,24 +117,25 @@ class GalleryScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _openGallery(
+  Future<String?> _openGallery(
     BuildContext context,
     WidgetRef ref,
     GalleryQuery query,
     List<MediaFile> files,
     int initialIndex,
   ) async {
-    if (files.isEmpty) return;
+    if (files.isEmpty) return null;
 
     final api = ref.read(apiClientProvider);
     final items = [for (final file in files) _galleryItemFor(file, api)];
     final startIndex = initialIndex.clamp(0, items.length - 1).toInt();
     final memCacheWidth = _fullImageMemCacheWidth(context);
+    var lastIndex = startIndex;
 
     await WakelockPlus.enable();
     try {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      if (!context.mounted) return;
+      if (!context.mounted) return files[lastIndex].id;
       _preloadNearbySlides(
         context,
         items,
@@ -149,6 +150,7 @@ class GalleryScreen extends ConsumerWidget {
         memCacheWidth: memCacheWidth,
         noInternetMessage: 'Failed to load media',
         onIndexChanged: (index) {
+          lastIndex = index;
           _preloadNearbySlides(
             context,
             items,
@@ -185,6 +187,7 @@ class GalleryScreen extends ConsumerWidget {
           );
         },
       );
+      return files[lastIndex].id;
     } finally {
       await WakelockPlus.disable();
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
