@@ -3,10 +3,13 @@ import 'dart:math';
 
 import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import 'package:k_gallery/k_gallery.dart';
+// ignore: implementation_imports
+import 'package:k_gallery/src/bloc/gallery_bloc.dart' as k_gallery_bloc;
 import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
@@ -64,15 +67,17 @@ class GalleryScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _precacheGalleryImage(
+  Future<void> _precacheNetworkImage(
     BuildContext context,
     String url, {
+    required BaseCacheManager cacheManager,
     required int memCacheWidth,
+    String? cacheKey,
   }) async {
     if (!url.startsWith('http')) return;
 
-    final cacheKey = '$url@$memCacheWidth';
-    if (!_preloadingImages.add(cacheKey)) return;
+    final preloadKey = '$url:${cacheKey ?? url}:$memCacheWidth';
+    if (!_preloadingImages.add(preloadKey)) return;
 
     try {
       if (!context.mounted) return;
@@ -80,7 +85,8 @@ class GalleryScreen extends ConsumerWidget {
         ResizeImage(
           CachedNetworkImageProvider(
             url,
-            cacheManager: FullImageCacheManager.instance,
+            cacheManager: cacheManager,
+            cacheKey: cacheKey,
           ),
           width: memCacheWidth,
         ),
@@ -88,33 +94,180 @@ class GalleryScreen extends ConsumerWidget {
         onError: (_, _) {},
       );
     } finally {
-      _preloadingImages.remove(cacheKey);
+      _preloadingImages.remove(preloadKey);
     }
   }
 
   void _preloadNearbySlides(
     BuildContext context,
-    List<GalleryItem> items,
+    List<MediaFile> files,
+    ApiClient api,
     int currentIndex, {
     required int memCacheWidth,
   }) {
-    for (final index in _nearbyPreloadIndexes(currentIndex, items.length)) {
-      final item = items[index];
-      final preloadUrl = item.type == GalleryItemType.image
-          ? item.url
-          : item.thumbnailUrl;
-      if (preloadUrl == null) continue;
-
+    for (final index in _nearbyPreloadIndexes(currentIndex, files.length)) {
+      final file = files[index];
       unawaited(
-        _precacheGalleryImage(
+        _precacheNetworkImage(
           context,
-          preloadUrl,
-          memCacheWidth: item.type == GalleryItemType.image
-              ? memCacheWidth
-              : 400,
+          api.thumbnailUrl(file.id),
+          cacheManager: ThumbCacheManager.instance,
+          cacheKey: 'thumb-${file.id}',
+          memCacheWidth: 400,
         ),
       );
+
+      if (file.mediaType == MediaType.image) {
+        unawaited(
+          _precacheNetworkImage(
+            context,
+            api.imageUrl(file.id),
+            cacheManager: FullImageCacheManager.instance,
+            memCacheWidth: memCacheWidth,
+          ),
+        );
+      }
     }
+  }
+
+  void _replaceGalleryItems(
+    BuildContext context,
+    List<MediaFile> files,
+    ApiClient api,
+    List<GalleryItem> items,
+    k_gallery_bloc.GalleryBloc? galleryBloc,
+    int currentIndex, {
+    required int memCacheWidth,
+  }) {
+    final safeIndex = currentIndex.clamp(0, items.length - 1).toInt();
+    galleryBloc?.add(
+      k_gallery_bloc.GalleryInitialize(items: items, initialIndex: safeIndex),
+    );
+    _preloadNearbySlides(
+      context,
+      files,
+      api,
+      safeIndex,
+      memCacheWidth: memCacheWidth,
+    );
+  }
+
+  Future<void> _syncLoadedGallerySlides({
+    required BuildContext context,
+    required WidgetRef ref,
+    required GalleryQuery query,
+    required ApiClient api,
+    required int currentIndex,
+    required int memCacheWidth,
+    required k_gallery_bloc.GalleryBloc? galleryBloc,
+    required List<MediaFile> Function() getGalleryFiles,
+    required void Function(List<MediaFile> files) setGalleryFiles,
+    required void Function(List<GalleryItem> items) setGalleryItems,
+  }) async {
+    final latestBeforeLoad = ref.read(pagedFilesProvider(query)).valueOrNull;
+    if (latestBeforeLoad != null &&
+        latestBeforeLoad.files.length > getGalleryFiles().length) {
+      final updatedItems = [
+        for (final file in latestBeforeLoad.files) _galleryItemFor(file, api),
+      ];
+      setGalleryFiles(latestBeforeLoad.files);
+      setGalleryItems(updatedItems);
+      if (context.mounted) {
+        _replaceGalleryItems(
+          context,
+          latestBeforeLoad.files,
+          api,
+          updatedItems,
+          galleryBloc,
+          currentIndex,
+          memCacheWidth: memCacheWidth,
+        );
+      }
+    }
+
+    final state = ref.read(pagedFilesProvider(query)).valueOrNull;
+    if (state == null ||
+        state.isLoadingMore ||
+        !state.hasMore ||
+        currentIndex < getGalleryFiles().length - 3) {
+      return;
+    }
+
+    await ref.read(pagedFilesProvider(query).notifier).loadMore();
+    final latestAfterLoad = ref.read(pagedFilesProvider(query)).valueOrNull;
+    if (latestAfterLoad == null ||
+        latestAfterLoad.files.length <= getGalleryFiles().length) {
+      return;
+    }
+
+    final updatedItems = [
+      for (final file in latestAfterLoad.files) _galleryItemFor(file, api),
+    ];
+    setGalleryFiles(latestAfterLoad.files);
+    setGalleryItems(updatedItems);
+    if (!context.mounted) return;
+
+    _replaceGalleryItems(
+      context,
+      latestAfterLoad.files,
+      api,
+      updatedItems,
+      galleryBloc,
+      currentIndex,
+      memCacheWidth: memCacheWidth,
+    );
+  }
+
+  void _maybeLoadMoreGallerySlides({
+    required BuildContext context,
+    required WidgetRef ref,
+    required GalleryQuery query,
+    required ApiClient api,
+    required int currentIndex,
+    required int memCacheWidth,
+    required bool Function() isLoading,
+    required void Function(bool value) setLoading,
+    required k_gallery_bloc.GalleryBloc? galleryBloc,
+    required List<MediaFile> Function() getGalleryFiles,
+    required void Function(List<MediaFile> files) setGalleryFiles,
+    required void Function(List<GalleryItem> items) setGalleryItems,
+  }) {
+    if (isLoading()) return;
+    setLoading(true);
+    unawaited(
+      _syncLoadedGallerySlides(
+        context: context,
+        ref: ref,
+        query: query,
+        api: api,
+        currentIndex: currentIndex,
+        memCacheWidth: memCacheWidth,
+        galleryBloc: galleryBloc,
+        getGalleryFiles: getGalleryFiles,
+        setGalleryFiles: setGalleryFiles,
+        setGalleryItems: setGalleryItems,
+      ).whenComplete(() => setLoading(false)),
+    );
+  }
+
+  void _captureGalleryBloc(
+    BuildContext context,
+    void Function(k_gallery_bloc.GalleryBloc bloc) setGalleryBloc,
+  ) {
+    try {
+      setGalleryBloc(context.read<k_gallery_bloc.GalleryBloc>());
+    } catch (_) {
+      // The first action build can happen before the package's provider is ready.
+    }
+  }
+
+  MediaFile? _fileAt(List<MediaFile> files, int index) {
+    if (index < 0 || index >= files.length) return null;
+    return files[index];
+  }
+
+  String? _fileIdAt(List<MediaFile> files, int index) {
+    return _fileAt(files, index)?.id;
   }
 
   Future<String?> _openGallery(
@@ -127,18 +280,22 @@ class GalleryScreen extends ConsumerWidget {
     if (files.isEmpty) return null;
 
     final api = ref.read(apiClientProvider);
-    final items = [for (final file in files) _galleryItemFor(file, api)];
+    var galleryFiles = files;
+    var items = [for (final file in galleryFiles) _galleryItemFor(file, api)];
     final startIndex = initialIndex.clamp(0, items.length - 1).toInt();
     final memCacheWidth = _fullImageMemCacheWidth(context);
     var lastIndex = startIndex;
+    var isLoadingMoreSlides = false;
+    k_gallery_bloc.GalleryBloc? galleryBloc;
 
     await WakelockPlus.enable();
     try {
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.immersiveSticky);
-      if (!context.mounted) return files[lastIndex].id;
+      if (!context.mounted) return _fileIdAt(galleryFiles, lastIndex);
       _preloadNearbySlides(
         context,
-        items,
+        galleryFiles,
+        api,
         startIndex,
         memCacheWidth: memCacheWidth,
       );
@@ -153,19 +310,60 @@ class GalleryScreen extends ConsumerWidget {
           lastIndex = index;
           _preloadNearbySlides(
             context,
-            items,
+            galleryFiles,
+            api,
             index,
             memCacheWidth: memCacheWidth,
           );
-          if (index >= files.length - 3) {
-            ref.read(pagedFilesProvider(query).notifier).loadMore();
-          }
+          _maybeLoadMoreGallerySlides(
+            context: context,
+            ref: ref,
+            query: query,
+            api: api,
+            currentIndex: index,
+            memCacheWidth: memCacheWidth,
+            isLoading: () => isLoadingMoreSlides,
+            setLoading: (value) => isLoadingMoreSlides = value,
+            galleryBloc: galleryBloc,
+            getGalleryFiles: () => galleryFiles,
+            setGalleryFiles: (files) => galleryFiles = files,
+            setGalleryItems: (updatedItems) => items = updatedItems,
+          );
         },
-        actionMenuBuilder: (context, currentIndex, items) {
-          if (currentIndex < 0 || currentIndex >= files.length) {
+        actionMenuBuilder: (context, currentIndex, _) {
+          _captureGalleryBloc(context, (bloc) => galleryBloc = bloc);
+          final activeGalleryBloc = galleryBloc;
+          if (activeGalleryBloc != null &&
+              activeGalleryBloc.state.items.length != items.length) {
+            _replaceGalleryItems(
+              context,
+              galleryFiles,
+              api,
+              items,
+              activeGalleryBloc,
+              currentIndex,
+              memCacheWidth: memCacheWidth,
+            );
+          }
+          _maybeLoadMoreGallerySlides(
+            context: context,
+            ref: ref,
+            query: query,
+            api: api,
+            currentIndex: currentIndex,
+            memCacheWidth: memCacheWidth,
+            isLoading: () => isLoadingMoreSlides,
+            setLoading: (value) => isLoadingMoreSlides = value,
+            galleryBloc: galleryBloc,
+            getGalleryFiles: () => galleryFiles,
+            setGalleryFiles: (files) => galleryFiles = files,
+            setGalleryItems: (updatedItems) => items = updatedItems,
+          );
+
+          final originalFile = _fileAt(galleryFiles, currentIndex);
+          if (originalFile == null) {
             return const SizedBox(width: 48);
           }
-          final originalFile = files[currentIndex];
           return Consumer(
             builder: (context, ref, _) {
               final latestFiles = ref
@@ -187,7 +385,7 @@ class GalleryScreen extends ConsumerWidget {
           );
         },
       );
-      return files[lastIndex].id;
+      return _fileIdAt(galleryFiles, lastIndex);
     } finally {
       await WakelockPlus.disable();
       await SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
