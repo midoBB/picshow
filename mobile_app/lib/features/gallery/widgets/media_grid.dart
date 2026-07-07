@@ -60,7 +60,8 @@ class _MediaGridState extends ConsumerState<MediaGrid> {
     final api = ref.watch(apiClientProvider);
 
     return RefreshIndicator(
-      onRefresh: () => ref.read(pagedFilesProvider(widget.query).notifier).refresh(),
+      onRefresh: () =>
+          ref.read(pagedFilesProvider(widget.query).notifier).refresh(),
       child: MasonryGridView.count(
         controller: _scrollController,
         crossAxisCount: columns,
@@ -73,6 +74,9 @@ class _MediaGridState extends ConsumerState<MediaGrid> {
           return MediaTile(
             file: file,
             thumbnailUrl: api.thumbnailUrl(file.id),
+            heroTag: file.mediaType == MediaType.video
+                ? api.videoUrl(file.id)
+                : api.imageUrl(file.id),
             onTap: () => widget.onOpen(index),
           );
         },

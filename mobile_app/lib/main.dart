@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:media_kit/media_kit.dart';
+import 'package:k_gallery/k_gallery.dart';
 
 import 'package:picshow_mobile/core/config/app_prefs.dart';
 import 'package:picshow_mobile/core/providers.dart';
@@ -11,14 +11,12 @@ import 'package:picshow_mobile/features/server_setup/server_url_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  MediaKit.ensureInitialized();
+  KGallery.ensureInitialized();
   final prefs = await AppPrefs.load();
 
   runApp(
     ProviderScope(
-      overrides: [
-        appPrefsProvider.overrideWithValue(prefs),
-      ],
+      overrides: [appPrefsProvider.overrideWithValue(prefs)],
       child: const PicshowApp(),
     ),
   );

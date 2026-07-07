@@ -104,7 +104,13 @@ class PagedFilesNotifier
     _favoriteInFlight.add(id);
     final original = current.files[index];
     final optimistic = [...current.files];
-    optimistic[index] = original.copyWith(isFavorite: !original.isFavorite);
+    final shouldRemoveFromFavorites =
+        arg.filter == MediaFilter.favorite && original.isFavorite;
+    if (shouldRemoveFromFavorites) {
+      optimistic.removeAt(index);
+    } else {
+      optimistic[index] = original.copyWith(isFavorite: !original.isFavorite);
+    }
     state = AsyncData(current.copyWith(files: optimistic));
 
     final api = ref.read(apiClientProvider);
@@ -114,7 +120,14 @@ class PagedFilesNotifier
       final latest = state.valueOrNull;
       if (latest != null) {
         final rollbackIndex = latest.files.indexWhere((f) => f.id == id);
-        if (rollbackIndex != -1) {
+        if (shouldRemoveFromFavorites && rollbackIndex == -1) {
+          final rolledBack = [...latest.files];
+          rolledBack.insert(
+            index.clamp(0, rolledBack.length).toInt(),
+            original,
+          );
+          state = AsyncData(latest.copyWith(files: rolledBack));
+        } else if (rollbackIndex != -1) {
           final rolledBack = [...latest.files];
           rolledBack[rollbackIndex] = original;
           state = AsyncData(latest.copyWith(files: rolledBack));

@@ -10,11 +10,13 @@ class MediaTile extends StatelessWidget {
     super.key,
     required this.file,
     required this.thumbnailUrl,
+    required this.heroTag,
     required this.onTap,
   });
 
   final MediaFile file;
   final String thumbnailUrl;
+  final String heroTag;
   final VoidCallback onTap;
 
   @override
@@ -22,7 +24,7 @@ class MediaTile extends StatelessWidget {
     return GestureDetector(
       onTap: onTap,
       child: Hero(
-        tag: 'media-${file.id}',
+        tag: heroTag,
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
           child: Stack(
@@ -36,9 +38,12 @@ class MediaTile extends StatelessWidget {
                   cacheManager: ThumbCacheManager.instance,
                   fit: BoxFit.cover,
                   memCacheWidth: 400,
-                  placeholder: (context, url) => SkeletonTile(aspectRatio: file.thumbAspect),
+                  placeholder: (context, url) =>
+                      SkeletonTile(aspectRatio: file.thumbAspect),
                   errorWidget: (context, url, error) => Container(
-                    color: Theme.of(context).colorScheme.surfaceContainerHighest,
+                    color: Theme.of(
+                      context,
+                    ).colorScheme.surfaceContainerHighest,
                     child: const Icon(Icons.broken_image_outlined),
                   ),
                 ),
@@ -57,7 +62,11 @@ class MediaTile extends StatelessWidget {
                 const Positioned(
                   top: 6,
                   right: 6,
-                  child: Icon(Icons.favorite, color: Colors.redAccent, size: 18),
+                  child: Icon(
+                    Icons.favorite,
+                    color: Colors.redAccent,
+                    size: 18,
+                  ),
                 ),
             ],
           ),
