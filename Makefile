@@ -10,6 +10,9 @@ FRONTEND_DIR := app_frontend
 # First run frontend directory
 FIRST_RUN_DIR := first_run_frontend
 
+# Mobile app (Flutter) directory
+MOBILE_DIR := mobile_app
+
 # Timestamp files
 FRONTEND_TIMESTAMP = $(FRONTEND_DIR)/.build_timestamp
 FIRSTRUN_TIMESTAMP = $(FIRST_RUN_DIR)/.build_timestamp
@@ -76,7 +79,7 @@ $(PROJECT_NAME)_arm: format Cargo.toml Cargo.lock frontends
 
 # Clean build artifacts
 .PHONY: clean
-clean:
+clean: mobile-clean
 	@cargo clean
 	@rm -f $(PROJECT_NAME)_x64 $(PROJECT_NAME)_arm
 	@cd $(FRONTEND_DIR) && rm -rf dist node_modules
@@ -102,3 +105,20 @@ docs: gen-docs
 
 deploy: $(PROJECT_NAME)_arm
 	./deploy.sh
+
+# Flutter mobile app
+.PHONY: mobile
+mobile: $(MOBILE_DIR)/pubspec.lock
+	@cd $(MOBILE_DIR) && flutter build apk --release
+	@echo 'Built mobile app (release APK)'
+
+$(MOBILE_DIR)/pubspec.lock: $(MOBILE_DIR)/pubspec.yaml
+	@cd $(MOBILE_DIR) && flutter pub get
+
+.PHONY: mobile-run
+mobile-run: $(MOBILE_DIR)/pubspec.lock
+	@cd $(MOBILE_DIR) && flutter run
+
+.PHONY: mobile-clean
+mobile-clean:
+	@cd $(MOBILE_DIR) && flutter clean
