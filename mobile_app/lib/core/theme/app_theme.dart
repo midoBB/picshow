@@ -86,14 +86,12 @@ class AppTheme {
       ),
       cardTheme: CardThemeData(
         color: surface,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
       textTheme: ThemeData(brightness: colorScheme.brightness).textTheme.apply(
-            bodyColor: colorScheme.onSurface,
-            displayColor: colorScheme.onSurface,
-          ),
+        bodyColor: colorScheme.onSurface,
+        displayColor: colorScheme.onSurface,
+      ),
       iconTheme: IconThemeData(color: colorScheme.onSurface),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: surface,
@@ -101,19 +99,20 @@ class AppTheme {
         behavior: SnackBarBehavior.floating,
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
-        style: ElevatedButton.styleFrom(
-          backgroundColor: _primary,
-          foregroundColor: Colors.white,
-          shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(12),
-          ),
-        ).copyWith(
-          overlayColor: WidgetStateProperty.resolveWith(
-            (states) => states.contains(WidgetState.pressed)
-                ? _primaryPressed
-                : null,
-          ),
-        ),
+        style:
+            ElevatedButton.styleFrom(
+              backgroundColor: _primary,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(12),
+              ),
+            ).copyWith(
+              overlayColor: WidgetStateProperty.resolveWith(
+                (states) => states.contains(WidgetState.pressed)
+                    ? _primaryPressed
+                    : null,
+              ),
+            ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,

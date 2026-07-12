@@ -2,6 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
+import 'package:picshow_mobile/core/models/media_stats.dart';
 import 'package:picshow_mobile/core/models/pagination.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/providers.dart';
@@ -90,6 +91,21 @@ ProviderContainer _containerWith(ApiClient api) {
 }
 
 void main() {
+  test('MediaStats.fromJson parses server totals', () {
+    final stats = MediaStats.fromJson({
+      'count': 24,
+      'image_count': 18,
+      'video_count': 6,
+      'favorite_count': 4,
+      'is_processing': false,
+    });
+
+    expect(stats.totalCount, 24);
+    expect(stats.imageCount, 18);
+    expect(stats.videoCount, 6);
+    expect(stats.favoriteCount, 4);
+  });
+
   group('MediaFile.fromJson', () {
     test('parses an image file', () {
       final file = MediaFile.fromJson({

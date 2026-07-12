@@ -19,7 +19,10 @@ import 'package:picshow_mobile/core/widgets/async_states.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 import 'package:picshow_mobile/features/gallery/widgets/media_grid.dart';
+import 'package:picshow_mobile/features/gallery/widgets/media_stats_dialog.dart';
 import 'package:picshow_mobile/features/server_setup/server_url_screen.dart';
+
+enum _OverflowAction { statistics, serverUrl }
 
 class GalleryScreen extends ConsumerWidget {
   const GalleryScreen({super.key});
@@ -531,14 +534,43 @@ class GalleryScreen extends ConsumerWidget {
               ref.read(appPrefsProvider).setThemeMode(next);
             },
           ),
-          IconButton(
-            tooltip: 'Server URL',
-            icon: const Icon(Icons.settings_ethernet),
-            onPressed: () => Navigator.of(context).push(
-              MaterialPageRoute(
-                builder: (_) => const ServerUrlScreen(isEditing: true),
+          PopupMenuButton<_OverflowAction>(
+            tooltip: 'More options',
+            onSelected: (action) {
+              switch (action) {
+                case _OverflowAction.statistics:
+                  showDialog<void>(
+                    context: context,
+                    builder: (_) => const MediaStatsDialog(),
+                  );
+                  break;
+                case _OverflowAction.serverUrl:
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const ServerUrlScreen(isEditing: true),
+                    ),
+                  );
+                  break;
+              }
+            },
+            itemBuilder: (context) => const [
+              PopupMenuItem(
+                value: _OverflowAction.statistics,
+                child: ListTile(
+                  leading: Icon(Icons.insights_outlined),
+                  title: Text('Media statistics'),
+                  contentPadding: EdgeInsets.zero,
+                ),
               ),
-            ),
+              PopupMenuItem(
+                value: _OverflowAction.serverUrl,
+                child: ListTile(
+                  leading: Icon(Icons.settings_ethernet),
+                  title: Text('Server URL'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
           ),
         ],
       ),

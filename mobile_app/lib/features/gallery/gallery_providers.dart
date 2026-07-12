@@ -13,6 +13,10 @@ final galleryQueryProvider = StateProvider<GalleryQuery>(
   (ref) => GalleryQuery(seed: Random().nextInt(1 << 31)),
 );
 
+final mediaStatsProvider = FutureProvider.autoDispose(
+  (ref) => ref.watch(apiClientProvider).fetchStats(),
+);
+
 class PagedFilesState {
   const PagedFilesState({
     required this.files,

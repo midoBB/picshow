@@ -39,10 +39,6 @@ class VideoCacheManager {
   static const key = 'picshowVideoCache';
 
   static final CacheManager instance = CacheManager(
-    Config(
-      key,
-      stalePeriod: const Duration(days: 14),
-      maxNrOfCacheObjects: 60,
-    ),
+    Config(key, stalePeriod: const Duration(days: 14), maxNrOfCacheObjects: 60),
   );
 }

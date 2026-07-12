@@ -32,6 +32,8 @@ class AppPrefs {
     }
   }
 
-  Future<void> setThemeMode(ThemeMode mode) =>
-      _prefs.setString(_themeModeKey, mode == ThemeMode.light ? 'light' : 'dark');
+  Future<void> setThemeMode(ThemeMode mode) => _prefs.setString(
+    _themeModeKey,
+    mode == ThemeMode.light ? 'light' : 'dark',
+  );
 }

@@ -90,13 +90,8 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
 
     _completedSubscription = p.stream.completed.listen((completed) {
       if (!mounted || !completed) return;
-      p.seek(Duration.zero);
-      p.pause();
-      cancelHideUITimer();
-      final state = widget.galleryBloc.state;
-      if (!state.isUIVisible && state.currentIndex == widget.index) {
-        widget.galleryBloc.add(GalleryToggleUI(isVisible: true));
-      }
+      final isActive = widget.galleryBloc.state.currentIndex == widget.index;
+      if (isActive) unawaited(p.seek(Duration.zero).then((_) => p.play()));
     });
     _bufferingSubscription = p.stream.buffering.listen((isBuffering) {
       if (!mounted || _isBuffering == isBuffering) return;

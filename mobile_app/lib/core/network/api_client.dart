@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
+import 'package:picshow_mobile/core/models/media_stats.dart';
 import 'package:picshow_mobile/core/models/pagination.dart';
 
 class PagedFilesResult {
@@ -23,13 +24,15 @@ class ApiClient {
   String get baseUrl => _baseUrl;
 
   set baseUrl(String value) {
-    _baseUrl = value.endsWith('/') ? value.substring(0, value.length - 1) : value;
+    _baseUrl = value.endsWith('/')
+        ? value.substring(0, value.length - 1)
+        : value;
     _dio.options.baseUrl = '$_baseUrl/api';
   }
 
-  Future<Map<String, dynamic>> fetchStats() async {
+  Future<MediaStats> fetchStats() async {
     final response = await _dio.get<Map<String, dynamic>>('/stats');
-    return response.data!;
+    return MediaStats.fromJson(response.data!);
   }
 
   Future<PagedFilesResult> listFiles({
@@ -55,7 +58,9 @@ class ApiClient {
     final files = (data['files'] as List<dynamic>)
         .map((e) => MediaFile.fromJson(e as Map<String, dynamic>))
         .toList();
-    final pagination = Pagination.fromJson(data['pagination'] as Map<String, dynamic>);
+    final pagination = Pagination.fromJson(
+      data['pagination'] as Map<String, dynamic>,
+    );
     return PagedFilesResult(files: files, pagination: pagination);
   }
 

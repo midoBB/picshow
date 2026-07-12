@@ -19,10 +19,12 @@ class MediaCacheEvictor {
     final imageUrl = _api.imageUrl(id);
     final videoUrl = _api.videoUrl(id);
 
-    await Future.wait([
-      ThumbCacheManager.instance.removeFile('thumb-$id'),
-      FullImageCacheManager.instance.removeFile(imageUrl),
-      VideoCacheManager.instance.removeFile('video-${videoUrl.hashCode}'),
-    ].map((future) => future.catchError((_) {})));
+    await Future.wait(
+      [
+        ThumbCacheManager.instance.removeFile('thumb-$id'),
+        FullImageCacheManager.instance.removeFile(imageUrl),
+        VideoCacheManager.instance.removeFile('video-${videoUrl.hashCode}'),
+      ].map((future) => future.catchError((_) {})),
+    );
   }
 }
