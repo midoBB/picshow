@@ -16,8 +16,26 @@ final recentMediaStoreProvider = Provider<RecentMediaStore>((ref) {
   );
 });
 
-final serverUrlProvider = StateProvider<String?>((ref) {
-  return ref.watch(appPrefsProvider).serverUrl;
+class ServerUrls {
+  const ServerUrls({this.local, this.remote});
+
+  final String? local;
+  final String? remote;
+
+  bool get isEmpty =>
+      (local == null || local!.isEmpty) && (remote == null || remote!.isEmpty);
+
+  /// Candidates in try-order: the LAN address first (lower latency when
+  /// reachable), falling back to the internet-facing address.
+  List<String> get candidates => [
+    if (local != null && local!.isNotEmpty) local!,
+    if (remote != null && remote!.isNotEmpty) remote!,
+  ];
+}
+
+final serverUrlsProvider = StateProvider<ServerUrls>((ref) {
+  final prefs = ref.watch(appPrefsProvider);
+  return ServerUrls(local: prefs.localServerUrl, remote: prefs.remoteServerUrl);
 });
 
 final themeModeProvider = StateProvider<ThemeMode>((ref) {
@@ -25,9 +43,9 @@ final themeModeProvider = StateProvider<ThemeMode>((ref) {
 });
 
 final apiClientProvider = Provider<ApiClient>((ref) {
-  final serverUrl = ref.watch(serverUrlProvider);
+  final serverUrls = ref.watch(serverUrlsProvider);
   return ApiClient(
-    baseUrl: serverUrl,
+    baseUrls: serverUrls.candidates,
     onConnectionError: () =>
         ref.read(networkErrorSignalProvider.notifier).state = true,
     onConnectionSuccess: () =>

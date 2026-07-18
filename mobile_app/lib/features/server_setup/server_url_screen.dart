@@ -14,66 +14,102 @@ class ServerUrlScreen extends ConsumerStatefulWidget {
 }
 
 class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
-  late final TextEditingController _controller;
+  late final TextEditingController _localController;
+  late final TextEditingController _remoteController;
   bool _isValidating = false;
-  String? _error;
+  String? _formError;
+  String? _localError;
+  String? _remoteError;
 
   @override
   void initState() {
     super.initState();
-    _controller = TextEditingController(
-      text: widget.isEditing ? (ref.read(serverUrlProvider) ?? '') : 'https://',
-    );
-    if (!widget.isEditing) {
-      _controller.selection = TextSelection.collapsed(
-        offset: _controller.text.length,
-      );
-    }
+    final current = widget.isEditing ? ref.read(serverUrlsProvider) : null;
+    _localController = TextEditingController(text: current?.local ?? '');
+    _remoteController = TextEditingController(text: current?.remote ?? '');
   }
 
   @override
   void dispose() {
-    _controller.dispose();
+    _localController.dispose();
+    _remoteController.dispose();
     super.dispose();
   }
 
-  Future<void> _submit() async {
-    var url = _controller.text.trim();
-    if (url.isEmpty) {
-      setState(() => _error = 'Enter a server URL');
-      return;
-    }
+  String? _normalize(String raw) {
+    var url = raw.trim();
+    if (url.isEmpty) return null;
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
       url = 'http://$url';
     }
     if (url.endsWith('/')) {
       url = url.substring(0, url.length - 1);
     }
+    return url;
+  }
+
+  Future<void> _submit() async {
+    final local = _normalize(_localController.text);
+    final remote = _normalize(_remoteController.text);
 
     setState(() {
-      _isValidating = true;
-      _error = null;
+      _formError = null;
+      _localError = null;
+      _remoteError = null;
     });
 
-    final client = ApiClient(baseUrl: url);
-    try {
-      await client.fetchStats();
-    } catch (_) {
-      if (!mounted) return;
+    if (local == null && remote == null) {
+      setState(() => _formError = 'Enter at least one server URL');
+      return;
+    }
+
+    setState(() => _isValidating = true);
+
+    var localOk = true;
+    var remoteOk = true;
+    if (local != null) {
+      localOk = await _canReach(local);
+    }
+    if (remote != null) {
+      remoteOk = await _canReach(remote);
+    }
+
+    if (!mounted) return;
+
+    if (!localOk || !remoteOk) {
       setState(() {
         _isValidating = false;
-        _error = 'Could not reach a PicShow server at that address';
+        if (!localOk) {
+          _localError = 'Could not reach a PicShow server at that address';
+        }
+        if (!remoteOk) {
+          _remoteError = 'Could not reach a PicShow server at that address';
+        }
       });
       return;
     }
 
     final prefs = ref.read(appPrefsProvider);
-    await prefs.setServerUrl(url);
-    ref.read(serverUrlProvider.notifier).state = url;
+    await prefs.setServerUrls(local: local, remote: remote);
+    ref.read(serverUrlsProvider.notifier).state = ServerUrls(
+      local: local,
+      remote: remote,
+    );
 
     if (!mounted) return;
+    setState(() => _isValidating = false);
     if (widget.isEditing) {
       Navigator.of(context).pop();
+    }
+  }
+
+  Future<bool> _canReach(String url) async {
+    final client = ApiClient(baseUrls: [url]);
+    try {
+      await client.fetchStats();
+      return true;
+    } catch (_) {
+      return false;
     }
   }
 
@@ -103,7 +139,7 @@ class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Enter the address of your PicShow server',
+                    'Enter one or both addresses of your PicShow server',
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.onSurfaceVariant,
                     ),
@@ -112,14 +148,43 @@ class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
                   const SizedBox(height: 24),
                 ],
                 TextField(
-                  controller: _controller,
+                  controller: _localController,
                   keyboardType: TextInputType.url,
                   autocorrect: false,
                   decoration: InputDecoration(
-                    hintText: 'http://10.0.2.2:8281 (emulator) / LAN IP',
-                    errorText: _error,
+                    labelText: 'Local URL (LAN)',
+                    hintText: 'http://192.168.1.20:8281',
+                    errorText: _localError,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                TextField(
+                  controller: _remoteController,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  decoration: InputDecoration(
+                    labelText: 'Public URL (internet)',
+                    hintText: 'https://picshow.example.com',
+                    errorText: _remoteError,
                   ),
                   onSubmitted: (_) => _submit(),
+                ),
+                if (_formError != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    _formError!,
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.error,
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 8),
+                Text(
+                  'When both are set, PicShow tries the local address first '
+                  'and automatically falls back to the public one.',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                    color: Theme.of(context).colorScheme.onSurfaceVariant,
+                  ),
                 ),
                 const SizedBox(height: 16),
                 ElevatedButton(

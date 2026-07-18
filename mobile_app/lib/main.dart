@@ -33,7 +33,7 @@ class PicShowApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
-    final serverUrl = ref.watch(serverUrlProvider);
+    final serverUrls = ref.watch(serverUrlsProvider);
 
     return MaterialApp(
       title: 'PicShow',
@@ -42,7 +42,7 @@ class PicShowApp extends ConsumerWidget {
       themeMode: themeMode,
       theme: AppTheme.light,
       darkTheme: AppTheme.dark,
-      home: serverUrl == null || serverUrl.isEmpty
+      home: serverUrls.isEmpty
           ? const ServerUrlScreen()
           : const GalleryScreen(),
     );

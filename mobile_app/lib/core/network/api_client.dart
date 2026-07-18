@@ -12,9 +12,25 @@ class PagedFilesResult {
 }
 
 class ApiClient {
-  ApiClient({String? baseUrl, this.onConnectionError, this.onConnectionSuccess})
-    : _dio = Dio() {
-    if (baseUrl != null) this.baseUrl = baseUrl;
+  /// [baseUrls] is an ordered list of candidate server addresses (e.g. a
+  /// LAN address and a public/internet address for the same server). The
+  /// first candidate is tried by default; on a connection failure, requests
+  /// automatically retry against the remaining candidates, and whichever
+  /// one succeeds becomes the active address for subsequent calls (and for
+  /// [thumbnailUrl]/[imageUrl]/[videoUrl]).
+  ApiClient({
+    List<String> baseUrls = const [],
+    this.onConnectionError,
+    this.onConnectionSuccess,
+  }) : _candidates = baseUrls
+           .map(_normalize)
+           .where((u) => u.isNotEmpty)
+           .toList(),
+       _dio = Dio() {
+    if (_candidates.isNotEmpty) {
+      _baseUrl = _candidates.first;
+      _dio.options.baseUrl = _apiBaseUrl;
+    }
     _dio.options.connectTimeout = const Duration(seconds: 10);
     _dio.options.receiveTimeout = const Duration(seconds: 30);
     _dio.interceptors.add(
@@ -23,7 +39,28 @@ class ApiClient {
           onConnectionSuccess?.call();
           handler.next(response);
         },
-        onError: (error, handler) {
+        onError: (error, handler) async {
+          final alreadyRetried =
+              error.requestOptions.extra['_failoverRetried'] == true;
+          if (isConnectionError(error) &&
+              !alreadyRetried &&
+              _candidates.length > 1) {
+            for (final candidate in _candidates) {
+              if (candidate == _baseUrl) continue;
+              try {
+                final options = error.requestOptions
+                  ..extra['_failoverRetried'] = true
+                  ..baseUrl = '$candidate/api';
+                final response = await _dio.fetch<dynamic>(options);
+                baseUrl = candidate;
+                onConnectionSuccess?.call();
+                handler.resolve(response);
+                return;
+              } on DioException {
+                continue;
+              }
+            }
+          }
           if (isConnectionError(error)) onConnectionError?.call();
           handler.next(error);
         },
@@ -40,16 +77,22 @@ class ApiClient {
       e.type == DioExceptionType.sendTimeout ||
       e.type == DioExceptionType.receiveTimeout;
 
+  static String _normalize(String value) =>
+      value.endsWith('/') ? value.substring(0, value.length - 1) : value;
+
   final Dio _dio;
+  final List<String> _candidates;
   String _baseUrl = '';
 
+  String get _apiBaseUrl => '$_baseUrl/api';
+
+  /// The currently-active server address (starts as the first candidate;
+  /// switches to whichever one last answered successfully).
   String get baseUrl => _baseUrl;
 
   set baseUrl(String value) {
-    _baseUrl = value.endsWith('/')
-        ? value.substring(0, value.length - 1)
-        : value;
-    _dio.options.baseUrl = '$_baseUrl/api';
+    _baseUrl = _normalize(value);
+    _dio.options.baseUrl = _apiBaseUrl;
   }
 
   Future<MediaStats> fetchStats() async {
