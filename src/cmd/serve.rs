@@ -32,6 +32,7 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     let processor_shutdown = shutdown_tx.subscribe();
     let command_shutdown = shutdown_tx.subscribe();
     let api_shutdown = shutdown_tx.subscribe();
+    let backup_shutdown = shutdown_tx.subscribe();
 
     // Initialize ConfigManager
     let config_manager = ConfigManager::new((*config).clone()).await?;
@@ -98,6 +99,19 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
         let mut shutdown_rx = command_shutdown;
         command_handler.run_command_handler(&mut shutdown_rx).await;
     });
+    let mut backup_config_change_rx = config_manager.subscribe();
+    let backup_config = config.clone();
+    let backup_repository = repository.clone();
+    let backup_handle = tokio::spawn(async move {
+        let mut shutdown_rx = backup_shutdown;
+        run_backup_scheduler(
+            backup_config,
+            backup_repository,
+            &mut shutdown_rx,
+            &mut backup_config_change_rx,
+        )
+        .await
+    });
     let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     tokio::select! {
         _ = tokio::signal::ctrl_c() => {}
@@ -105,9 +119,106 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     }
     debug!("Shutting down...");
     shutdown_tx.send(())?;
-    let _ = tokio::join!(processorer_handle, api_handle, command_handle);
+    let _ = tokio::join!(processorer_handle, api_handle, command_handle, backup_handle);
     repository.cleanup().await?;
     Ok(())
+}
+
+fn backup_interval(config: &AppConfig) -> Option<Interval> {
+    if !config.backup_scheduled_enabled {
+        return None;
+    }
+    let seconds = (config.backup_interval_hours as u64).saturating_mul(3600).max(1);
+    Some(time::interval(Duration::from_secs(seconds)))
+}
+
+async fn run_backup_scheduler(
+    mut config: Arc<AppConfig>,
+    repository: Arc<MediaRepository>,
+    shutdown_rx: &mut tokio::sync::broadcast::Receiver<()>,
+    config_change_rx: &mut tokio::sync::broadcast::Receiver<crate::config::ConfigChange>,
+) {
+    let mut enabled = config.backup_scheduled_enabled;
+    let mut tick = backup_interval(&config);
+
+    loop {
+        tokio::select! {
+            _ = shutdown_rx.recv() => {
+                debug!("Shutting down backup scheduler");
+                break;
+            }
+            config_result = config_change_rx.recv() => {
+                if let Ok(config_change) = config_result {
+                    config = Arc::new(config_change.config);
+                    enabled = config.backup_scheduled_enabled;
+                    tick = backup_interval(&config);
+                    if enabled {
+                        info!(
+                            "Scheduled backups enabled with interval {} hours",
+                            config.backup_interval_hours
+                        );
+                    } else {
+                        info!("Scheduled backups disabled");
+                    }
+                } else {
+                    debug!("Config change receiver error: channel closed");
+                }
+            }
+            _ = async {
+                match &mut tick {
+                    Some(t) => t.tick().await,
+                    None => std::future::pending().await,
+                }
+            }, if enabled => {
+                run_scheduled_backup(&config, &repository).await;
+            }
+        }
+    }
+}
+
+async fn run_scheduled_backup(config: &AppConfig, repository: &Arc<MediaRepository>) {
+    let _file_lock = match crate::ipc::BackupFileLock::try_acquire().await {
+        Ok(lock) => lock,
+        Err(_) => {
+            debug!("Skipping scheduled backup: another backup/restore is already in progress");
+            return;
+        }
+    };
+
+    if let Err(e) = repository.lock_writes().await {
+        error!("Scheduled backup: failed to lock writes: {}", e);
+        return;
+    }
+
+    let db_path = format!("{}picshow.db", &config.db_path);
+    let destination = crate::data::backup_manager::backup_filename(&config.backup_folder_path);
+    info!("Starting scheduled backup to {}", destination);
+    let backup_result = async {
+        let manager = crate::data::backup_manager::BackupManager::new(db_path).await?;
+        manager.backup(destination).await
+    }
+    .await;
+
+    if let Err(e) = repository.unlock_writes().await {
+        error!("Scheduled backup: failed to unlock writes: {}", e);
+    }
+
+    match backup_result {
+        Ok(_) => {
+            info!("Scheduled backup completed");
+            if let Err(e) = crate::data::backup_manager::rotate_backups(
+                &config.backup_folder_path,
+                config.backup_retention_count,
+            )
+            .await
+            {
+                error!("Failed to rotate old backups: {}", e);
+            }
+        }
+        Err(e) => {
+            error!("Scheduled backup failed: {}", e);
+        }
+    }
 }
 
 async fn process_files(

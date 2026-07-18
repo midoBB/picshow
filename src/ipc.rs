@@ -11,19 +11,43 @@ use crate::files::processor::DeleteMode;
 
 pub const BACKUP_LOCK_PATH: &str = "/tmp/picshow.backup.lock";
 
-pub struct OperationLock {
+/// Bare mutual-exclusion file lock around `BACKUP_LOCK_PATH`: create-or-fail,
+/// removed on drop. No signal handling of its own — safe to hold from inside a
+/// long-running process (e.g. the in-process scheduled-backup task in `serve`),
+/// unlike `OperationLock` below which is only safe in a one-shot CLI process.
+pub struct BackupFileLock {
     _file: File,
 }
 
-impl OperationLock {
-    pub async fn new() -> Result<Self> {
+impl BackupFileLock {
+    pub async fn try_acquire() -> Result<Self> {
         if (File::open(BACKUP_LOCK_PATH).await).is_ok() {
             return Err(anyhow!("Another operation is already running"));
         }
 
         let file = File::create(BACKUP_LOCK_PATH).await?;
+        Ok(Self { _file: file })
+    }
+}
 
-        let lock = Self { _file: file };
+impl Drop for BackupFileLock {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(BACKUP_LOCK_PATH);
+    }
+}
+
+/// CLI-only wrapper around `BackupFileLock`: additionally exits the process on
+/// SIGINT/SIGTERM so a killed `picshow backup`/`picshow restore` invocation
+/// doesn't leave the lock file behind. Must never be used inside `serve` — the
+/// `std::process::exit(0)` below would kill the whole server on SIGTERM instead
+/// of letting it shut down gracefully.
+pub struct OperationLock {
+    _lock: BackupFileLock,
+}
+
+impl OperationLock {
+    pub async fn new() -> Result<Self> {
+        let lock = BackupFileLock::try_acquire().await?;
 
         // Set up signal handling
         let lock_path_clone = BACKUP_LOCK_PATH.to_string();
@@ -58,13 +82,7 @@ impl OperationLock {
             std::process::exit(0);
         });
 
-        Ok(lock)
-    }
-}
-
-impl Drop for OperationLock {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_file(BACKUP_LOCK_PATH);
+        Ok(Self { _lock: lock })
     }
 }
 

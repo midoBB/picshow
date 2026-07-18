@@ -4,10 +4,11 @@ use std::{
     fs,
     path::{Path, PathBuf},
     sync::Arc,
+    time::UNIX_EPOCH,
 };
 use tokio::sync::Mutex;
 
-use tracing::info;
+use tracing::{info, warn};
 
 pub struct BackupManager {
     write_connection: Arc<Mutex<Connection>>,
@@ -121,7 +122,7 @@ impl BackupManager {
     }
 }
 
-fn verify_database_file(path: &Path) -> Result<()> {
+pub(crate) fn verify_database_file(path: &Path) -> Result<()> {
     let uri = format!("file:{}?mode=ro", path.display());
     let conn = Connection::open_with_flags(
         uri.as_str(),
@@ -129,6 +130,70 @@ fn verify_database_file(path: &Path) -> Result<()> {
     )?;
     super::apply_rusqlite_pragmas(&conn, false)?;
     super::check_rusqlite_integrity(&conn)
+}
+
+/// Build a dated backup destination path in `folder`, matching the naming
+/// convention (`picshow.<timestamp>.bak`) that `list_backups` parses back out.
+pub(crate) fn backup_filename(folder: &str) -> String {
+    let datetime = chrono::Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
+    format!("{}picshow.{}.bak", folder, datetime)
+}
+
+fn backup_timestamp(filename: &str) -> Option<chrono::NaiveDateTime> {
+    let stem = filename.strip_prefix("picshow.")?.strip_suffix(".bak")?;
+    chrono::NaiveDateTime::parse_from_str(stem, "%Y-%m-%d_%H-%M-%S").ok()
+}
+
+/// List `picshow.*.bak` files in `folder`, newest first. Falls back to file
+/// mtime for names that don't parse as our timestamp convention.
+pub(crate) fn list_backups(folder: &str) -> Result<Vec<PathBuf>> {
+    let dir = Path::new(folder);
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut entries: Vec<(PathBuf, i64)> = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = match path.file_name().and_then(|n| n.to_str()) {
+            Some(n) => n,
+            None => continue,
+        };
+        if !name.starts_with("picshow.") || !name.ends_with(".bak") {
+            continue;
+        }
+
+        let sort_key = backup_timestamp(name)
+            .map(|dt| dt.and_utc().timestamp())
+            .or_else(|| {
+                entry
+                    .metadata()
+                    .ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs() as i64)
+            })
+            .unwrap_or(0);
+        entries.push((path, sort_key));
+    }
+
+    entries.sort_by_key(|(_, ts)| std::cmp::Reverse(*ts));
+    Ok(entries.into_iter().map(|(path, _)| path).collect())
+}
+
+/// Delete every backup beyond the newest `keep` in `folder`.
+pub(crate) async fn rotate_backups(folder: &str, keep: usize) -> Result<()> {
+    let backups = list_backups(folder)?;
+    for path in backups.into_iter().skip(keep) {
+        if let Err(e) = tokio::fs::remove_file(&path).await {
+            warn!("Failed to remove old backup {}: {}", path.display(), e);
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -186,6 +251,79 @@ mod tests {
             .expect_err("corrupt restore source should fail");
         assert!(!err.to_string().is_empty());
 
+        Ok(())
+    }
+
+    #[test]
+    fn backup_filename_produces_a_parseable_dated_name() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let folder = format!("{}/", tempdir.path().display());
+
+        let path = backup_filename(&folder);
+        assert!(path.starts_with(&folder));
+
+        let filename = Path::new(&path).file_name().unwrap().to_str().unwrap();
+        assert!(backup_timestamp(filename).is_some());
+    }
+
+    #[test]
+    fn list_backups_sorts_newest_first_by_embedded_timestamp() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let folder = format!("{}/", tempdir.path().display());
+
+        for ts in [
+            "2026-01-01_00-00-00",
+            "2026-06-01_00-00-00",
+            "2026-03-01_00-00-00",
+        ] {
+            fs::write(tempdir.path().join(format!("picshow.{}.bak", ts)), b"x")?;
+        }
+        // A non-matching file should be ignored.
+        fs::write(tempdir.path().join("notes.txt"), b"x")?;
+
+        let backups = list_backups(&folder)?;
+        let names: Vec<String> = backups
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "picshow.2026-06-01_00-00-00.bak",
+                "picshow.2026-03-01_00-00-00.bak",
+                "picshow.2026-01-01_00-00-00.bak",
+            ]
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rotate_backups_keeps_only_the_newest() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let folder = format!("{}/", tempdir.path().display());
+
+        for ts in [
+            "2026-01-01_00-00-00",
+            "2026-02-01_00-00-00",
+            "2026-03-01_00-00-00",
+        ] {
+            fs::write(tempdir.path().join(format!("picshow.{}.bak", ts)), b"x")?;
+        }
+
+        rotate_backups(&folder, 2).await?;
+
+        let remaining = list_backups(&folder)?;
+        let names: Vec<String> = remaining
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().to_string())
+            .collect();
+        assert_eq!(
+            names,
+            vec![
+                "picshow.2026-03-01_00-00-00.bak",
+                "picshow.2026-02-01_00-00-00.bak",
+            ]
+        );
         Ok(())
     }
 }

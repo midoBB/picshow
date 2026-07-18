@@ -71,6 +71,13 @@ pub struct AppConfig {
     pub cluster_dbscan_min_pts: usize,
     #[serde(default = "default_cluster_kmeans_k")]
     pub cluster_kmeans_k: usize,
+    // Scheduled backup config (not exposed in frontend settings — edit config.json directly)
+    #[serde(default = "default_backup_scheduled_enabled")]
+    pub backup_scheduled_enabled: bool,
+    #[serde(default = "default_backup_interval_hours")]
+    pub backup_interval_hours: u16,
+    #[serde(default = "default_backup_retention_count")]
+    pub backup_retention_count: usize,
 }
 
 fn default_auto_refresh_enabled() -> bool {
@@ -97,6 +104,18 @@ fn default_cluster_kmeans_k() -> usize {
     10
 }
 
+fn default_backup_scheduled_enabled() -> bool {
+    true
+}
+
+fn default_backup_interval_hours() -> u16 {
+    24
+}
+
+fn default_backup_retention_count() -> usize {
+    7
+}
+
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -118,6 +137,9 @@ impl Default for AppConfig {
             cluster_threshold: default_cluster_threshold(),
             cluster_dbscan_min_pts: default_cluster_dbscan_min_pts(),
             cluster_kmeans_k: default_cluster_kmeans_k(),
+            backup_scheduled_enabled: default_backup_scheduled_enabled(),
+            backup_interval_hours: default_backup_interval_hours(),
+            backup_retention_count: default_backup_retention_count(),
         }
     }
 }
@@ -146,6 +168,9 @@ impl AppConfig {
                 || raw.get("clusterThreshold").is_none()
                 || raw.get("clusterDbscanMinPts").is_none()
                 || raw.get("clusterKmeansK").is_none()
+                || raw.get("backupScheduledEnabled").is_none()
+                || raw.get("backupIntervalHours").is_none()
+                || raw.get("backupRetentionCount").is_none()
         };
 
         let config: Self = serde_json::from_str(&config_str)

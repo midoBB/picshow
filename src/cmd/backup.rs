@@ -3,11 +3,10 @@ use std::path::PathBuf;
 use crate::{
     cmd::{make_lock_request, InternalOP},
     config::AppConfig,
-    data::backup_manager::BackupManager,
+    data::backup_manager::{backup_filename, BackupManager},
     ipc::OperationLock,
 };
 use anyhow::Result;
-use chrono::Local;
 use tracing::{debug, info};
 
 pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> Result<()> {
@@ -15,8 +14,7 @@ pub async fn handle_backup(config: AppConfig, destination: Option<PathBuf>) -> R
         .await
         .map_err(|_| anyhow::anyhow!("Another instance of backup/restore is already running"))?;
     make_lock_request(&config, InternalOP::Lock).await?;
-    let datetime = Local::now().format("%Y-%m-%d_%H-%M-%S").to_string();
-    let default_path = format!("{}picshow.{}.bak", config.backup_folder_path, datetime).to_string();
+    let default_path = backup_filename(&config.backup_folder_path);
     let dest_path = destination.unwrap_or(default_path.into());
     let dest_path = dest_path
         .as_os_str()

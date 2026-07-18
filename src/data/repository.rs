@@ -29,6 +29,65 @@ pub struct MediaRepository {
 
 impl MediaRepository {
     pub async fn new(cache: AppCache, config: Arc<AppConfig>) -> Result<Self> {
+        match Self::try_new(cache.clone(), config.clone()).await {
+            Ok(repo) => Ok(repo),
+            Err(e) => {
+                error!(
+                    "Database failed to open cleanly: {}. Attempting automatic restore from the latest verified backup...",
+                    e
+                );
+                if let Err(restore_err) = Self::restore_from_latest_backup(&config).await {
+                    error!("Automatic restore from backup failed: {}", restore_err);
+                    return Err(e);
+                }
+                info!("Restored database from backup, retrying startup");
+                Self::try_new(cache, config).await
+            }
+        }
+    }
+
+    /// Find the newest backup in `config.backup_folder_path` that passes an
+    /// integrity check, and copy it over the primary database file. The existing
+    /// (unopenable/corrupt) file is preserved alongside as `picshow.db.corrupt-<ts>`
+    /// rather than deleted, so there's forensic evidence of what went wrong.
+    async fn restore_from_latest_backup(config: &AppConfig) -> Result<()> {
+        let db_path = format!("{}picshow.db", &config.db_path);
+        let candidates = super::backup_manager::list_backups(&config.backup_folder_path)?;
+
+        for candidate in &candidates {
+            if super::backup_manager::verify_database_file(candidate).is_err() {
+                continue;
+            }
+
+            info!(
+                "Restoring database from verified backup: {}",
+                candidate.display()
+            );
+
+            if Path::new(&db_path).exists() {
+                let corrupt_marker = format!(
+                    "{}.corrupt-{}",
+                    db_path,
+                    chrono::Local::now().format("%Y-%m-%d_%H-%M-%S")
+                );
+                fs::rename(&db_path, &corrupt_marker).await?;
+                info!("Preserved corrupt database as {}", corrupt_marker);
+            }
+
+            fs::copy(candidate, &db_path).await?;
+            let _ = fs::remove_file(format!("{}-journal", db_path)).await;
+
+            return Ok(());
+        }
+
+        anyhow::bail!(
+            "No verified-good backup found among {} candidate(s) in {}",
+            candidates.len(),
+            config.backup_folder_path
+        );
+    }
+
+    async fn try_new(cache: AppCache, config: Arc<AppConfig>) -> Result<Self> {
         let db_path = format!("{}picshow.db", &config.db_path);
         ensure_dir(db_path.as_str()).await?;
         let url_db_path = &format!("sqlite://{}", db_path);
@@ -2080,6 +2139,74 @@ mod tests {
         )?;
         let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
         assert_eq!(journal_mode.to_ascii_lowercase(), "delete");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_restores_from_latest_verified_backup_when_primary_is_corrupt() -> Result<()> {
+        let data_dir = tempfile::tempdir()?;
+        let backup_dir = tempfile::tempdir()?;
+
+        let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let backup_path = format!("{}{}", backup_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let db_path = format!("{}picshow.db", data_path);
+
+        // Simulate a burked database (e.g. left mid-write by an unexpected shutdown).
+        fs::write(&db_path, b"not a sqlite database at all").await?;
+
+        // Seed one verified-good backup for startup to find and restore from.
+        let backup_file = format!("{}picshow.2026-01-01_00-00-00.bak", backup_path);
+        rusqlite::Connection::open(&backup_file)?;
+
+        let config = Arc::new(AppConfig {
+            db_path: data_path.clone(),
+            backup_folder_path: backup_path,
+            ..AppConfig::default()
+        });
+        let cache = AppCache::new(1);
+
+        let repo = MediaRepository::new(cache, config).await?;
+        repo.check_database_integrity().await?;
+
+        let corrupt_preserved = std::fs::read_dir(&data_dir)?
+            .filter_map(|entry| entry.ok())
+            .any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with("picshow.db.corrupt-")
+            });
+        assert!(
+            corrupt_preserved,
+            "expected the original corrupt db to be preserved, not deleted"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn startup_fails_closed_when_no_verified_backup_exists() -> Result<()> {
+        let data_dir = tempfile::tempdir()?;
+        let backup_dir = tempfile::tempdir()?;
+
+        let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let backup_path = format!("{}{}", backup_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let db_path = format!("{}picshow.db", data_path);
+
+        fs::write(&db_path, b"not a sqlite database at all").await?;
+
+        let config = Arc::new(AppConfig {
+            db_path: data_path,
+            backup_folder_path: backup_path,
+            ..AppConfig::default()
+        });
+        let cache = AppCache::new(1);
+
+        let err = MediaRepository::new(cache, config)
+            .await
+            .expect_err("startup should refuse to proceed with no good backup available");
+        assert!(!err.to_string().is_empty());
 
         Ok(())
     }
