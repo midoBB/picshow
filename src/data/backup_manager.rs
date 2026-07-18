@@ -51,7 +51,6 @@ impl BackupManager {
         let temp_destination = super::temp_backup_path(&destination);
         let conn = self.write_connection.lock().await;
         super::check_rusqlite_integrity(&conn)?;
-        super::checkpoint_truncate_rusqlite(&conn)?;
         let progress_fn = |p: rusqlite::backup::Progress| {
             let completed_pages = p.pagecount - p.remaining;
             let percentage = if p.pagecount > 0 {
@@ -97,7 +96,6 @@ impl BackupManager {
         };
         conn.restore(rusqlite::DatabaseName::Main, &source, Some(progress_fn))?;
         super::apply_rusqlite_pragmas(&conn, true)?;
-        super::checkpoint_truncate_rusqlite(&conn)?;
         super::check_rusqlite_integrity(&conn)?;
         Ok(())
     }
@@ -109,10 +107,6 @@ impl BackupManager {
         info!("Starting database maintenance in backup manager...");
 
         let conn = self.write_connection.lock().await;
-
-        // Checkpoint WAL to reduce file size
-        debug!("Checkpointing WAL...");
-        super::checkpoint_truncate_rusqlite(&conn)?;
 
         // Incremental vacuum to reclaim space gradually
         debug!("Performing incremental vacuum...");
@@ -156,7 +150,6 @@ mod tests {
                     INSERT INTO media_files (name) VALUES ('image.jpg');
                 "#,
             )?;
-            crate::data::checkpoint_truncate_rusqlite(&conn)?;
         }
 
         let manager = BackupManager::new(db_path.to_string_lossy().to_string()).await?;

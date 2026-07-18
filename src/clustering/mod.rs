@@ -171,10 +171,27 @@ impl ClusterBuilder {
             new_clusters.into_iter().filter(|c| c.len() > 1).collect();
 
         if should_force {
-            debug!("Force rebuild: clearing all clusters");
-            self.repository.clear_clusters().await?;
+            debug!("Force rebuild: atomically replacing all clusters");
+            let clusters_to_write: Vec<(Uuid, Vec<(Uuid, u32)>)> = new_clusters_filtered
+                .iter()
+                .map(|cluster| {
+                    let representative_id = cluster[0].0;
+                    let representative_hashes = &cluster[0].1;
+                    let members_with_distances: Vec<(Uuid, u32)> = cluster
+                        .iter()
+                        .filter_map(|(id, hashes)| {
+                            let distance = Self::min_distance(hashes, representative_hashes)?;
+                            Some((*id, distance))
+                        })
+                        .collect();
+                    (representative_id, members_with_distances)
+                })
+                .collect();
 
-            let (created, clustered) = self.write_clusters(&new_clusters_filtered).await?;
+            let (created, clustered) = self
+                .repository
+                .clear_and_create_clusters(&clusters_to_write)
+                .await?;
             let stats = ClusterStats {
                 total_images,
                 images_with_hash: total_images,
@@ -268,33 +285,6 @@ impl ClusterBuilder {
         );
 
         Ok(stats)
-    }
-
-    async fn write_clusters(&self, clusters: &[Vec<(Uuid, Vec<u64>)>]) -> Result<(usize, usize)> {
-        let mut final_clusters_created = 0;
-        let mut images_clustered = 0;
-
-        for cluster in clusters {
-            let representative_id = cluster[0].0;
-            let representative_hashes = &cluster[0].1;
-
-            let members_with_distances: Vec<(Uuid, u32)> = cluster
-                .iter()
-                .filter_map(|(id, hashes)| {
-                    let distance = Self::min_distance(hashes, representative_hashes)?;
-                    Some((*id, distance))
-                })
-                .collect();
-
-            self.repository
-                .create_cluster_with_members(representative_id, &members_with_distances)
-                .await?;
-            final_clusters_created += 1;
-
-            images_clustered += cluster.len();
-        }
-
-        Ok((final_clusters_created, images_clustered))
     }
 
     // ------------------------------------------------------------------

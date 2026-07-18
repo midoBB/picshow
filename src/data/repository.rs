@@ -18,8 +18,6 @@ use crate::cache::{self, AppCache};
 use crate::config::AppConfig;
 use crate::server::{FileQueryType, FilledFileQuery};
 
-const DEFAULT_BUSY_TIMEOUT_SECS: u64 = 10;
-
 #[derive(Clone, Debug)]
 pub struct MediaRepository {
     read_pool: sqlx::SqlitePool,
@@ -37,11 +35,9 @@ impl MediaRepository {
         let read_options = super::apply_sqlx_pragmas(
             SqliteConnectOptions::from_str(&format!("{}?mode=ro", url_db_path))?,
             false,
-        )
-        .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
+        );
         let write_options =
-            super::apply_sqlx_pragmas(SqliteConnectOptions::from_str(url_db_path)?, true)
-                .busy_timeout(Duration::from_secs(DEFAULT_BUSY_TIMEOUT_SECS));
+            super::apply_sqlx_pragmas(SqliteConnectOptions::from_str(url_db_path)?, true);
         let read_pool = SqlitePoolOptions::new()
             .max_connections(10)
             .min_connections(2)
@@ -97,7 +93,7 @@ impl MediaRepository {
 
     pub async fn check_database_integrity(&self) -> Result<()> {
         info!("Checking database integrity...");
-        super::verify_sqlx_wal_mode(self.get_read_conn()).await?;
+        super::verify_sqlx_journal_mode(self.get_read_conn()).await?;
         super::check_sqlx_integrity(self.get_read_conn())
             .await
             .map_err(|e| {
@@ -115,9 +111,6 @@ impl MediaRepository {
         use tracing::{debug, info};
 
         info!("Starting database maintenance...");
-
-        debug!("Checkpointing WAL...");
-        super::checkpoint_truncate(self.get_write_conn().await?.borrow()).await?;
 
         debug!("Performing incremental vacuum...");
         sqlx::query("PRAGMA incremental_vacuum")
@@ -145,12 +138,6 @@ impl MediaRepository {
         self.read_pool.close().await;
         loop {
             if Arc::strong_count(&self.write_pool) == 1 {
-                {
-                    let mut conn = self.write_pool.acquire().await?;
-                    if let Err(e) = super::checkpoint_truncate(&mut *conn).await {
-                        error!("Failed to checkpoint WAL during cleanup: {}", e);
-                    }
-                }
                 self.write_pool.close().await;
                 break;
             } else {
@@ -202,19 +189,11 @@ impl MediaRepository {
 
         // Force reset the write semaphore
         self.write_semaphore.write().await.close();
-        let mut conn = self.write_pool.acquire().await?;
-        super::checkpoint_truncate(&mut *conn).await?;
-        drop(conn);
         Ok(())
     }
 
     pub async fn unlock_writes(&self) -> Result<()> {
         debug!("Unlocking writes");
-        let mut conn = self.write_pool.acquire().await?;
-        sqlx::query("PRAGMA wal_checkpoint(PASSIVE)")
-            .execute(&mut *conn)
-            .await?;
-        drop(conn);
         *self.write_semaphore.write().await = Semaphore::new(1);
         self.lock_semaphore.add_permits(1);
         Ok(())
@@ -1588,20 +1567,65 @@ impl MediaRepository {
         Ok(result)
     }
 
-    pub async fn clear_clusters(&self) -> Result<()> {
+    /// Atomically replace all clusters with a freshly computed set. Unlike calling
+    /// `clear_clusters()` followed by per-cluster inserts, this runs as a single
+    /// transaction so a kill mid-rebuild leaves either the old clusters or the fully
+    /// rebuilt new ones, never a wiped-but-partially-rebuilt state.
+    pub async fn clear_and_create_clusters(
+        &self,
+        clusters: &[(Uuid, Vec<(Uuid, u32)>)],
+    ) -> Result<(usize, usize)> {
         let write_conn = self.get_write_conn().await?;
         let mut tx = write_conn.begin().await?;
 
         sqlx::query!("DELETE FROM cluster_members")
             .execute(&mut *tx)
             .await?;
-
         sqlx::query!("DELETE FROM image_clusters")
             .execute(&mut *tx)
             .await?;
 
+        let mut clusters_created = 0;
+        let mut images_clustered = 0;
+
+        for (representative_id, members) in clusters {
+            let created_at = chrono::Utc::now().to_rfc3339();
+
+            let cluster_id = sqlx::query!(
+                "INSERT INTO image_clusters (representative_image_id, created_at, is_resolved) VALUES (?, ?, 0)",
+                representative_id,
+                created_at
+            )
+            .execute(&mut *tx)
+            .await?
+            .last_insert_rowid();
+
+            if !members.is_empty() {
+                let mut query = String::from(
+                    "INSERT INTO cluster_members (cluster_id, image_id, hamming_distance, is_best_shot, added_at) VALUES "
+                );
+                let placeholders: Vec<String> = (0..members.len())
+                    .map(|_| "(?, ?, ?, 0, ?)".to_string())
+                    .collect();
+                query.push_str(&placeholders.join(", "));
+
+                let mut query_builder = sqlx::query(&query);
+                for (image_id, distance) in members {
+                    query_builder = query_builder
+                        .bind(cluster_id)
+                        .bind(*image_id)
+                        .bind(*distance as i32)
+                        .bind(&created_at);
+                }
+                query_builder.execute(&mut *tx).await?;
+            }
+
+            clusters_created += 1;
+            images_clustered += members.len();
+        }
+
         tx.commit().await?;
-        Ok(())
+        Ok((clusters_created, images_clustered))
     }
 
     pub async fn cleanup_orphaned_data(&self) -> Result<(i64, i64)> {
@@ -2003,15 +2027,60 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
     if !path.exists() {
         fs::create_dir_all(path).await?;
     }
-    if !Path::new(db_path).exists() {
-        let conn = rusqlite::Connection::open_with_flags(
-            db_path,
-            rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
-                | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
-                | rusqlite::OpenFlags::SQLITE_OPEN_URI,
-        )?;
-        super::apply_rusqlite_pragmas(&conn, true)?;
-        super::checkpoint_truncate_rusqlite(&conn)?;
-    }
+    // Always run this via a writable connection, even for a pre-existing database
+    // file: databases created by older versions of this app are still in WAL mode,
+    // and downgrading journal_mode away from WAL requires write access. Doing the
+    // migration here, before the read pool's mode=ro connections are established,
+    // means those connections only ever observe a database already in the target
+    // journal mode (a same-value PRAGMA set, which read-only connections can do).
+    let conn = rusqlite::Connection::open_with_flags(
+        db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE
+            | rusqlite::OpenFlags::SQLITE_OPEN_CREATE
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI,
+    )?;
+    super::apply_rusqlite_pragmas(&conn, true)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cache::AppCache;
+    use crate::config::AppConfig;
+
+    #[tokio::test]
+    async fn opening_a_pre_existing_wal_database_migrates_it_to_delete_mode() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let db_path = tempdir.path().join("picshow.db");
+
+        // Simulate a database created by an older version of the app, still in WAL mode.
+        {
+            let conn = rusqlite::Connection::open(&db_path)?;
+            conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+            let journal_mode: String =
+                conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+            assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        }
+
+        let config = Arc::new(AppConfig {
+            db_path: format!("{}{}", tempdir.path().display(), std::path::MAIN_SEPARATOR),
+            ..AppConfig::default()
+        });
+        let cache = AppCache::new(1);
+
+        // MediaRepository::new must migrate the file to DELETE mode (via a writable
+        // connection in `ensure_dir`) before the read-only pool ever connects to it.
+        let repo = MediaRepository::new(cache, config).await?;
+        repo.check_database_integrity().await?;
+
+        let conn = rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )?;
+        let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+        assert_eq!(journal_mode.to_ascii_lowercase(), "delete");
+
+        Ok(())
+    }
 }

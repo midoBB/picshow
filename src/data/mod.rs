@@ -15,18 +15,22 @@ use serde::{Deserialize, Serialize};
 use sqlx::{
     prelude::{FromRow, Type},
     sqlite::SqliteConnectOptions,
-    Database, Executor, Sqlite, SqlitePool,
+    Database, Sqlite, SqlitePool,
 };
 use uuid::Uuid;
 
 const CACHE_SIZE: &str = "-64000";
 const PAGE_SIZE: &str = "4096";
-const WAL_AUTOCHECKPOINT: &str = "1000";
 const BUSY_TIMEOUT_MS: &str = "30000";
 
+// Rollback-journal mode (journal_mode=DELETE) rather than WAL: this workload is
+// read-mostly with very low write volume, so we favor SQLite's oldest and most
+// battle-tested single-file crash-recovery path over WAL's throughput benefits.
+// A writer only needs the exclusive lock briefly at commit; busy_timeout absorbs
+// the resulting contention on the read pool.
 fn apply_sqlx_pragmas(mut options: SqliteConnectOptions, writable: bool) -> SqliteConnectOptions {
     options = options
-        .pragma("journal_mode", "WAL")
+        .pragma("journal_mode", "DELETE")
         .pragma("synchronous", "FULL")
         .pragma("foreign_keys", "ON")
         .pragma("busy_timeout", BUSY_TIMEOUT_MS)
@@ -34,7 +38,6 @@ fn apply_sqlx_pragmas(mut options: SqliteConnectOptions, writable: bool) -> Sqli
         .pragma("temp_store", "MEMORY")
         .pragma("page_size", PAGE_SIZE)
         .pragma("secure_delete", "OFF")
-        .pragma("wal_autocheckpoint", WAL_AUTOCHECKPOINT)
         .pragma("cell_size_check", "ON")
         .pragma("mmap_size", "0");
 
@@ -51,14 +54,9 @@ fn apply_rusqlite_pragmas(conn: &rusqlite::Connection, writable: bool) -> Result
     } else {
         ""
     };
-    let journal_mode = if writable {
-        "PRAGMA journal_mode = WAL;"
-    } else {
-        ""
-    };
     conn.execute_batch(&format!(
         r#"
-            {journal_mode}
+            PRAGMA journal_mode = DELETE;
             PRAGMA synchronous = FULL;
             PRAGMA foreign_keys = ON;
             PRAGMA busy_timeout = {BUSY_TIMEOUT_MS};
@@ -66,33 +64,30 @@ fn apply_rusqlite_pragmas(conn: &rusqlite::Connection, writable: bool) -> Result
             PRAGMA temp_store = MEMORY;
             PRAGMA page_size = {PAGE_SIZE};
             PRAGMA secure_delete = OFF;
-            PRAGMA wal_autocheckpoint = {WAL_AUTOCHECKPOINT};
             PRAGMA cell_size_check = ON;
             PRAGMA mmap_size = 0;
             {auto_vacuum}
         "#
     ))?;
-    if writable {
-        verify_rusqlite_wal_mode(conn)?;
-    }
+    verify_rusqlite_journal_mode(conn)?;
     Ok(())
 }
 
-async fn verify_sqlx_wal_mode(pool: &SqlitePool) -> Result<()> {
+async fn verify_sqlx_journal_mode(pool: &SqlitePool) -> Result<()> {
     let journal_mode: String = sqlx::query_scalar("PRAGMA journal_mode")
         .fetch_one(pool)
         .await
         .context("failed to read SQLite journal_mode")?;
-    if !journal_mode.eq_ignore_ascii_case("wal") {
-        anyhow::bail!("SQLite journal_mode is {}, expected WAL", journal_mode);
+    if !journal_mode.eq_ignore_ascii_case("delete") {
+        anyhow::bail!("SQLite journal_mode is {}, expected DELETE", journal_mode);
     }
     Ok(())
 }
 
-fn verify_rusqlite_wal_mode(conn: &rusqlite::Connection) -> Result<()> {
+fn verify_rusqlite_journal_mode(conn: &rusqlite::Connection) -> Result<()> {
     let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-    if !journal_mode.eq_ignore_ascii_case("wal") {
-        anyhow::bail!("SQLite journal_mode is {}, expected WAL", journal_mode);
+    if !journal_mode.eq_ignore_ascii_case("delete") {
+        anyhow::bail!("SQLite journal_mode is {}, expected DELETE", journal_mode);
     }
     Ok(())
 }
@@ -161,30 +156,9 @@ async fn check_sqlx_foreign_keys(pool: &SqlitePool) -> Result<()> {
     Ok(())
 }
 
-async fn checkpoint_truncate<'e, E>(executor: E) -> Result<()>
-where
-    E: Executor<'e, Database = Sqlite>,
-{
-    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
-        .execute(executor)
-        .await
-        .context("failed to checkpoint SQLite WAL")?;
-    Ok(())
-}
-
-fn checkpoint_truncate_rusqlite(conn: &rusqlite::Connection) -> Result<()> {
-    conn.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);")?;
-    Ok(())
-}
-
 fn make_standalone_database_file(path: &Path) -> Result<()> {
     let conn = rusqlite::Connection::open(path)?;
-    conn.execute_batch(
-        r#"
-            PRAGMA wal_checkpoint(TRUNCATE);
-            PRAGMA journal_mode = DELETE;
-        "#,
-    )?;
+    conn.execute_batch("PRAGMA journal_mode = DELETE;")?;
     check_rusqlite_integrity(&conn)?;
     Ok(())
 }
@@ -228,13 +202,14 @@ fn temp_backup_path(destination: &Path) -> PathBuf {
 }
 
 fn remove_sqlite_sidecars(path: &Path) -> Result<()> {
-    for suffix in ["-wal", "-shm"] {
-        let sidecar = PathBuf::from(format!("{}{}", path.display(), suffix));
-        match std::fs::remove_file(&sidecar) {
-            Ok(_) => {}
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-            Err(e) => return Err(e.into()),
-        }
+    // Under journal_mode=DELETE the only transient sidecar is `-journal`, and it's
+    // removed automatically at the end of any successfully committed transaction.
+    // This just cleans up after an interrupted backup step, defensively.
+    let sidecar = PathBuf::from(format!("{}-journal", path.display()));
+    match std::fs::remove_file(&sidecar) {
+        Ok(_) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e.into()),
     }
     Ok(())
 }
@@ -244,7 +219,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rusqlite_pragmas_enable_wal_and_integrity_checks_pass() -> Result<()> {
+    fn rusqlite_pragmas_enable_rollback_journal_and_integrity_checks_pass() -> Result<()> {
         let tempdir = tempfile::tempdir()?;
         let db_path = tempdir.path().join("picshow.db");
         let conn = rusqlite::Connection::open(&db_path)?;
@@ -256,17 +231,29 @@ mod tests {
                 INSERT INTO media_files (name) VALUES ('image.jpg');
             "#,
         )?;
-        checkpoint_truncate_rusqlite(&conn)?;
         drop(conn);
 
         let conn = rusqlite::Connection::open(&db_path)?;
         let journal_mode: String = conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
-        assert_eq!(journal_mode.to_ascii_lowercase(), "wal");
+        assert_eq!(journal_mode.to_ascii_lowercase(), "delete");
         check_rusqlite_integrity(&conn)?;
 
         let count: i64 =
             conn.query_row("SELECT COUNT(*) FROM media_files", [], |row| row.get(0))?;
         assert_eq!(count, 1);
+
+        Ok(())
+    }
+
+    #[test]
+    fn verify_rusqlite_journal_mode_rejects_wal() -> Result<()> {
+        let tempdir = tempfile::tempdir()?;
+        let db_path = tempdir.path().join("picshow.db");
+        let conn = rusqlite::Connection::open(&db_path)?;
+        conn.execute_batch("PRAGMA journal_mode = WAL;")?;
+
+        let err = verify_rusqlite_journal_mode(&conn).expect_err("WAL mode should be rejected");
+        assert!(err.to_string().contains("expected DELETE"));
 
         Ok(())
     }

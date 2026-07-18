@@ -98,7 +98,11 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
         let mut shutdown_rx = command_shutdown;
         command_handler.run_command_handler(&mut shutdown_rx).await;
     });
-    tokio::signal::ctrl_c().await?;
+    let mut sigterm = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {}
+        _ = sigterm.recv() => {}
+    }
     debug!("Shutting down...");
     shutdown_tx.send(())?;
     let _ = tokio::join!(processorer_handle, api_handle, command_handle);
