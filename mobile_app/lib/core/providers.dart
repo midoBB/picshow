@@ -3,9 +3,17 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:picshow_mobile/core/config/app_prefs.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/connectivity.dart';
+import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 
 final appPrefsProvider = Provider<AppPrefs>((ref) {
   throw UnimplementedError('appPrefsProvider must be overridden in main()');
+});
+
+final recentMediaStoreProvider = Provider<RecentMediaStore>((ref) {
+  throw UnimplementedError(
+    'recentMediaStoreProvider must be overridden in main()',
+  );
 });
 
 final serverUrlProvider = StateProvider<String?>((ref) {
@@ -18,5 +26,11 @@ final themeModeProvider = StateProvider<ThemeMode>((ref) {
 
 final apiClientProvider = Provider<ApiClient>((ref) {
   final serverUrl = ref.watch(serverUrlProvider);
-  return ApiClient(baseUrl: serverUrl);
+  return ApiClient(
+    baseUrl: serverUrl,
+    onConnectionError: () =>
+        ref.read(networkErrorSignalProvider.notifier).state = true,
+    onConnectionSuccess: () =>
+        ref.read(networkErrorSignalProvider.notifier).state = false,
+  );
 });

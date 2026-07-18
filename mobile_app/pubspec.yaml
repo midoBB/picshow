@@ -45,6 +45,9 @@ dependencies:
   k_gallery: ^1.1.1
   shared_preferences: ^2.3.3
   wakelock_plus: ^1.2.8
+  connectivity_plus: ^7.1.1
+  hive: ^2.2.3
+  hive_flutter: ^1.1.0
 
 dev_dependencies:
   flutter_test:

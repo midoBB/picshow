@@ -13,9 +13,11 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/widgets/async_states.dart';
+import 'package:picshow_mobile/core/widgets/toasts.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 import 'package:picshow_mobile/features/gallery/widgets/media_grid.dart';
@@ -83,8 +85,10 @@ class GalleryScreen extends ConsumerWidget {
     String url, {
     required BaseCacheManager cacheManager,
     required int memCacheWidth,
+    required bool online,
     String? cacheKey,
   }) async {
+    if (!online) return;
     if (!url.startsWith('http')) return;
 
     final preloadKey = '$url:${cacheKey ?? url}:$memCacheWidth';
@@ -109,7 +113,8 @@ class GalleryScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _precacheVideo(String url) async {
+  Future<void> _precacheVideo(String url, {required bool online}) async {
+    if (!online) return;
     if (!_preloadingVideos.add(url)) return;
     try {
       await VideoCacheManager.instance.getSingleFile(
@@ -129,7 +134,10 @@ class GalleryScreen extends ConsumerWidget {
     ApiClient api,
     int currentIndex, {
     required int memCacheWidth,
+    required bool online,
   }) {
+    if (!online) return;
+
     for (final index in _nearbyPreloadIndexes(currentIndex, files.length)) {
       final file = files[index];
       unawaited(
@@ -139,6 +147,7 @@ class GalleryScreen extends ConsumerWidget {
           cacheManager: ThumbCacheManager.instance,
           cacheKey: 'thumb-${file.id}',
           memCacheWidth: 400,
+          online: online,
         ),
       );
 
@@ -149,6 +158,7 @@ class GalleryScreen extends ConsumerWidget {
             api.imageUrl(file.id),
             cacheManager: FullImageCacheManager.instance,
             memCacheWidth: memCacheWidth,
+            online: online,
           ),
         );
       }
@@ -161,7 +171,7 @@ class GalleryScreen extends ConsumerWidget {
     )) {
       final file = files[index];
       if (file.mediaType == MediaType.video) {
-        unawaited(_precacheVideo(api.videoUrl(file.id)));
+        unawaited(_precacheVideo(api.videoUrl(file.id), online: online));
       }
     }
   }
@@ -174,6 +184,7 @@ class GalleryScreen extends ConsumerWidget {
     k_gallery_bloc.GalleryBloc? galleryBloc,
     int currentIndex, {
     required int memCacheWidth,
+    required bool online,
   }) {
     final safeIndex = currentIndex.clamp(0, items.length - 1).toInt();
     galleryBloc?.add(
@@ -185,6 +196,7 @@ class GalleryScreen extends ConsumerWidget {
       api,
       safeIndex,
       memCacheWidth: memCacheWidth,
+      online: online,
     );
   }
 
@@ -195,6 +207,7 @@ class GalleryScreen extends ConsumerWidget {
     required ApiClient api,
     required int currentIndex,
     required int memCacheWidth,
+    required bool online,
     required k_gallery_bloc.GalleryBloc? galleryBloc,
     required List<MediaFile> Function() getGalleryFiles,
     required void Function(List<MediaFile> files) setGalleryFiles,
@@ -217,6 +230,7 @@ class GalleryScreen extends ConsumerWidget {
           galleryBloc,
           currentIndex,
           memCacheWidth: memCacheWidth,
+          online: online,
         );
       }
     }
@@ -251,6 +265,7 @@ class GalleryScreen extends ConsumerWidget {
       galleryBloc,
       currentIndex,
       memCacheWidth: memCacheWidth,
+      online: online,
     );
   }
 
@@ -261,6 +276,7 @@ class GalleryScreen extends ConsumerWidget {
     required ApiClient api,
     required int currentIndex,
     required int memCacheWidth,
+    required bool online,
     required bool Function() isLoading,
     required void Function(bool value) setLoading,
     required k_gallery_bloc.GalleryBloc? galleryBloc,
@@ -278,6 +294,7 @@ class GalleryScreen extends ConsumerWidget {
         api: api,
         currentIndex: currentIndex,
         memCacheWidth: memCacheWidth,
+        online: online,
         galleryBloc: galleryBloc,
         getGalleryFiles: getGalleryFiles,
         setGalleryFiles: setGalleryFiles,
@@ -306,6 +323,20 @@ class GalleryScreen extends ConsumerWidget {
     return _fileAt(files, index)?.id;
   }
 
+  Future<bool> _isFullBlobCached(MediaFile file, ApiClient api) async {
+    if (file.mediaType == MediaType.video) {
+      final videoUrl = api.videoUrl(file.id);
+      final cached = await VideoCacheManager.instance.getFileFromCache(
+        'video-${videoUrl.hashCode}',
+      );
+      return cached != null;
+    }
+    final cached = await FullImageCacheManager.instance.getFileFromCache(
+      api.imageUrl(file.id),
+    );
+    return cached != null;
+  }
+
   Future<String?> _openGallery(
     BuildContext context,
     WidgetRef ref,
@@ -316,9 +347,30 @@ class GalleryScreen extends ConsumerWidget {
     if (files.isEmpty) return null;
 
     final api = ref.read(apiClientProvider);
+    final online = ref.read(isOnlineProvider);
     var galleryFiles = files;
+    var startIndex = initialIndex.clamp(0, files.length - 1).toInt();
+
+    if (!online) {
+      final tappedFile = files[startIndex];
+      final cachedFlags = await Future.wait(
+        files.map((file) => _isFullBlobCached(file, api)),
+      );
+      final cachedFiles = [
+        for (var i = 0; i < files.length; i++)
+          if (cachedFlags[i]) files[i],
+      ];
+      final tappedIndex = cachedFiles.indexWhere((f) => f.id == tappedFile.id);
+      if (tappedIndex == -1) {
+        showToast('Not available offline', isError: true);
+        return null;
+      }
+      galleryFiles = cachedFiles;
+      startIndex = tappedIndex;
+    }
+
+    if (!context.mounted) return null;
     var items = [for (final file in galleryFiles) _galleryItemFor(file, api)];
-    final startIndex = initialIndex.clamp(0, items.length - 1).toInt();
     final memCacheWidth = _fullImageMemCacheWidth(context);
     var lastIndex = startIndex;
     var isLoadingMoreSlides = false;
@@ -334,6 +386,7 @@ class GalleryScreen extends ConsumerWidget {
         api,
         startIndex,
         memCacheWidth: memCacheWidth,
+        online: online,
       );
       await KGallery.show(
         context,
@@ -351,6 +404,7 @@ class GalleryScreen extends ConsumerWidget {
             api,
             index,
             memCacheWidth: memCacheWidth,
+            online: online,
           );
           _maybeLoadMoreGallerySlides(
             context: context,
@@ -359,6 +413,7 @@ class GalleryScreen extends ConsumerWidget {
             api: api,
             currentIndex: index,
             memCacheWidth: memCacheWidth,
+            online: online,
             isLoading: () => isLoadingMoreSlides,
             setLoading: (value) => isLoadingMoreSlides = value,
             galleryBloc: galleryBloc,
@@ -380,6 +435,7 @@ class GalleryScreen extends ConsumerWidget {
               activeGalleryBloc,
               currentIndex,
               memCacheWidth: memCacheWidth,
+              online: online,
             );
           }
           _maybeLoadMoreGallerySlides(
@@ -389,6 +445,7 @@ class GalleryScreen extends ConsumerWidget {
             api: api,
             currentIndex: currentIndex,
             memCacheWidth: memCacheWidth,
+            online: online,
             isLoading: () => isLoadingMoreSlides,
             setLoading: (value) => isLoadingMoreSlides = value,
             galleryBloc: galleryBloc,
@@ -409,14 +466,19 @@ class GalleryScreen extends ConsumerWidget {
                   ?.files;
               final currentFile = _findFileById(latestFiles, originalFile.id);
               final file = currentFile ?? originalFile;
+              final canWrite = ref.watch(isOnlineProvider);
               return IconButton(
                 icon: Icon(
                   file.isFavorite ? Icons.favorite : Icons.favorite_border,
-                  color: file.isFavorite ? Colors.redAccent : Colors.white,
+                  color: !canWrite
+                      ? Colors.white38
+                      : (file.isFavorite ? Colors.redAccent : Colors.white),
                 ),
-                onPressed: () => ref
-                    .read(pagedFilesProvider(query).notifier)
-                    .toggleFavorite(originalFile.id),
+                onPressed: canWrite
+                    ? () => ref
+                          .read(pagedFilesProvider(query).notifier)
+                          .toggleFavorite(originalFile.id)
+                    : null,
               );
             },
           );
@@ -441,7 +503,8 @@ class GalleryScreen extends ConsumerWidget {
     }
   }
 
-  String _emptyMessageFor(MediaFilter filter) {
+  String _emptyMessageFor(MediaFilter filter, {required bool isOffline}) {
+    if (isOffline) return 'No cached ${filter.label.toLowerCase()} available offline';
     switch (filter) {
       case MediaFilter.video:
         return 'No videos found';
@@ -459,6 +522,7 @@ class GalleryScreen extends ConsumerWidget {
     final query = ref.watch(galleryQueryProvider);
     final asyncState = ref.watch(pagedFilesProvider(query));
     final themeMode = ref.watch(themeModeProvider);
+    final isOnline = ref.watch(isOnlineProvider);
 
     void updateQuery(GalleryQuery Function(GalleryQuery) fn) {
       ref.read(galleryQueryProvider.notifier).state = fn(query);
@@ -467,6 +531,22 @@ class GalleryScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('PicShow'),
+        bottom: isOnline
+            ? null
+            : PreferredSize(
+                preferredSize: const Size.fromHeight(28),
+                child: Container(
+                  color: Theme.of(context).colorScheme.errorContainer,
+                  alignment: Alignment.center,
+                  child: Text(
+                    'Offline — showing cached items',
+                    style: TextStyle(
+                      color: Theme.of(context).colorScheme.onErrorContainer,
+                      fontSize: 12,
+                    ),
+                  ),
+                ),
+              ),
         actions: [
           PopupMenuButton<MediaFilter>(
             icon: const Icon(Icons.filter_list),
@@ -591,7 +671,10 @@ class GalleryScreen extends ConsumerWidget {
                     height: MediaQuery.of(context).size.height * 0.7,
                     child: EmptyState(
                       icon: _emptyIconFor(query.filter),
-                      message: _emptyMessageFor(query.filter),
+                      message: _emptyMessageFor(
+                        query.filter,
+                        isOffline: state.isOffline,
+                      ),
                     ),
                   ),
                 ],

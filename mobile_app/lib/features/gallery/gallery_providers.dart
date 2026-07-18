@@ -1,9 +1,12 @@
 import 'dart:async';
 import 'dart:math';
 
+import 'package:dio/dio.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
+import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/network/media_cache_evictor.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/widgets/toasts.dart';
@@ -22,11 +25,13 @@ class PagedFilesState {
     required this.files,
     required this.nextPage,
     required this.isLoadingMore,
+    this.isOffline = false,
   });
 
   final List<MediaFile> files;
   final int? nextPage;
   final bool isLoadingMore;
+  final bool isOffline;
 
   bool get hasMore => nextPage != null;
 
@@ -35,11 +40,13 @@ class PagedFilesState {
     int? nextPage,
     bool clearNextPage = false,
     bool? isLoadingMore,
+    bool? isOffline,
   }) {
     return PagedFilesState(
       files: files ?? this.files,
       nextPage: clearNextPage ? null : (nextPage ?? this.nextPage),
       isLoadingMore: isLoadingMore ?? this.isLoadingMore,
+      isOffline: isOffline ?? this.isOffline,
     );
   }
 }
@@ -51,6 +58,17 @@ class PagedFilesNotifier
   @override
   Future<PagedFilesState> build(GalleryQuery arg) async {
     final api = ref.watch(apiClientProvider);
+    final store = ref.watch(recentMediaStoreProvider);
+    final online = ref.watch(isOnlineProvider);
+
+    if (!online) {
+      return PagedFilesState(
+        files: await store.queryOfflineFilterCached(arg),
+        nextPage: null,
+        isLoadingMore: false,
+        isOffline: true,
+      );
+    }
 
     // Best-effort: if a previous fetch is available (e.g. this is a
     // refresh), diff ids to evict disk-cached media for files that have
@@ -62,35 +80,52 @@ class PagedFilesNotifier
       previousFiles = null;
     }
 
-    final result = await api.listFiles(
-      page: 1,
-      order: arg.order.apiValue,
-      direction: arg.direction.apiValue,
-      seed: arg.seed,
-      type: arg.filter.apiValue,
-    );
+    try {
+      final result = await api.listFiles(
+        page: 1,
+        order: arg.order.apiValue,
+        direction: arg.direction.apiValue,
+        seed: arg.seed,
+        type: arg.filter.apiValue,
+      );
 
-    if (previousFiles != null) {
-      final newIds = result.files.map((f) => f.id).toSet();
-      final vanishedIds = previousFiles
-          .map((f) => f.id)
-          .where((id) => !newIds.contains(id));
-      final evictor = MediaCacheEvictor(api);
-      for (final id in vanishedIds) {
-        unawaited(evictor.evict(id));
+      if (previousFiles != null) {
+        final newIds = result.files.map((f) => f.id).toSet();
+        final vanishedIds = previousFiles
+            .map((f) => f.id)
+            .where((id) => !newIds.contains(id));
+        final evictor = MediaCacheEvictor(api);
+        for (final id in vanishedIds) {
+          unawaited(evictor.evict(id));
+        }
       }
-    }
 
-    return PagedFilesState(
-      files: result.files,
-      nextPage: result.pagination.nextPage,
-      isLoadingMore: false,
-    );
+      unawaited(store.upsertAll(result.files));
+
+      return PagedFilesState(
+        files: result.files,
+        nextPage: result.pagination.nextPage,
+        isLoadingMore: false,
+      );
+    } on DioException catch (e) {
+      if (!ApiClient.isConnectionError(e)) rethrow;
+      return PagedFilesState(
+        files: await store.queryOfflineFilterCached(arg),
+        nextPage: null,
+        isLoadingMore: false,
+        isOffline: true,
+      );
+    }
   }
 
   Future<void> loadMore() async {
     final current = state.valueOrNull;
-    if (current == null || current.isLoadingMore || !current.hasMore) return;
+    if (current == null ||
+        current.isOffline ||
+        current.isLoadingMore ||
+        !current.hasMore) {
+      return;
+    }
 
     state = AsyncData(current.copyWith(isLoadingMore: true));
     final api = ref.read(apiClientProvider);
@@ -124,6 +159,8 @@ class PagedFilesNotifier
   }
 
   Future<void> toggleFavorite(String id) async {
+    if (!ref.read(isOnlineProvider)) return;
+
     final current = state.valueOrNull;
     if (current == null || _favoriteInFlight.contains(id)) return;
 

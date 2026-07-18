@@ -22,6 +22,14 @@ class MediaMeta {
   final int thumbnailWidth;
   final int thumbnailHeight;
   final int? lengthMs;
+
+  Map<String, dynamic> toJson() => {
+    'Width': width,
+    'Height': height,
+    'ThumbnailWidth': thumbnailWidth,
+    'ThumbnailHeight': thumbnailHeight,
+    'Length': lengthMs,
+  };
 }
 
 class MediaFile {
@@ -88,4 +96,17 @@ class MediaFile {
     image: image,
     video: video,
   );
+
+  Map<String, dynamic> toJson() => {
+    'Id': id,
+    'Hash': hash,
+    'CreatedAt': createdAt.toIso8601String(),
+    'Filename': filename,
+    'Size': size,
+    'MediaType': mediaType == MediaType.video ? 'video' : 'image',
+    'MimeType': mimeType,
+    'IsFavorite': isFavorite,
+    'Image': image?.toJson(),
+    'Video': video?.toJson(),
+  };
 }

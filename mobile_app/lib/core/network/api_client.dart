@@ -12,11 +12,33 @@ class PagedFilesResult {
 }
 
 class ApiClient {
-  ApiClient({String? baseUrl}) : _dio = Dio() {
+  ApiClient({String? baseUrl, this.onConnectionError, this.onConnectionSuccess})
+    : _dio = Dio() {
     if (baseUrl != null) this.baseUrl = baseUrl;
     _dio.options.connectTimeout = const Duration(seconds: 10);
     _dio.options.receiveTimeout = const Duration(seconds: 30);
+    _dio.interceptors.add(
+      InterceptorsWrapper(
+        onResponse: (response, handler) {
+          onConnectionSuccess?.call();
+          handler.next(response);
+        },
+        onError: (error, handler) {
+          if (isConnectionError(error)) onConnectionError?.call();
+          handler.next(error);
+        },
+      ),
+    );
   }
+
+  final void Function()? onConnectionError;
+  final void Function()? onConnectionSuccess;
+
+  static bool isConnectionError(DioException e) =>
+      e.type == DioExceptionType.connectionError ||
+      e.type == DioExceptionType.connectionTimeout ||
+      e.type == DioExceptionType.sendTimeout ||
+      e.type == DioExceptionType.receiveTimeout;
 
   final Dio _dio;
   String _baseUrl = '';

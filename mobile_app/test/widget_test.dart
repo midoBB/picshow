@@ -1,3 +1,6 @@
+import 'dart:io';
+
+import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -5,7 +8,9 @@ import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/models/media_stats.dart';
 import 'package:picshow_mobile/core/models/pagination.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/providers.dart';
+import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 
@@ -84,13 +89,32 @@ MediaFile _mediaFile({
   );
 }
 
-ProviderContainer _containerWith(ApiClient api) {
+Future<ProviderContainer> _containerWith(ApiClient api) async {
+  final store = await RecentMediaStore.openInMemoryForTesting();
   return ProviderContainer(
-    overrides: [apiClientProvider.overrideWithValue(api)],
+    overrides: [
+      apiClientProvider.overrideWithValue(api),
+      recentMediaStoreProvider.overrideWithValue(store),
+      isOnlineProvider.overrideWithValue(true),
+    ],
   );
 }
 
 void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  // ThumbCacheManager (used by RecentMediaStore.queryOfflineFilterCached)
+  // reaches for the app support directory via path_provider on first use;
+  // stub it out so tests don't hang waiting on a real platform channel.
+  final pathProviderDir = Directory.systemTemp
+      .createTempSync('path_provider_test')
+      .path;
+  TestDefaultBinaryMessengerBinding.instance.defaultBinaryMessenger
+      .setMockMethodCallHandler(
+        const MethodChannel('plugins.flutter.io/path_provider'),
+        (call) async => pathProviderDir,
+      );
+
   test('MediaStats.fromJson parses server totals', () {
     final stats = MediaStats.fromJson({
       'count': 24,
@@ -218,7 +242,7 @@ void main() {
         final api = _FakeApiClient([
           _mediaFile(id: 'file-1', isFavorite: false),
         ]);
-        final container = _containerWith(api);
+        final container = await _containerWith(api);
         addTearDown(container.dispose);
 
         final provider = pagedFilesProvider(const GalleryQuery());
@@ -240,7 +264,7 @@ void main() {
         _mediaFile(id: 'favorite-1', isFavorite: true),
         _mediaFile(id: 'favorite-2', isFavorite: true),
       ]);
-      final container = _containerWith(api);
+      final container = await _containerWith(api);
       addTearDown(container.dispose);
 
       const query = GalleryQuery(filter: MediaFilter.favorite);
@@ -255,6 +279,125 @@ void main() {
       final files = container.read(provider).value!.files;
       expect(files.map((file) => file.id), ['favorite-2']);
       expect(api.toggledIds, ['favorite-1']);
+    });
+  });
+
+  group('RecentMediaStore', () {
+    test('round-trips upserted files through getAll', () async {
+      final store = await RecentMediaStore.openInMemoryForTesting();
+      final file = _mediaFile(id: 'a', isFavorite: true);
+
+      await store.upsertAll([file]);
+      final loaded = store.getAll();
+
+      expect(loaded.single.id, 'a');
+      expect(loaded.single.isFavorite, true);
+    });
+
+    test('queryOffline filters by MediaFilter', () async {
+      final store = await RecentMediaStore.openInMemoryForTesting();
+      await store.upsertAll([
+        _mediaFile(id: 'img', isFavorite: false),
+        _mediaFile(id: 'vid', isFavorite: false, mediaType: MediaType.video),
+        _mediaFile(id: 'fav', isFavorite: true),
+      ]);
+
+      final videos = store.queryOffline(
+        const GalleryQuery(filter: MediaFilter.video),
+      );
+      final favorites = store.queryOffline(
+        const GalleryQuery(filter: MediaFilter.favorite),
+      );
+
+      expect(videos.map((f) => f.id), ['vid']);
+      expect(favorites.map((f) => f.id), ['fav']);
+    });
+
+    test('queryOffline sorts by createdAt honoring direction', () async {
+      final store = await RecentMediaStore.openInMemoryForTesting();
+      final older = _mediaFile(
+        id: 'older',
+        isFavorite: false,
+      );
+      final newer = MediaFile(
+        id: 'newer',
+        hash: 'hash-newer',
+        createdAt: older.createdAt.add(const Duration(days: 1)),
+        filename: 'newer.jpg',
+        size: 1,
+        mediaType: MediaType.image,
+        mimeType: 'image/jpeg',
+        isFavorite: false,
+        image: older.image,
+      );
+      await store.upsertAll([older, newer]);
+
+      final desc = store.queryOffline(
+        const GalleryQuery(
+          order: SortOrder.createdAt,
+          direction: SortDirection.desc,
+        ),
+      );
+      final asc = store.queryOffline(
+        const GalleryQuery(
+          order: SortOrder.createdAt,
+          direction: SortDirection.asc,
+        ),
+      );
+
+      expect(desc.map((f) => f.id), ['newer', 'older']);
+      expect(asc.map((f) => f.id), ['older', 'newer']);
+    });
+  });
+
+  group('PagedFilesNotifier offline fallback', () {
+    test('falls back to recently-viewed cache when offline', () async {
+      final api = _FakeApiClient([_mediaFile(id: 'cached-1', isFavorite: false)]);
+      final store = await RecentMediaStore.openInMemoryForTesting();
+      await store.upsertAll(api.files);
+
+      final container = ProviderContainer(
+        overrides: [
+          apiClientProvider.overrideWithValue(api),
+          recentMediaStoreProvider.overrideWithValue(store),
+          isOnlineProvider.overrideWithValue(false),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final provider = pagedFilesProvider(const GalleryQuery());
+      final sub = container.listen(provider, (_, _) {});
+      addTearDown(sub.close);
+
+      final state = await container.read(provider.future);
+
+      expect(state.isOffline, true);
+      // Thumbnail bytes aren't in ThumbCacheManager's disk cache in this
+      // test environment, so the metadata-only entry is excluded.
+      expect(state.files, isEmpty);
+    });
+
+    test('loadMore is a no-op while offline', () async {
+      final api = _FakeApiClient([_mediaFile(id: 'cached-1', isFavorite: false)]);
+      final store = await RecentMediaStore.openInMemoryForTesting();
+
+      final container = ProviderContainer(
+        overrides: [
+          apiClientProvider.overrideWithValue(api),
+          recentMediaStoreProvider.overrideWithValue(store),
+          isOnlineProvider.overrideWithValue(false),
+        ],
+      );
+      addTearDown(container.dispose);
+
+      final provider = pagedFilesProvider(const GalleryQuery());
+      final sub = container.listen(provider, (_, _) {});
+      addTearDown(sub.close);
+
+      await container.read(provider.future);
+      await container.read(provider.notifier).loadMore();
+
+      expect(container.read(provider).value!.isLoadingMore, false);
     });
   });
 }
