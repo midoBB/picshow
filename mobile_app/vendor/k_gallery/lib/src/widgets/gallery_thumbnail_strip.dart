@@ -31,6 +31,11 @@ class GalleryThumbnailStrip extends StatefulWidget {
   /// Cache manager forwarded to each thumbnail's [CachedNetworkImage].
   final BaseCacheManager? cacheManager;
 
+  /// Cache manager used specifically for thumbnail images, taking priority
+  /// over [cacheManager] when set. Lets a host app keep its thumbnail cache
+  /// separate from its full-resolution image cache.
+  final BaseCacheManager? thumbCacheManager;
+
   const GalleryThumbnailStrip({
     super.key,
     required this.enableHapticFeedback,
@@ -40,6 +45,7 @@ class GalleryThumbnailStrip extends StatefulWidget {
     required this.theme,
     this.thumbProgressWidget,
     this.cacheManager,
+    this.thumbCacheManager,
   });
 
   @override
@@ -468,7 +474,8 @@ class _GalleryThumbnailStripState extends State<GalleryThumbnailStrip> {
       // memCacheWidth.
       cacheWidth: 320,
       memCacheWidth: 320,
-      cacheManager: widget.cacheManager,
+      cacheManager: widget.thumbCacheManager ?? widget.cacheManager,
+      cacheKey: item.thumbnailCacheKey,
       placeholder: (context, _) =>
           widget.thumbProgressWidget ?? const SizedBox.shrink(),
       errorWidget: (context, _, __) => Container(

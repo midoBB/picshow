@@ -94,6 +94,11 @@ class KGallery extends StatefulWidget {
   /// `cached_network_image`'s shared `DefaultCacheManager` when `null`.
   final BaseCacheManager? cacheManager;
 
+  /// Cache manager used specifically for the thumbnail strip's images,
+  /// taking priority over [cacheManager] when set. Lets a host app keep its
+  /// thumbnail cache separate from its full-resolution image cache.
+  final BaseCacheManager? thumbCacheManager;
+
   /// Cache manager used for network videos.
   ///
   /// When provided, a played video is downloaded to disk once via
@@ -131,6 +136,7 @@ class KGallery extends StatefulWidget {
     this.theme,
     this.actionMenuBuilder,
     this.cacheManager,
+    this.thumbCacheManager,
     this.videoCacheManager,
     this.memCacheWidth,
   })  : assert(contentList.length > 0, 'contentList must not be empty'),
@@ -195,6 +201,7 @@ class KGallery extends StatefulWidget {
       List<GalleryItem> items,
     )? actionMenuBuilder,
     BaseCacheManager? cacheManager,
+    BaseCacheManager? thumbCacheManager,
     BaseCacheManager? videoCacheManager,
     int? memCacheWidth,
     Duration transitionDuration = const Duration(milliseconds: 250),
@@ -224,6 +231,7 @@ class KGallery extends StatefulWidget {
             theme: theme,
             actionMenuBuilder: actionMenuBuilder,
             cacheManager: cacheManager,
+            thumbCacheManager: thumbCacheManager,
             videoCacheManager: videoCacheManager,
             memCacheWidth: memCacheWidth,
           ),
@@ -364,6 +372,7 @@ class _KGalleryState extends State<KGallery> with TickerProviderStateMixin {
                         activeYoutubeNotifier: activeYoutubeNotifier,
                         theme: _effectiveTheme,
                         cacheManager: widget.cacheManager,
+                        thumbCacheManager: widget.thumbCacheManager,
                       ),
                     ],
                   ),

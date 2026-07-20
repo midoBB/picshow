@@ -9,6 +9,7 @@ import 'package:picshow_mobile/core/models/media_stats.dart';
 import 'package:picshow_mobile/core/models/pagination.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
+import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
@@ -61,6 +62,39 @@ class _FakeApiClient extends ApiClient {
           file,
     ];
   }
+
+  @override
+  Future<bool> getFavorite(String id) async {
+    return files.firstWhere((file) => file.id == id).isFavorite;
+  }
+}
+
+// isOnlineProvider is a NotifierProvider<StableOnlineNotifier, bool>, so
+// overrideWith requires a StableOnlineNotifier subclass — these bypass the
+// real connectivity-stream/debounce wiring in build() for direct control.
+class _FakeOnlineNotifier extends StableOnlineNotifier {
+  _FakeOnlineNotifier(this._value);
+
+  final bool _value;
+
+  @override
+  bool build() => _value;
+}
+
+Override _online(bool value) =>
+    isOnlineProvider.overrideWith(() => _FakeOnlineNotifier(value));
+
+/// Like [_FakeOnlineNotifier], but its value can be flipped mid-test to
+/// simulate a reconnect without recreating the container.
+class _ControllableOnlineNotifier extends StableOnlineNotifier {
+  _ControllableOnlineNotifier(this._initial);
+
+  final bool _initial;
+
+  @override
+  bool build() => _initial;
+
+  void setOnline(bool value) => state = value;
 }
 
 MediaFile _mediaFile({
@@ -95,7 +129,7 @@ Future<ProviderContainer> _containerWith(ApiClient api) async {
     overrides: [
       apiClientProvider.overrideWithValue(api),
       recentMediaStoreProvider.overrideWithValue(store),
-      isOnlineProvider.overrideWithValue(true),
+      _online(true),
     ],
   );
 }
@@ -348,6 +382,38 @@ void main() {
       expect(desc.map((f) => f.id), ['newer', 'older']);
       expect(asc.map((f) => f.id), ['older', 'newer']);
     });
+
+    test(
+      'queryOfflineFilterCached excludes files whose full blob is not cached',
+      () async {
+        final api = _FakeApiClient([]);
+        final store = await RecentMediaStore.openInMemoryForTesting();
+        await store.upsertAll([
+          _mediaFile(id: 'thumb-only', isFavorite: false),
+          _mediaFile(id: 'fully-cached', isFavorite: false),
+        ]);
+
+        await ThumbCacheManager.instance.putFile(
+          'thumb-thumb-only',
+          Uint8List.fromList([0]),
+        );
+        await ThumbCacheManager.instance.putFile(
+          'thumb-fully-cached',
+          Uint8List.fromList([0]),
+        );
+        await FullImageCacheManager.instance.putFile(
+          api.imageUrl('fully-cached'),
+          Uint8List.fromList([0]),
+        );
+
+        final result = await store.queryOfflineFilterCached(
+          const GalleryQuery(),
+          api,
+        );
+
+        expect(result.map((f) => f.id), ['fully-cached']);
+      },
+    );
   });
 
   group('PagedFilesNotifier offline fallback', () {
@@ -360,7 +426,7 @@ void main() {
         overrides: [
           apiClientProvider.overrideWithValue(api),
           recentMediaStoreProvider.overrideWithValue(store),
-          isOnlineProvider.overrideWithValue(false),
+          _online(false),
         ],
       );
       addTearDown(container.dispose);
@@ -385,7 +451,7 @@ void main() {
         overrides: [
           apiClientProvider.overrideWithValue(api),
           recentMediaStoreProvider.overrideWithValue(store),
-          isOnlineProvider.overrideWithValue(false),
+          _online(false),
         ],
       );
       addTearDown(container.dispose);
@@ -399,5 +465,131 @@ void main() {
 
       expect(container.read(provider).value!.isLoadingMore, false);
     });
+  });
+
+  group('offline favoriting', () {
+    test(
+      'toggling while offline updates immediately and reconciles once back online',
+      () async {
+        final api = _FakeApiClient([
+          _mediaFile(id: 'file-1', isFavorite: false),
+        ]);
+        final store = await RecentMediaStore.openInMemoryForTesting();
+
+        final container = ProviderContainer(
+          overrides: [
+            apiClientProvider.overrideWithValue(api),
+            recentMediaStoreProvider.overrideWithValue(store),
+            isOnlineProvider.overrideWith(
+              () => _ControllableOnlineNotifier(true),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final provider = pagedFilesProvider(const GalleryQuery());
+        final sub = container.listen(provider, (_, _) {});
+        addTearDown(sub.close);
+
+        await container.read(provider.future);
+        await store.upsertAll(api.files);
+        await ThumbCacheManager.instance.putFile(
+          'thumb-file-1',
+          Uint8List.fromList([0]),
+        );
+        await FullImageCacheManager.instance.putFile(
+          api.imageUrl('file-1'),
+          Uint8List.fromList([0]),
+        );
+
+        final onlineNotifier =
+            container.read(isOnlineProvider.notifier)
+                as _ControllableOnlineNotifier;
+        onlineNotifier.setOnline(false);
+        final offlineState = await container.read(provider.future);
+        expect(offlineState.isOffline, true);
+        expect(offlineState.files.map((f) => f.id), ['file-1']);
+
+        await container.read(provider.notifier).toggleFavorite('file-1');
+
+        // Applied optimistically and persisted to the cache, with no
+        // server call while offline.
+        expect(api.toggledIds, isEmpty);
+        expect(store.pendingFavorites, {'file-1': true});
+        expect(
+          store.getAll().firstWhere((f) => f.id == 'file-1').isFavorite,
+          true,
+        );
+
+        // Reconnect: pending change should be reconciled against the
+        // server (which still has isFavorite == false), so exactly one
+        // toggle call is made.
+        onlineNotifier.setOnline(true);
+        await container.read(provider.future);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(api.toggledIds, ['file-1']);
+        expect(store.pendingFavorites, isEmpty);
+      },
+    );
+
+    test(
+      'toggling back to the original state while offline is a no-op on reconnect',
+      () async {
+        final api = _FakeApiClient([
+          _mediaFile(id: 'file-1', isFavorite: false),
+        ]);
+        final store = await RecentMediaStore.openInMemoryForTesting();
+
+        final container = ProviderContainer(
+          overrides: [
+            apiClientProvider.overrideWithValue(api),
+            recentMediaStoreProvider.overrideWithValue(store),
+            isOnlineProvider.overrideWith(
+              () => _ControllableOnlineNotifier(true),
+            ),
+          ],
+        );
+        addTearDown(container.dispose);
+
+        final provider = pagedFilesProvider(const GalleryQuery());
+        final sub = container.listen(provider, (_, _) {});
+        addTearDown(sub.close);
+
+        await container.read(provider.future);
+        await store.upsertAll(api.files);
+        await ThumbCacheManager.instance.putFile(
+          'thumb-file-1',
+          Uint8List.fromList([0]),
+        );
+        await FullImageCacheManager.instance.putFile(
+          api.imageUrl('file-1'),
+          Uint8List.fromList([0]),
+        );
+
+        final onlineNotifier =
+            container.read(isOnlineProvider.notifier)
+                as _ControllableOnlineNotifier;
+        onlineNotifier.setOnline(false);
+        await container.read(provider.future);
+
+        // Toggle twice while offline: false -> true -> false, back to the
+        // server's actual value.
+        await container.read(provider.notifier).toggleFavorite('file-1');
+        await container.read(provider.notifier).toggleFavorite('file-1');
+        expect(store.pendingFavorites, {'file-1': false});
+
+        onlineNotifier.setOnline(true);
+        await container.read(provider.future);
+        await Future<void>.delayed(const Duration(milliseconds: 10));
+
+        expect(
+          api.toggledIds,
+          isEmpty,
+          reason: 'desired state already matches the server, no call needed',
+        );
+        expect(store.pendingFavorites, isEmpty);
+      },
+    );
   });
 }

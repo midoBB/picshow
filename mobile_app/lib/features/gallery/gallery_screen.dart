@@ -14,6 +14,7 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
+import 'package:picshow_mobile/core/network/media_cache_lookup.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/widgets/async_states.dart';
@@ -47,6 +48,7 @@ class GalleryScreen extends ConsumerWidget {
           ? GalleryItemType.video
           : GalleryItemType.image,
       thumbnailUrl: api.thumbnailUrl(file.id),
+      thumbnailCacheKey: 'thumb-${file.id}',
     );
   }
 
@@ -323,20 +325,6 @@ class GalleryScreen extends ConsumerWidget {
     return _fileAt(files, index)?.id;
   }
 
-  Future<bool> _isFullBlobCached(MediaFile file, ApiClient api) async {
-    if (file.mediaType == MediaType.video) {
-      final videoUrl = api.videoUrl(file.id);
-      final cached = await VideoCacheManager.instance.getFileFromCache(
-        'video-${videoUrl.hashCode}',
-      );
-      return cached != null;
-    }
-    final cached = await FullImageCacheManager.instance.getFileFromCache(
-      api.imageUrl(file.id),
-    );
-    return cached != null;
-  }
-
   Future<String?> _openGallery(
     BuildContext context,
     WidgetRef ref,
@@ -354,7 +342,7 @@ class GalleryScreen extends ConsumerWidget {
     if (!online) {
       final tappedFile = files[startIndex];
       final cachedFlags = await Future.wait(
-        files.map((file) => _isFullBlobCached(file, api)),
+        files.map((file) => isFullBlobCached(file, api)),
       );
       final cachedFiles = [
         for (var i = 0; i < files.length; i++)
@@ -393,6 +381,7 @@ class GalleryScreen extends ConsumerWidget {
         contentList: items,
         initialIndex: startIndex,
         cacheManager: FullImageCacheManager.instance,
+        thumbCacheManager: ThumbCacheManager.instance,
         videoCacheManager: VideoCacheManager.instance,
         memCacheWidth: memCacheWidth,
         noInternetMessage: 'Failed to load media',
@@ -466,19 +455,14 @@ class GalleryScreen extends ConsumerWidget {
                   ?.files;
               final currentFile = _findFileById(latestFiles, originalFile.id);
               final file = currentFile ?? originalFile;
-              final canWrite = ref.watch(isOnlineProvider);
               return IconButton(
                 icon: Icon(
                   file.isFavorite ? Icons.favorite : Icons.favorite_border,
-                  color: !canWrite
-                      ? Colors.white38
-                      : (file.isFavorite ? Colors.redAccent : Colors.white),
+                  color: file.isFavorite ? Colors.redAccent : Colors.white,
                 ),
-                onPressed: canWrite
-                    ? () => ref
-                          .read(pagedFilesProvider(query).notifier)
-                          .toggleFavorite(originalFile.id)
-                    : null,
+                onPressed: () => ref
+                    .read(pagedFilesProvider(query).notifier)
+                    .toggleFavorite(originalFile.id),
               );
             },
           );

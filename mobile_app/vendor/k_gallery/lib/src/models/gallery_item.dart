@@ -51,6 +51,15 @@ class GalleryItem {
   /// Recommended for video/audio items to show a meaningful preview.
   final String? thumbnailUrl;
 
+  /// Optional explicit cache key for the thumbnail strip's image request.
+  ///
+  /// When null, the underlying image loader's default (the URL itself) is
+  /// used. Callers whose thumbnail cache is keyed independently of the URL
+  /// (e.g. because the URL can change while the underlying resource stays
+  /// the same, as with a failover between mirror servers) should set this
+  /// to whatever key they used when populating that cache.
+  final String? thumbnailCacheKey;
+
   /// Optional title displayed in the text panel overlay.
   final String? title;
 
@@ -62,6 +71,7 @@ class GalleryItem {
     required this.url,
     this.type = GalleryItemType.image,
     this.thumbnailUrl,
+    this.thumbnailCacheKey,
     this.title,
     this.description,
   });

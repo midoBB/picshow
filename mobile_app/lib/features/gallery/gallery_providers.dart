@@ -9,6 +9,7 @@ import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/network/media_cache_evictor.dart';
 import 'package:picshow_mobile/core/providers.dart';
+import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 import 'package:picshow_mobile/core/widgets/toasts.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 
@@ -61,9 +62,11 @@ class PagedFilesNotifier
     final store = ref.watch(recentMediaStoreProvider);
     final online = ref.watch(isOnlineProvider);
 
+    if (online) unawaited(_reconcilePendingFavorites(store, api));
+
     if (!online) {
       return PagedFilesState(
-        files: await store.queryOfflineFilterCached(arg),
+        files: await store.queryOfflineFilterCached(arg, api),
         nextPage: null,
         isLoadingMore: false,
         isOffline: true,
@@ -110,7 +113,7 @@ class PagedFilesNotifier
     } on DioException catch (e) {
       if (!ApiClient.isConnectionError(e)) rethrow;
       return PagedFilesState(
-        files: await store.queryOfflineFilterCached(arg),
+        files: await store.queryOfflineFilterCached(arg, api),
         nextPage: null,
         isLoadingMore: false,
         isOffline: true,
@@ -159,8 +162,6 @@ class PagedFilesNotifier
   }
 
   Future<void> toggleFavorite(String id) async {
-    if (!ref.read(isOnlineProvider)) return;
-
     final current = state.valueOrNull;
     if (current == null || _favoriteInFlight.contains(id)) return;
 
@@ -169,19 +170,33 @@ class PagedFilesNotifier
 
     _favoriteInFlight.add(id);
     final original = current.files[index];
+    final newFavorite = !original.isFavorite;
     final optimistic = [...current.files];
     final shouldRemoveFromFavorites =
         arg.filter == MediaFilter.favorite && original.isFavorite;
     if (shouldRemoveFromFavorites) {
       optimistic.removeAt(index);
     } else {
-      optimistic[index] = original.copyWith(isFavorite: !original.isFavorite);
+      optimistic[index] = original.copyWith(isFavorite: newFavorite);
     }
     state = AsyncData(current.copyWith(files: optimistic));
+
+    final store = ref.read(recentMediaStoreProvider);
+    unawaited(store.updateFavorite(id, newFavorite));
+
+    if (!ref.read(isOnlineProvider)) {
+      // No network available: keep the optimistic change and record it so
+      // it can be reconciled with the server once back online (see
+      // _reconcilePendingFavorites).
+      unawaited(store.markFavoritePending(id, newFavorite));
+      _favoriteInFlight.remove(id);
+      return;
+    }
 
     final api = ref.read(apiClientProvider);
     try {
       await api.toggleFavorite(id);
+      unawaited(store.clearFavoritePending(id));
     } catch (_) {
       final latest = state.valueOrNull;
       if (latest != null) {
@@ -199,9 +214,33 @@ class PagedFilesNotifier
           state = AsyncData(latest.copyWith(files: rolledBack));
         }
       }
+      unawaited(store.updateFavorite(id, original.isFavorite));
       showToast('Failed to update favorite', isError: true);
     } finally {
       _favoriteInFlight.remove(id);
+    }
+  }
+
+  /// Reconciles favorite changes made while offline against the server.
+  /// [ApiClient.toggleFavorite] is a pure flip with no way to set an
+  /// explicit value, so each pending id's current server state is checked
+  /// first and only flipped if it doesn't already match the desired local
+  /// state (this also makes an offline toggle-then-toggle-back a no-op).
+  Future<void> _reconcilePendingFavorites(
+    RecentMediaStore store,
+    ApiClient api,
+  ) async {
+    final pending = store.pendingFavorites;
+    for (final entry in pending.entries) {
+      try {
+        final serverValue = await api.getFavorite(entry.key);
+        if (serverValue != entry.value) {
+          await api.toggleFavorite(entry.key);
+        }
+        await store.clearFavoritePending(entry.key);
+      } catch (_) {
+        // Leave queued; retried on the next reconnect.
+      }
     }
   }
 }

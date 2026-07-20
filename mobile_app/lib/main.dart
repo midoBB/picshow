@@ -34,6 +34,9 @@ class PicShowApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
     final serverUrls = ref.watch(serverUrlsProvider);
+    // Keep the reconnect probe alive for the app's lifetime, not just while
+    // the gallery screen happens to be mounted.
+    ref.watch(reconnectProbeProvider);
 
     return MaterialApp(
       title: 'PicShow',

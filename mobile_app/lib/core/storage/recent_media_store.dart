@@ -5,6 +5,8 @@ import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
+import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/media_cache_lookup.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 
@@ -14,17 +16,27 @@ import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 /// live in the existing flutter_cache_manager instances (ThumbCacheManager,
 /// FullImageCacheManager, VideoCacheManager) and are not duplicated here.
 class RecentMediaStore {
-  RecentMediaStore._(this._box);
+  RecentMediaStore._(this._box, this._pendingFavoritesBox);
 
   static const boxName = 'recent_media_v1';
+  static const _pendingFavoritesBoxName = 'pending_favorite_sync_v1';
   static const _cap = 1000;
 
   final Box<Map> _box;
 
+  /// Ids toggled while offline, mapped to the desired (locally optimistic)
+  /// favorite state, so they can be reconciled against the server once
+  /// connectivity returns. Persisted so a killed app doesn't lose pending
+  /// changes.
+  final Box<bool> _pendingFavoritesBox;
+
   static Future<RecentMediaStore> open() async {
     await Hive.initFlutter();
     final box = await Hive.openBox<Map>(boxName);
-    return RecentMediaStore._(box);
+    final pendingFavorites = await Hive.openBox<bool>(
+      _pendingFavoritesBoxName,
+    );
+    return RecentMediaStore._(box, pendingFavorites);
   }
 
   /// Backs the store with a throwaway on-disk Hive box outside the normal
@@ -34,10 +46,12 @@ class RecentMediaStore {
   static Future<RecentMediaStore> openInMemoryForTesting() async {
     final dir = Directory.systemTemp.createTempSync('recent_media_store_test');
     Hive.init(dir.path);
-    final box = await Hive.openBox<Map>(
-      'test_${DateTime.now().microsecondsSinceEpoch}',
+    final suffix = DateTime.now().microsecondsSinceEpoch;
+    final box = await Hive.openBox<Map>('test_$suffix');
+    final pendingFavorites = await Hive.openBox<bool>(
+      'test_pending_favorites_$suffix',
     );
-    return RecentMediaStore._(box);
+    return RecentMediaStore._(box, pendingFavorites);
   }
 
   Future<void> upsertAll(Iterable<MediaFile> files) async {
@@ -82,24 +96,65 @@ class RecentMediaStore {
     return files;
   }
 
-  /// Same as [queryOffline], additionally filtered down to entries whose
-  /// thumbnail bytes are confirmed present in [ThumbCacheManager]'s disk
-  /// cache (a local lookup, no network call), so offline tiles never attempt
-  /// a doomed network fetch for metadata-only entries.
-  Future<List<MediaFile>> queryOfflineFilterCached(GalleryQuery query) async {
+  /// Same as [queryOffline], additionally filtered down to entries that are
+  /// actually viewable offline: both the thumbnail (for the grid tile) and
+  /// the full-resolution image/video (for the full-screen viewer) must
+  /// already be present in their respective disk caches (local lookups, no
+  /// network calls). A file whose thumbnail loaded once but whose full
+  /// blob was never fetched would otherwise show up as a tile that dead-ends
+  /// in a "Not available offline" toast on tap — excluding it here means it
+  /// never appears as a tappable tile in the first place.
+  Future<List<MediaFile>> queryOfflineFilterCached(
+    GalleryQuery query,
+    ApiClient api,
+  ) async {
     final candidates = queryOffline(query);
     final results = await Future.wait(
       candidates.map((file) async {
-        final cached = await ThumbCacheManager.instance.getFileFromCache(
+        final thumbCached = await ThumbCacheManager.instance.getFileFromCache(
           'thumb-${file.id}',
         );
-        return cached != null ? file : null;
+        if (thumbCached == null) return null;
+        return (await isFullBlobCached(file, api)) ? file : null;
       }),
     );
     return [for (final file in results) if (file != null) file];
   }
 
   Future<void> remove(String id) => _box.delete(id);
+
+  /// Updates the cached copy of [id]'s favorite flag in place, so
+  /// [queryOffline]/[queryOfflineFilterCached] reflect a toggle immediately
+  /// (whether the toggle happened online or offline) instead of waiting for
+  /// the next full [upsertAll] from a list fetch.
+  Future<void> updateFavorite(String id, bool isFavorite) async {
+    final entry = _box.get(id);
+    if (entry == null) return;
+    final file = _tryParse(entry);
+    if (file == null) return;
+    await _box.put(id, {
+      'file': file.copyWith(isFavorite: isFavorite).toJson(),
+      'lastSeenAt': entry['lastSeenAt'],
+    });
+  }
+
+  /// Records that [id]'s favorite state was changed to [isFavorite] while
+  /// offline, so it can be reconciled against the server on reconnect.
+  Future<void> markFavoritePending(String id, bool isFavorite) =>
+      _pendingFavoritesBox.put(id, isFavorite);
+
+  /// Clears [id] from the pending-sync set — either it was toggled back to
+  /// its original state before reconnecting (net no-op), or it was
+  /// successfully reconciled with the server.
+  Future<void> clearFavoritePending(String id) =>
+      _pendingFavoritesBox.delete(id);
+
+  /// `{id: desired isFavorite}` for every favorite change made while
+  /// offline that hasn't yet been reconciled with the server.
+  Map<String, bool> get pendingFavorites => {
+    for (final key in _pendingFavoritesBox.keys)
+      key as String: _pendingFavoritesBox.get(key)!,
+  };
 
   bool _matchesFilter(MediaFile file, MediaFilter filter) {
     switch (filter) {

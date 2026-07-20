@@ -11,6 +11,7 @@ GalleryItem _$GalleryItemFromJson(Map<String, dynamic> json) => GalleryItem(
       type: $enumDecodeNullable(_$GalleryItemTypeEnumMap, json['type']) ??
           GalleryItemType.image,
       thumbnailUrl: json['thumbnailUrl'] as String?,
+      thumbnailCacheKey: json['thumbnailCacheKey'] as String?,
       title: json['title'] as String?,
       description: json['description'] as String?,
     );
@@ -20,6 +21,7 @@ Map<String, dynamic> _$GalleryItemToJson(GalleryItem instance) =>
       'url': instance.url,
       'type': _$GalleryItemTypeEnumMap[instance.type]!,
       'thumbnailUrl': instance.thumbnailUrl,
+      'thumbnailCacheKey': instance.thumbnailCacheKey,
       'title': instance.title,
       'description': instance.description,
     };

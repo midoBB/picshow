@@ -94,6 +94,7 @@ Widget galleryImage({
   int? cacheHeight,
   BaseCacheManager? cacheManager,
   int? memCacheWidth,
+  String? cacheKey,
   PlaceholderWidgetBuilder? placeholder,
   required LoadingErrorWidgetBuilder errorWidget,
 }) {
@@ -124,6 +125,7 @@ Widget galleryImage({
     height: height,
     cacheManager: cacheManager,
     memCacheWidth: memCacheWidth,
+    cacheKey: cacheKey,
     placeholder: placeholder,
     errorWidget: errorWidget,
   );

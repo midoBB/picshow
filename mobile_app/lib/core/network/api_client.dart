@@ -36,6 +36,7 @@ class ApiClient {
     _dio.interceptors.add(
       InterceptorsWrapper(
         onResponse: (response, handler) {
+          _consecutiveConnectionErrors = 0;
           onConnectionSuccess?.call();
           handler.next(response);
         },
@@ -53,6 +54,7 @@ class ApiClient {
                   ..baseUrl = '$candidate/api';
                 final response = await _dio.fetch<dynamic>(options);
                 baseUrl = candidate;
+                _consecutiveConnectionErrors = 0;
                 onConnectionSuccess?.call();
                 handler.resolve(response);
                 return;
@@ -61,12 +63,24 @@ class ApiClient {
               }
             }
           }
-          if (isConnectionError(error)) onConnectionError?.call();
+          if (isConnectionError(error)) {
+            // A single flaky request among several concurrent ones (e.g. one
+            // thumbnail timing out while others succeed) shouldn't declare
+            // the whole app offline — require a couple of consecutive
+            // failures with no intervening success first.
+            _consecutiveConnectionErrors++;
+            if (_consecutiveConnectionErrors >= _connectionErrorThreshold) {
+              onConnectionError?.call();
+            }
+          }
           handler.next(error);
         },
       ),
     );
   }
+
+  static const _connectionErrorThreshold = 2;
+  int _consecutiveConnectionErrors = 0;
 
   final void Function()? onConnectionError;
   final void Function()? onConnectionSuccess;
@@ -131,6 +145,15 @@ class ApiClient {
 
   Future<void> toggleFavorite(String id) async {
     await _dio.patch('/$id/favorite');
+  }
+
+  /// The server's current favorite state for [id]. Used to reconcile
+  /// favorite changes made while offline: since [toggleFavorite] is a pure
+  /// flip with no way to set an explicit value, the client must check the
+  /// current value before deciding whether replaying a toggle is needed.
+  Future<bool> getFavorite(String id) async {
+    final response = await _dio.get<bool>('/$id/favorite');
+    return response.data!;
   }
 
   String thumbnailUrl(String id) => '$_baseUrl/api/thumbnail/$id';
