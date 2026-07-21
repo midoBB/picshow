@@ -137,7 +137,7 @@ Future<ProviderContainer> _containerWith(ApiClient api) async {
 void main() {
   TestWidgetsFlutterBinding.ensureInitialized();
 
-  // ThumbCacheManager (used by RecentMediaStore.queryOfflineFilterCached)
+  // ThumbCacheManager (used by RecentMediaStore.queryOfflineWithThumbs)
   // reaches for the app support directory via path_provider on first use;
   // stub it out so tests don't hang waiting on a real platform channel.
   final pathProviderDir = Directory.systemTemp
@@ -384,13 +384,14 @@ void main() {
     });
 
     test(
-      'queryOfflineFilterCached excludes files whose full blob is not cached',
+      'queryOfflineWithThumbs includes thumbnail-only files but not uncached ones',
       () async {
         final api = _FakeApiClient([]);
         final store = await RecentMediaStore.openInMemoryForTesting();
         await store.upsertAll([
           _mediaFile(id: 'thumb-only', isFavorite: false),
           _mediaFile(id: 'fully-cached', isFavorite: false),
+          _mediaFile(id: 'not-cached', isFavorite: false),
         ]);
 
         await ThumbCacheManager.instance.putFile(
@@ -406,12 +407,16 @@ void main() {
           Uint8List.fromList([0]),
         );
 
-        final result = await store.queryOfflineFilterCached(
-          const GalleryQuery(),
-          api,
+        final result = await store.queryOfflineWithThumbs(
+          const GalleryQuery(order: SortOrder.createdAt),
         );
 
-        expect(result.map((f) => f.id), ['fully-cached']);
+        // 'thumb-only' is included: it renders as a grid tile offline even
+        // though tapping it will hit the "Not available offline" path.
+        expect(
+          result.map((f) => f.id).toSet(),
+          {'thumb-only', 'fully-cached'},
+        );
       },
     );
   });

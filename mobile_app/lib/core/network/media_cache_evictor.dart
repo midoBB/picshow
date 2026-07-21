@@ -1,30 +1,37 @@
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 
-/// Best-effort cleanup of disk-cached media for files that have disappeared
-/// server-side (deleted via the web frontend, another client, or a future
-/// mobile delete feature the app doesn't have yet). Not required for
-/// correctness — cache entries also expire via each manager's `stalePeriod`
-/// regardless — this just avoids holding onto now-orphaned bytes until then.
+/// Removes a single file's disk-cached bytes and its byte-ledger rows.
 ///
-/// When a mobile delete action is added, prefer calling [evict] directly at
-/// that call site instead of relying on [PagedFilesNotifier]'s id-diffing,
-/// since it can fire synchronously and precisely for the deleted id.
+/// Intended for call sites that know a specific id is gone — an explicit
+/// delete action, most obviously. It is deliberately *not* driven by diffing
+/// list responses: the file list is paged and can be randomly ordered, so a
+/// page's contents are never evidence about ids outside that page.
+///
+/// Reclaiming space in general is [MediaCacheBudget]'s job, not this class's.
 class MediaCacheEvictor {
-  const MediaCacheEvictor(this._api);
+  const MediaCacheEvictor(this._api, this._budget);
 
   final ApiClient _api;
+  final MediaCacheBudget _budget;
 
   Future<void> evict(String id) async {
-    final imageUrl = _api.imageUrl(id);
-    final videoUrl = _api.videoUrl(id);
+    final keys = {
+      for (final bucket in CacheBucket.values)
+        bucket: cacheKeyFor(bucket, id, _api),
+    };
 
     await Future.wait(
       [
-        ThumbCacheManager.instance.removeFile('thumb-$id'),
-        FullImageCacheManager.instance.removeFile(imageUrl),
-        VideoCacheManager.instance.removeFile('video-${videoUrl.hashCode}'),
+        ThumbCacheManager.instance.removeFile(keys[CacheBucket.thumb]!),
+        FullImageCacheManager.instance.removeFile(keys[CacheBucket.image]!),
+        VideoCacheManager.instance.removeFile(keys[CacheBucket.video]!),
       ].map((future) => future.catchError((_) {})),
     );
+
+    for (final key in keys.values) {
+      await _budget.forget(key);
+    }
   }
 }

@@ -7,7 +7,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
-import 'package:picshow_mobile/core/network/media_cache_evictor.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 import 'package:picshow_mobile/core/widgets/toasts.dart';
@@ -66,21 +65,11 @@ class PagedFilesNotifier
 
     if (!online) {
       return PagedFilesState(
-        files: await store.queryOfflineFilterCached(arg, api),
+        files: await store.queryOfflineWithThumbs(arg),
         nextPage: null,
         isLoadingMore: false,
         isOffline: true,
       );
-    }
-
-    // Best-effort: if a previous fetch is available (e.g. this is a
-    // refresh), diff ids to evict disk-cached media for files that have
-    // disappeared server-side. See MediaCacheEvictor for details.
-    List<MediaFile>? previousFiles;
-    try {
-      previousFiles = state.valueOrNull?.files;
-    } catch (_) {
-      previousFiles = null;
     }
 
     try {
@@ -92,17 +81,6 @@ class PagedFilesNotifier
         type: arg.filter.apiValue,
       );
 
-      if (previousFiles != null) {
-        final newIds = result.files.map((f) => f.id).toSet();
-        final vanishedIds = previousFiles
-            .map((f) => f.id)
-            .where((id) => !newIds.contains(id));
-        final evictor = MediaCacheEvictor(api);
-        for (final id in vanishedIds) {
-          unawaited(evictor.evict(id));
-        }
-      }
-
       unawaited(store.upsertAll(result.files));
 
       return PagedFilesState(
@@ -113,7 +91,7 @@ class PagedFilesNotifier
     } on DioException catch (e) {
       if (!ApiClient.isConnectionError(e)) rethrow;
       return PagedFilesState(
-        files: await store.queryOfflineFilterCached(arg, api),
+        files: await store.queryOfflineWithThumbs(arg),
         nextPage: null,
         isLoadingMore: false,
         isOffline: true,

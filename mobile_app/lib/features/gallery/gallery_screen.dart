@@ -17,6 +17,7 @@ import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/network/media_cache_lookup.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/widgets/async_states.dart';
 import 'package:picshow_mobile/core/widgets/toasts.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
@@ -24,8 +25,9 @@ import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 import 'package:picshow_mobile/features/gallery/widgets/media_grid.dart';
 import 'package:picshow_mobile/features/gallery/widgets/media_stats_dialog.dart';
 import 'package:picshow_mobile/features/server_setup/server_url_screen.dart';
+import 'package:picshow_mobile/features/settings/cache_settings_screen.dart';
 
-enum _OverflowAction { statistics, serverUrl }
+enum _OverflowAction { statistics, cache, serverUrl }
 
 class GalleryScreen extends ConsumerWidget {
   const GalleryScreen({super.key});
@@ -88,6 +90,8 @@ class GalleryScreen extends ConsumerWidget {
     required BaseCacheManager cacheManager,
     required int memCacheWidth,
     required bool online,
+    required MediaCacheBudget budget,
+    required CacheBucket bucket,
     String? cacheKey,
   }) async {
     if (!online) return;
@@ -110,19 +114,23 @@ class GalleryScreen extends ConsumerWidget {
         context,
         onError: (_, _) {},
       );
+      await budget.recordFromCache(bucket, cacheKey ?? url);
     } finally {
       _preloadingImages.remove(preloadKey);
     }
   }
 
-  Future<void> _precacheVideo(String url, {required bool online}) async {
+  Future<void> _precacheVideo(
+    String url, {
+    required bool online,
+    required MediaCacheBudget budget,
+  }) async {
     if (!online) return;
     if (!_preloadingVideos.add(url)) return;
+    final key = 'video-${url.hashCode}';
     try {
-      await VideoCacheManager.instance.getSingleFile(
-        url,
-        key: 'video-${url.hashCode}',
-      );
+      await VideoCacheManager.instance.getSingleFile(url, key: key);
+      await budget.recordFromCache(CacheBucket.video, key);
     } catch (_) {
       // Best-effort prefetch; playback will fall back to network streaming.
     } finally {
@@ -137,6 +145,7 @@ class GalleryScreen extends ConsumerWidget {
     int currentIndex, {
     required int memCacheWidth,
     required bool online,
+    required MediaCacheBudget budget,
   }) {
     if (!online) return;
 
@@ -150,6 +159,8 @@ class GalleryScreen extends ConsumerWidget {
           cacheKey: 'thumb-${file.id}',
           memCacheWidth: 400,
           online: online,
+          budget: budget,
+          bucket: CacheBucket.thumb,
         ),
       );
 
@@ -161,6 +172,8 @@ class GalleryScreen extends ConsumerWidget {
             cacheManager: FullImageCacheManager.instance,
             memCacheWidth: memCacheWidth,
             online: online,
+            budget: budget,
+            bucket: CacheBucket.image,
           ),
         );
       }
@@ -173,7 +186,13 @@ class GalleryScreen extends ConsumerWidget {
     )) {
       final file = files[index];
       if (file.mediaType == MediaType.video) {
-        unawaited(_precacheVideo(api.videoUrl(file.id), online: online));
+        unawaited(
+          _precacheVideo(
+            api.videoUrl(file.id),
+            online: online,
+            budget: budget,
+          ),
+        );
       }
     }
   }
@@ -187,6 +206,7 @@ class GalleryScreen extends ConsumerWidget {
     int currentIndex, {
     required int memCacheWidth,
     required bool online,
+    required MediaCacheBudget budget,
   }) {
     final safeIndex = currentIndex.clamp(0, items.length - 1).toInt();
     galleryBloc?.add(
@@ -199,6 +219,7 @@ class GalleryScreen extends ConsumerWidget {
       safeIndex,
       memCacheWidth: memCacheWidth,
       online: online,
+      budget: budget,
     );
   }
 
@@ -215,6 +236,7 @@ class GalleryScreen extends ConsumerWidget {
     required void Function(List<MediaFile> files) setGalleryFiles,
     required void Function(List<GalleryItem> items) setGalleryItems,
   }) async {
+    final budget = ref.read(mediaCacheBudgetProvider);
     final latestBeforeLoad = ref.read(pagedFilesProvider(query)).valueOrNull;
     if (latestBeforeLoad != null &&
         latestBeforeLoad.files.length > getGalleryFiles().length) {
@@ -233,6 +255,7 @@ class GalleryScreen extends ConsumerWidget {
           currentIndex,
           memCacheWidth: memCacheWidth,
           online: online,
+          budget: budget,
         );
       }
     }
@@ -268,6 +291,7 @@ class GalleryScreen extends ConsumerWidget {
       currentIndex,
       memCacheWidth: memCacheWidth,
       online: online,
+      budget: budget,
     );
   }
 
@@ -336,6 +360,7 @@ class GalleryScreen extends ConsumerWidget {
 
     final api = ref.read(apiClientProvider);
     final online = ref.read(isOnlineProvider);
+    final budget = ref.read(mediaCacheBudgetProvider);
     var galleryFiles = files;
     var startIndex = initialIndex.clamp(0, files.length - 1).toInt();
 
@@ -375,6 +400,7 @@ class GalleryScreen extends ConsumerWidget {
         startIndex,
         memCacheWidth: memCacheWidth,
         online: online,
+        budget: budget,
       );
       await KGallery.show(
         context,
@@ -394,6 +420,7 @@ class GalleryScreen extends ConsumerWidget {
             index,
             memCacheWidth: memCacheWidth,
             online: online,
+            budget: budget,
           );
           _maybeLoadMoreGallerySlides(
             context: context,
@@ -425,6 +452,7 @@ class GalleryScreen extends ConsumerWidget {
               currentIndex,
               memCacheWidth: memCacheWidth,
               online: online,
+              budget: budget,
             );
           }
           _maybeLoadMoreGallerySlides(
@@ -608,6 +636,13 @@ class GalleryScreen extends ConsumerWidget {
                     builder: (_) => const MediaStatsDialog(),
                   );
                   break;
+                case _OverflowAction.cache:
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => const CacheSettingsScreen(),
+                    ),
+                  );
+                  break;
                 case _OverflowAction.serverUrl:
                   Navigator.of(context).push(
                     MaterialPageRoute(
@@ -623,6 +658,14 @@ class GalleryScreen extends ConsumerWidget {
                 child: ListTile(
                   leading: Icon(Icons.insights_outlined),
                   title: Text('Media statistics'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              PopupMenuItem(
+                value: _OverflowAction.cache,
+                child: ListTile(
+                  leading: Icon(Icons.sd_storage_outlined),
+                  title: Text('Offline cache'),
                   contentPadding: EdgeInsets.zero,
                 ),
               ),

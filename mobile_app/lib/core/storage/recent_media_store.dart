@@ -5,8 +5,6 @@ import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
-import 'package:picshow_mobile/core/network/api_client.dart';
-import 'package:picshow_mobile/core/network/media_cache_lookup.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 
@@ -96,35 +94,32 @@ class RecentMediaStore {
     return files;
   }
 
-  /// Same as [queryOffline], additionally filtered down to entries that are
-  /// actually viewable offline: both the thumbnail (for the grid tile) and
-  /// the full-resolution image/video (for the full-screen viewer) must
-  /// already be present in their respective disk caches (local lookups, no
-  /// network calls). A file whose thumbnail loaded once but whose full
-  /// blob was never fetched would otherwise show up as a tile that dead-ends
-  /// in a "Not available offline" toast on tap — excluding it here means it
-  /// never appears as a tappable tile in the first place.
-  Future<List<MediaFile>> queryOfflineFilterCached(
-    GalleryQuery query,
-    ApiClient api,
-  ) async {
+  /// Same as [queryOffline], additionally filtered down to entries whose
+  /// thumbnail is already on disk, so every returned file can actually render
+  /// as a grid tile offline (a local lookup, no network calls).
+  ///
+  /// Deliberately does *not* require the full-resolution blob. Grid browsing
+  /// only ever writes thumbnails, so demanding the full blob here hid nearly
+  /// everything the user had seen. Tapping a file whose full blob is missing
+  /// is handled downstream by `_openGallery`, which filters the slide list
+  /// with [isFullBlobCached] and shows a "Not available offline" toast.
+  Future<List<MediaFile>> queryOfflineWithThumbs(GalleryQuery query) async {
     final candidates = queryOffline(query);
     final results = await Future.wait(
       candidates.map((file) async {
         final thumbCached = await ThumbCacheManager.instance.getFileFromCache(
           'thumb-${file.id}',
         );
-        if (thumbCached == null) return null;
-        return (await isFullBlobCached(file, api)) ? file : null;
+        return thumbCached == null ? null : file;
       }),
     );
-    return [for (final file in results) if (file != null) file];
+    return [for (final file in results) ?file];
   }
 
   Future<void> remove(String id) => _box.delete(id);
 
   /// Updates the cached copy of [id]'s favorite flag in place, so
-  /// [queryOffline]/[queryOfflineFilterCached] reflect a toggle immediately
+  /// [queryOffline]/[queryOfflineWithThumbs] reflect a toggle immediately
   /// (whether the toggle happened online or offline) instead of waiting for
   /// the next full [upsertAll] from a list fetch.
   Future<void> updateFavorite(String id, bool isFavorite) async {

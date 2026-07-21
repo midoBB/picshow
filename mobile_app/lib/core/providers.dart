@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:picshow_mobile/core/config/app_prefs.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 
 final appPrefsProvider = Provider<AppPrefs>((ref) {
@@ -16,6 +17,19 @@ final recentMediaStoreProvider = Provider<RecentMediaStore>((ref) {
   throw UnimplementedError(
     'recentMediaStoreProvider must be overridden in main()',
   );
+});
+
+final mediaCacheBudgetProvider = Provider<MediaCacheBudget>((ref) {
+  throw UnimplementedError(
+    'mediaCacheBudgetProvider must be overridden in main()',
+  );
+});
+
+/// The configured cache budget, mirrored into provider state so widgets
+/// rebuild on change. [MediaCacheBudget.setBudgetBytes] and [AppPrefs] are
+/// the durable side; this is the reactive view of it.
+final cacheBudgetBytesProvider = StateProvider<int>((ref) {
+  return ref.watch(appPrefsProvider).cacheBudgetBytes;
 });
 
 class ServerUrls {

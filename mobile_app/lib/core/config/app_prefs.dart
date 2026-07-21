@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
+
 class AppPrefs {
   AppPrefs._(this._prefs);
 
@@ -8,6 +10,7 @@ class AppPrefs {
   static const _localServerUrlKey = 'local_server_url';
   static const _remoteServerUrlKey = 'remote_server_url';
   static const _themeModeKey = 'theme_mode';
+  static const _cacheBudgetBytesKey = 'cache_budget_bytes';
 
   final SharedPreferences _prefs;
 
@@ -67,4 +70,11 @@ class AppPrefs {
     _themeModeKey,
     mode == ThemeMode.light ? 'light' : 'dark',
   );
+
+  /// Total disk budget for cached thumbnails, images and videos.
+  int get cacheBudgetBytes =>
+      _prefs.getInt(_cacheBudgetBytesKey) ?? MediaCacheBudget.defaultBudgetBytes;
+
+  Future<void> setCacheBudgetBytes(int bytes) =>
+      _prefs.setInt(_cacheBudgetBytesKey, bytes);
 }
