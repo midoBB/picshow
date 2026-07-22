@@ -60,6 +60,16 @@ class GalleryItem {
   /// to whatever key they used when populating that cache.
   final String? thumbnailCacheKey;
 
+  /// Optional explicit cache key for the full-resolution [url] request —
+  /// the image shown in the viewer, or the video/audio file played.
+  ///
+  /// The [thumbnailCacheKey] rationale applies with more force here: a host
+  /// app that pre-populated its cache under a URL-independent key gets a
+  /// *blank viewer* offline if this item is fetched by URL instead, since
+  /// there is no network to fall back to. When null, the loader's default
+  /// (the URL itself) is used.
+  final String? cacheKey;
+
   /// Optional title displayed in the text panel overlay.
   final String? title;
 
@@ -72,6 +82,7 @@ class GalleryItem {
     this.type = GalleryItemType.image,
     this.thumbnailUrl,
     this.thumbnailCacheKey,
+    this.cacheKey,
     this.title,
     this.description,
   });

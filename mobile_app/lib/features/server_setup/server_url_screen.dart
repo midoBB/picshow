@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
-import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/providers.dart';
 
 class ServerUrlScreen extends ConsumerStatefulWidget {
@@ -103,15 +103,7 @@ class _ServerUrlScreenState extends ConsumerState<ServerUrlScreen> {
     }
   }
 
-  Future<bool> _canReach(String url) async {
-    final client = ApiClient(baseUrls: [url]);
-    try {
-      await client.fetchStats();
-      return true;
-    } catch (_) {
-      return false;
-    }
-  }
+  Future<bool> _canReach(String url) => ServerConnection.probeUrl(url);
 
   @override
   Widget build(BuildContext context) {

@@ -5,7 +5,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:picshow_mobile/core/config/app_prefs.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
-import 'package:picshow_mobile/core/network/connectivity.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 
@@ -31,6 +31,26 @@ final mediaCacheBudgetProvider = Provider<MediaCacheBudget>((ref) {
 final cacheBudgetBytesProvider = StateProvider<int>((ref) {
   return ref.watch(appPrefsProvider).cacheBudgetBytes;
 });
+
+/// Increments whenever the cache ledger changes, so anything deriving offline
+/// availability from it ([MediaCacheBudget.isAvailableOffline]) can rebuild.
+/// The ledger is a plain object with no Riverpod identity of its own — this is
+/// what turns its mutations into a watchable signal.
+class MediaCacheLedgerRevisionNotifier extends Notifier<int> {
+  @override
+  int build() {
+    final budget = ref.watch(mediaCacheBudgetProvider);
+    void bump() => state++;
+    budget.changes.addListener(bump);
+    ref.onDispose(() => budget.changes.removeListener(bump));
+    return 0;
+  }
+}
+
+final mediaCacheLedgerRevisionProvider =
+    NotifierProvider<MediaCacheLedgerRevisionNotifier, int>(
+      MediaCacheLedgerRevisionNotifier.new,
+    );
 
 class ServerUrls {
   const ServerUrls({this.local, this.remote});
@@ -58,52 +78,25 @@ final themeModeProvider = StateProvider<ThemeMode>((ref) {
   return ref.watch(appPrefsProvider).themeMode;
 });
 
-final apiClientProvider = Provider<ApiClient>((ref) {
-  final serverUrls = ref.watch(serverUrlsProvider);
-  return ApiClient(
-    baseUrls: serverUrls.candidates,
-    onConnectionError: () =>
-        ref.read(networkErrorSignalProvider.notifier).state = true,
-    onConnectionSuccess: () =>
-        ref.read(networkErrorSignalProvider.notifier).state = false,
+/// The single owner of "are we online" and "which address answers". Kept
+/// alive for the app's lifetime by [PicShowApp]; [serverUrlsProvider] changes
+/// are pushed into it rather than rebuilding it, so an address edit doesn't
+/// drop the probe timers mid-flight.
+final serverConnectionProvider = Provider<ServerConnection>((ref) {
+  final connection = ServerConnection(
+    serverUrls: ref.read(serverUrlsProvider).candidates,
+    manualOffline: ref.read(appPrefsProvider).manualOffline,
   );
+  ref.listen<ServerUrls>(
+    serverUrlsProvider,
+    (_, urls) => connection.setServerUrls(urls.candidates),
+  );
+  ref.onDispose(connection.dispose);
+  unawaited(connection.start());
+  return connection;
 });
 
-/// Periodically pings the server, regardless of what [isOnlineProvider]
-/// currently believes, so a dead connection is noticed even when nothing
-/// else would reveal it. This matters because normal browsing can be served
-/// entirely from local caches (thumbnails already on disk) without ever
-/// making a live request — in that case a "connected to WiFi but no real
-/// internet" scenario would otherwise go undetected indefinitely, since the
-/// OS-level signal only reports radio/AP association and the dio-error
-/// signal only reacts to requests that actually happen. Success/failure
-/// feed back into [isOnlineProvider] through [apiClientProvider]'s existing
-/// onConnectionSuccess/onConnectionError callbacks, same as any other
-/// request — this is also how a real recovery while offline gets noticed
-/// without the user triggering a request themselves.
-class ReconnectProbeNotifier extends Notifier<void> {
-  Timer? _timer;
-  static const _interval = Duration(seconds: 20);
+final apiClientProvider = Provider<ApiClient>((ref) {
+  return ApiClient(connection: ref.watch(serverConnectionProvider));
+});
 
-  @override
-  void build() {
-    ref.onDispose(() {
-      _timer?.cancel();
-      _timer = null;
-    });
-    _timer ??= Timer.periodic(_interval, (_) => _probe());
-  }
-
-  Future<void> _probe() async {
-    try {
-      await ref.read(apiClientProvider).fetchStats();
-    } catch (_) {
-      // ApiClient's interceptors already report the failure via
-      // onConnectionError; nothing further to do here.
-    }
-  }
-}
-
-final reconnectProbeProvider = NotifierProvider<ReconnectProbeNotifier, void>(
-  ReconnectProbeNotifier.new,
-);

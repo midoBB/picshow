@@ -1,4 +1,3 @@
-import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 
@@ -11,15 +10,13 @@ import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 ///
 /// Reclaiming space in general is [MediaCacheBudget]'s job, not this class's.
 class MediaCacheEvictor {
-  const MediaCacheEvictor(this._api, this._budget);
+  const MediaCacheEvictor(this._budget);
 
-  final ApiClient _api;
   final MediaCacheBudget _budget;
 
   Future<void> evict(String id) async {
     final keys = {
-      for (final bucket in CacheBucket.values)
-        bucket: cacheKeyFor(bucket, id, _api),
+      for (final bucket in CacheBucket.values) bucket: cacheKeyFor(bucket, id),
     };
 
     await Future.wait(
@@ -30,8 +27,8 @@ class MediaCacheEvictor {
       ].map((future) => future.catchError((_) {})),
     );
 
-    for (final key in keys.values) {
-      await _budget.forget(key);
+    for (final bucket in CacheBucket.values) {
+      await _budget.forget(bucket, id);
     }
   }
 }

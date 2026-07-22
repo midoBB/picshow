@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/widgets/async_states.dart';
 
 class MediaTile extends StatelessWidget {
@@ -12,12 +13,18 @@ class MediaTile extends StatelessWidget {
     required this.thumbnailUrl,
     required this.heroTag,
     required this.onTap,
+    this.isOfflineReady = false,
   });
 
   final MediaFile file;
   final String thumbnailUrl;
   final String heroTag;
   final VoidCallback onTap;
+
+  /// Whether this file is fully cached and would survive going offline. Set
+  /// only while online — offline every listed tile is ready by construction,
+  /// so a badge on all of them would be noise.
+  final bool isOfflineReady;
 
   @override
   Widget build(BuildContext context) {
@@ -34,7 +41,7 @@ class MediaTile extends StatelessWidget {
                 aspectRatio: file.thumbAspect,
                 child: CachedNetworkImage(
                   imageUrl: thumbnailUrl,
-                  cacheKey: 'thumb-${file.id}',
+                  cacheKey: cacheKeyFor(CacheBucket.thumb, file.id),
                   cacheManager: ThumbCacheManager.instance,
                   fit: BoxFit.cover,
                   memCacheWidth: 400,
@@ -65,6 +72,16 @@ class MediaTile extends StatelessWidget {
                   child: Icon(
                     Icons.favorite,
                     color: Colors.redAccent,
+                    size: 18,
+                  ),
+                ),
+              if (isOfflineReady)
+                const Positioned(
+                  bottom: 6,
+                  right: 6,
+                  child: Icon(
+                    Icons.offline_pin,
+                    color: Colors.white70,
                     size: 18,
                   ),
                 ),

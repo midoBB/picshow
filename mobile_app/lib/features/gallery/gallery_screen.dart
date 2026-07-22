@@ -14,12 +14,11 @@ import 'package:wakelock_plus/wakelock_plus.dart';
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
-import 'package:picshow_mobile/core/network/media_cache_lookup.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/widgets/async_states.dart';
-import 'package:picshow_mobile/core/widgets/toasts.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 import 'package:picshow_mobile/features/gallery/widgets/media_grid.dart';
@@ -42,15 +41,15 @@ class GalleryScreen extends ConsumerWidget {
   static final Set<String> _preloadingVideos = <String>{};
 
   GalleryItem _galleryItemFor(MediaFile file, ApiClient api) {
+    final isVideo = file.mediaType == MediaType.video;
     return GalleryItem(
-      url: file.mediaType == MediaType.video
-          ? api.videoUrl(file.id)
-          : api.imageUrl(file.id),
-      type: file.mediaType == MediaType.video
-          ? GalleryItemType.video
-          : GalleryItemType.image,
+      url: isVideo ? api.videoUrl(file.id) : api.imageUrl(file.id),
+      type: isVideo ? GalleryItemType.video : GalleryItemType.image,
       thumbnailUrl: api.thumbnailUrl(file.id),
-      thumbnailCacheKey: 'thumb-${file.id}',
+      thumbnailCacheKey: cacheKeyFor(CacheBucket.thumb, file.id),
+      // Without this the viewer would look the blob up by URL and miss the
+      // entry the prefetcher wrote, leaving a blank screen offline.
+      cacheKey: cacheKeyFor(fullBlobBucketFor(file), file.id),
     );
   }
 
@@ -86,18 +85,18 @@ class GalleryScreen extends ConsumerWidget {
 
   Future<void> _precacheNetworkImage(
     BuildContext context,
+    String id,
     String url, {
-    required BaseCacheManager cacheManager,
     required int memCacheWidth,
     required bool online,
     required MediaCacheBudget budget,
     required CacheBucket bucket,
-    String? cacheKey,
   }) async {
     if (!online) return;
     if (!url.startsWith('http')) return;
 
-    final preloadKey = '$url:${cacheKey ?? url}:$memCacheWidth';
+    final cacheKey = cacheKeyFor(bucket, id);
+    final preloadKey = '$cacheKey:$memCacheWidth';
     if (!_preloadingImages.add(preloadKey)) return;
 
     try {
@@ -106,7 +105,7 @@ class GalleryScreen extends ConsumerWidget {
         ResizeImage(
           CachedNetworkImageProvider(
             url,
-            cacheManager: cacheManager,
+            cacheManager: bucket.manager,
             cacheKey: cacheKey,
           ),
           width: memCacheWidth,
@@ -114,27 +113,30 @@ class GalleryScreen extends ConsumerWidget {
         context,
         onError: (_, _) {},
       );
-      await budget.recordFromCache(bucket, cacheKey ?? url);
+      await budget.recordFromCache(bucket, id);
     } finally {
       _preloadingImages.remove(preloadKey);
     }
   }
 
   Future<void> _precacheVideo(
+    String id,
     String url, {
     required bool online,
     required MediaCacheBudget budget,
   }) async {
     if (!online) return;
-    if (!_preloadingVideos.add(url)) return;
-    final key = 'video-${url.hashCode}';
+    if (!_preloadingVideos.add(id)) return;
     try {
-      await VideoCacheManager.instance.getSingleFile(url, key: key);
-      await budget.recordFromCache(CacheBucket.video, key);
+      await VideoCacheManager.instance.getSingleFile(
+        url,
+        key: cacheKeyFor(CacheBucket.video, id),
+      );
+      await budget.recordFromCache(CacheBucket.video, id);
     } catch (_) {
       // Best-effort prefetch; playback will fall back to network streaming.
     } finally {
-      _preloadingVideos.remove(url);
+      _preloadingVideos.remove(id);
     }
   }
 
@@ -154,9 +156,8 @@ class GalleryScreen extends ConsumerWidget {
       unawaited(
         _precacheNetworkImage(
           context,
+          file.id,
           api.thumbnailUrl(file.id),
-          cacheManager: ThumbCacheManager.instance,
-          cacheKey: 'thumb-${file.id}',
           memCacheWidth: 400,
           online: online,
           budget: budget,
@@ -168,8 +169,8 @@ class GalleryScreen extends ConsumerWidget {
         unawaited(
           _precacheNetworkImage(
             context,
+            file.id,
             api.imageUrl(file.id),
-            cacheManager: FullImageCacheManager.instance,
             memCacheWidth: memCacheWidth,
             online: online,
             budget: budget,
@@ -188,6 +189,7 @@ class GalleryScreen extends ConsumerWidget {
       if (file.mediaType == MediaType.video) {
         unawaited(
           _precacheVideo(
+            file.id,
             api.videoUrl(file.id),
             online: online,
             budget: budget,
@@ -361,26 +363,12 @@ class GalleryScreen extends ConsumerWidget {
     final api = ref.read(apiClientProvider);
     final online = ref.read(isOnlineProvider);
     final budget = ref.read(mediaCacheBudgetProvider);
+    // No offline filtering here: while offline the grid is already built from
+    // MediaCacheBudget.isAvailableOffline, so everything it can hand over is
+    // openable. Re-filtering used to hide files behind a "Not available
+    // offline" toast *after* the user had tapped a visible tile.
     var galleryFiles = files;
-    var startIndex = initialIndex.clamp(0, files.length - 1).toInt();
-
-    if (!online) {
-      final tappedFile = files[startIndex];
-      final cachedFlags = await Future.wait(
-        files.map((file) => isFullBlobCached(file, api)),
-      );
-      final cachedFiles = [
-        for (var i = 0; i < files.length; i++)
-          if (cachedFlags[i]) files[i],
-      ];
-      final tappedIndex = cachedFiles.indexWhere((f) => f.id == tappedFile.id);
-      if (tappedIndex == -1) {
-        showToast('Not available offline', isError: true);
-        return null;
-      }
-      galleryFiles = cachedFiles;
-      startIndex = tappedIndex;
-    }
+    final startIndex = initialIndex.clamp(0, files.length - 1).toInt();
 
     if (!context.mounted) return null;
     var items = [for (final file in galleryFiles) _galleryItemFor(file, api)];
@@ -535,6 +523,7 @@ class GalleryScreen extends ConsumerWidget {
     final asyncState = ref.watch(pagedFilesProvider(query));
     final themeMode = ref.watch(themeModeProvider);
     final isOnline = ref.watch(isOnlineProvider);
+    final connectionState = ref.watch(serverConnectionStateProvider);
 
     void updateQuery(GalleryQuery Function(GalleryQuery) fn) {
       ref.read(galleryQueryProvider.notifier).state = fn(query);
@@ -551,7 +540,13 @@ class GalleryScreen extends ConsumerWidget {
                   color: Theme.of(context).colorScheme.errorContainer,
                   alignment: Alignment.center,
                   child: Text(
-                    'Offline — showing cached items',
+                    switch (connectionState) {
+                      ServerConnectionState.manualOffline =>
+                        'Working offline — showing cached items',
+                      ServerConnectionState.checking =>
+                        'Reconnecting — showing cached items',
+                      _ => 'Offline — showing cached items',
+                    },
                     style: TextStyle(
                       color: Theme.of(context).colorScheme.onErrorContainer,
                       fontSize: 12,

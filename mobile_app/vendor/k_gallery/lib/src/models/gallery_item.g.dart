@@ -12,6 +12,7 @@ GalleryItem _$GalleryItemFromJson(Map<String, dynamic> json) => GalleryItem(
           GalleryItemType.image,
       thumbnailUrl: json['thumbnailUrl'] as String?,
       thumbnailCacheKey: json['thumbnailCacheKey'] as String?,
+      cacheKey: json['cacheKey'] as String?,
       title: json['title'] as String?,
       description: json['description'] as String?,
     );
@@ -22,6 +23,7 @@ Map<String, dynamic> _$GalleryItemToJson(GalleryItem instance) =>
       'type': _$GalleryItemTypeEnumMap[instance.type]!,
       'thumbnailUrl': instance.thumbnailUrl,
       'thumbnailCacheKey': instance.thumbnailCacheKey,
+      'cacheKey': instance.cacheKey,
       'title': instance.title,
       'description': instance.description,
     };

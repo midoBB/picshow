@@ -46,6 +46,7 @@ class GalleryImageItem extends StatelessWidget {
       width: double.infinity,
       height: double.infinity,
       cacheManager: cacheManager,
+      cacheKey: item.cacheKey,
       memCacheWidth: memCacheWidth,
       placeholder: (context, _) =>
           progressWidget ??

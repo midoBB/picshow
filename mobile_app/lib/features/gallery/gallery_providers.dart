@@ -59,13 +59,17 @@ class PagedFilesNotifier
   Future<PagedFilesState> build(GalleryQuery arg) async {
     final api = ref.watch(apiClientProvider);
     final store = ref.watch(recentMediaStoreProvider);
+    final budget = ref.watch(mediaCacheBudgetProvider);
     final online = ref.watch(isOnlineProvider);
 
     if (online) unawaited(_reconcilePendingFavorites(store, api));
 
     if (!online) {
+      // Re-runs as the background filler completes downloads, so the offline
+      // grid grows in place instead of waiting for the next reconnect.
+      ref.watch(mediaCacheLedgerRevisionProvider);
       return PagedFilesState(
-        files: await store.queryOfflineWithThumbs(arg),
+        files: store.queryOfflineAvailable(arg, budget),
         nextPage: null,
         isLoadingMore: false,
         isOffline: true,
@@ -91,7 +95,7 @@ class PagedFilesNotifier
     } on DioException catch (e) {
       if (!ApiClient.isConnectionError(e)) rethrow;
       return PagedFilesState(
-        files: await store.queryOfflineWithThumbs(arg),
+        files: store.queryOfflineAvailable(arg, budget),
         nextPage: null,
         isLoadingMore: false,
         isOffline: true,

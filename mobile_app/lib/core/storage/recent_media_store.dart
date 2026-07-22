@@ -5,7 +5,7 @@ import 'package:flutter/foundation.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
-import 'package:picshow_mobile/core/network/thumb_cache.dart';
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 
 /// Persists metadata for media the user has already fetched, so the gallery
@@ -94,26 +94,20 @@ class RecentMediaStore {
     return files;
   }
 
-  /// Same as [queryOffline], additionally filtered down to entries whose
-  /// thumbnail is already on disk, so every returned file can actually render
-  /// as a grid tile offline (a local lookup, no network calls).
+  /// Same as [queryOffline], narrowed to files [budget] reports as fully
+  /// available — thumbnail *and* full-resolution bytes both on disk.
   ///
-  /// Deliberately does *not* require the full-resolution blob. Grid browsing
-  /// only ever writes thumbnails, so demanding the full blob here hid nearly
-  /// everything the user had seen. Tapping a file whose full blob is missing
-  /// is handled downstream by `_openGallery`, which filters the slide list
-  /// with [isFullBlobCached] and shows a "Not available offline" toast.
-  Future<List<MediaFile>> queryOfflineWithThumbs(GalleryQuery query) async {
-    final candidates = queryOffline(query);
-    final results = await Future.wait(
-      candidates.map((file) async {
-        final thumbCached = await ThumbCacheManager.instance.getFileFromCache(
-          'thumb-${file.id}',
-        );
-        return thumbCached == null ? null : file;
-      }),
-    );
-    return [for (final file in results) ?file];
+  /// This is the guarantee the offline grid rests on: everything it lists can
+  /// be opened. Filtering on the thumbnail alone (as this once did) put tiles
+  /// on screen that dead-ended in a "Not available offline" toast when tapped.
+  List<MediaFile> queryOfflineAvailable(
+    GalleryQuery query,
+    MediaCacheBudget budget,
+  ) {
+    return [
+      for (final file in queryOffline(query))
+        if (budget.isAvailableOffline(file)) file,
+    ];
   }
 
   Future<void> remove(String id) => _box.delete(id);

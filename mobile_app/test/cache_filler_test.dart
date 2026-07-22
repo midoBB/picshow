@@ -10,13 +10,20 @@ import 'package:picshow_mobile/core/models/pagination.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/cache_filler.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 
+ServerConnection _fakeConnection() => ServerConnection(
+  serverUrls: const ['http://example.test'],
+  probe: (_) async => true,
+  connectivityStream: const Stream.empty(),
+);
+
 class _CountingApi extends ApiClient {
-  _CountingApi(this.files) : super(baseUrls: const ['http://example.test']);
+  _CountingApi(this.files) : super(connection: _fakeConnection());
 
   final List<MediaFile> files;
   int listCalls = 0;
@@ -44,7 +51,7 @@ class _CountingApi extends ApiClient {
   }
 }
 
-class _FakeOnlineNotifier extends StableOnlineNotifier {
+class _FakeOnlineNotifier extends OnlineNotifier {
   _FakeOnlineNotifier(this._value);
 
   final bool _value;
@@ -53,7 +60,11 @@ class _FakeOnlineNotifier extends StableOnlineNotifier {
   bool build() => _value;
 }
 
-MediaFile _mediaFile(String id, {MediaType mediaType = MediaType.image}) {
+MediaFile _mediaFile(
+  String id, {
+  MediaType mediaType = MediaType.image,
+  int size = 1,
+}) {
   final meta = MediaMeta(
     width: 100,
     height: 100,
@@ -65,7 +76,7 @@ MediaFile _mediaFile(String id, {MediaType mediaType = MediaType.image}) {
     hash: 'hash-$id',
     createdAt: DateTime.utc(2026, 1, 5, 12),
     filename: '$id.jpg',
-    size: 1,
+    size: size,
     mediaType: mediaType,
     mimeType: mediaType == MediaType.image ? 'image/jpeg' : 'video/mp4',
     isFavorite: false,
@@ -183,7 +194,7 @@ void main() {
     // for a file the store knows about, so the startup reconcile keeps it
     // rather than treating it as an orphan row.
     final existing = _mediaFile('existing');
-    final existingKey = cacheKeyFor(CacheBucket.image, existing.id, api);
+    final existingKey = cacheKeyFor(CacheBucket.image, existing.id);
     await FullImageCacheManager.instance.putFile(existingKey, Uint8List(960));
 
     final container = await _container(
@@ -200,16 +211,24 @@ void main() {
     // Never even asks the server for a page, and nothing already cached is
     // dropped to make room.
     expect(api.listCalls, 0);
-    expect(budget.knows(existingKey), isTrue);
+    expect(budget.knows(CacheBucket.image, existing.id), isTrue);
   });
 
-  test('never prefetches video blobs', () async {
+  test('prefetches videos under the size cap', () async {
+    const id = 'clip';
     final api = _CountingApi([
-      _mediaFile('clip', mediaType: MediaType.video),
+      _mediaFile(id, mediaType: MediaType.video, size: 1024),
     ]);
     final budget = await MediaCacheBudget.openInMemoryForTesting(
       budgetBytes: 100000,
     );
+    // Stands in for the server: the filler's fetch resolves from the disk
+    // cache, so the assertion is about whether it *asked* for the video.
+    await VideoCacheManager.instance.putFile(
+      cacheKeyFor(CacheBucket.video, id),
+      Uint8List(1024),
+    );
+
     final container = await _container(
       api: api,
       budget: budget,
@@ -220,9 +239,36 @@ void main() {
 
     await container.read(cacheFillProvider.notifier).bootstrapped;
 
-    // The page was fetched, but no video bytes were ever requested — a few
-    // videos would otherwise consume the entire budget.
-    expect(api.listCalls, 1);
-    expect(budget.knows(cacheKeyFor(CacheBucket.video, 'clip', api)), isFalse);
+    expect(budget.knows(CacheBucket.video, id), isTrue);
+  });
+
+  test('the prefetch predicate skips only oversized videos', () {
+    // Asserted on the predicate rather than through a fill pass: once a page
+    // completes, the ledger records every blob it finds on disk regardless of
+    // who put it there, so a row is no evidence about what was downloaded.
+    expect(
+      CacheFillNotifier.shouldPrefetch(
+        _mediaFile('photo', size: 500 * 1024 * 1024),
+      ),
+      isTrue,
+      reason: 'images are prefetched at any size',
+    );
+    expect(
+      CacheFillNotifier.shouldPrefetch(
+        _mediaFile('clip', mediaType: MediaType.video, size: 1024),
+      ),
+      isTrue,
+    );
+    expect(
+      CacheFillNotifier.shouldPrefetch(
+        _mediaFile(
+          'feature',
+          mediaType: MediaType.video,
+          size: CacheFillNotifier.maxPrefetchVideoBytes,
+        ),
+      ),
+      isFalse,
+      reason: 'the cap is exclusive',
+    );
   });
 }

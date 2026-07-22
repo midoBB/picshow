@@ -44,22 +44,34 @@ class CacheFillState {
   }
 }
 
-/// Proactively downloads thumbnails and full-resolution images until the
-/// cache budget is full, so going offline doesn't mean losing everything the
-/// user hasn't happened to scroll past.
+/// Proactively downloads full-resolution media and thumbnails until the cache
+/// budget is full, so going offline doesn't mean losing everything the user
+/// hasn't happened to scroll past.
 ///
 /// Two deliberate restrictions:
 ///
 /// * **WiFi/ethernet only** (unless forced from settings) — filling a
 ///   multi-gigabyte budget over cellular would be a nasty surprise.
-/// * **Images only.** Videos run tens to hundreds of MB each, so prefetching
-///   them would spend the whole budget on a handful of files. They're still
-///   cached on demand when actually watched.
+/// * **Videos only up to [_maxPrefetchVideoBytes].** A single large video can
+///   run to hundreds of MB, so prefetching them all would spend the whole
+///   budget on a handful of files. Oversized ones are still cached on demand
+///   when actually watched.
+///
+/// Images take priority over videos within a page, since they're both far
+/// cheaper and the bulk of a typical library.
 class CacheFillNotifier extends Notifier<CacheFillState> {
   /// Kept small so background downloads don't starve the thumbnails and
   /// full-res images the user is waiting on right now.
   static const _concurrency = 3;
   static const _pageSize = 100;
+
+  /// Videos at or above this size are left to on-demand caching.
+  static const maxPrefetchVideoBytes = 50 * 1024 * 1024;
+
+  /// Whether a background pass should download [file]'s full blob. Images
+  /// always qualify; videos only below [maxPrefetchVideoBytes].
+  static bool shouldPrefetch(MediaFile file) =>
+      file.mediaType == MediaType.image || file.size < maxPrefetchVideoBytes;
 
   bool _cancelled = false;
   bool _disposed = false;
@@ -96,14 +108,13 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
     // reading a provider after the container is gone throws.
     final store = ref.read(recentMediaStoreProvider);
     final budget = ref.read(mediaCacheBudgetProvider);
-    final api = ref.read(apiClientProvider);
 
     bootstrapped = Future(() async {
       // Bytes written by the grid's CachedNetworkImage tiles never pass
       // through this class, so the ledger starts each launch out of date.
       // Resync it against what's actually on disk before anything reads
       // totalBytes.
-      await budget.reconcile(store.getAll(), api);
+      await budget.reconcile(store.getAll());
       if (_disposed) return;
       await start();
     });
@@ -173,15 +184,26 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
 
       unawaited(store.upsertAll(result.files));
 
-      final images = result.files
-          .where((f) => f.mediaType == MediaType.image)
-          .toList();
-
-      await _downloadAll(images, api, budget);
+      // Images first: a page's worth of them costs less than one large video
+      // and makes far more of the library browsable offline.
+      await _downloadAll(
+        result.files.where((f) => f.mediaType == MediaType.image).toList(),
+        api,
+        budget,
+      );
+      await _downloadAll(
+        result.files
+            .where((f) => f.mediaType == MediaType.video && shouldPrefetch(f))
+            .toList(),
+        api,
+        budget,
+      );
       done += result.files.length;
       state = state.copyWith(done: done, total: result.pagination.totalRecords);
 
-      await budget.reconcile(result.files, api);
+      // Only this page's rows — a full reconcile would treat every file
+      // outside the page as an orphan and drop it from the ledger.
+      await budget.refresh(result.files);
 
       final next = result.pagination.nextPage;
       if (next == null) return;
@@ -211,31 +233,44 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
     await Future.wait([for (var i = 0; i < _concurrency; i++) worker()]);
   }
 
+  /// Downloads the full blob *before* the thumbnail.
+  ///
+  /// The order matters at the tail of a pass, where the budget fills or the
+  /// user cancels partway through a file. A thumbnail without its blob is a
+  /// tile the offline grid must hide anyway; a blob without its thumbnail
+  /// costs one cheap fetch to complete on the next pass. Downloading the
+  /// expensive half first means an interrupted pass wastes the cheap half,
+  /// not the other way round.
   Future<void> _cacheOne(
     MediaFile file,
     ApiClient api,
     MediaCacheBudget budget,
   ) async {
-    final thumbKey = cacheKeyFor(CacheBucket.thumb, file.id, api);
-    final imageKey = cacheKeyFor(CacheBucket.image, file.id, api);
+    final blobBucket = fullBlobBucketFor(file);
 
-    if (!budget.knows(thumbKey)) {
+    if (!budget.knows(blobBucket, file.id)) {
+      final url = blobBucket == CacheBucket.video
+          ? api.videoUrl(file.id)
+          : api.imageUrl(file.id);
+      await _fetch(
+        () => blobBucket.manager.getSingleFile(
+          url,
+          key: cacheKeyFor(blobBucket, file.id),
+        ),
+      );
+      await budget.recordFromCache(blobBucket, file.id);
+    }
+
+    if (_cancelled) return;
+
+    if (!budget.knows(CacheBucket.thumb, file.id)) {
       await _fetch(
         () => ThumbCacheManager.instance.getSingleFile(
           api.thumbnailUrl(file.id),
-          key: thumbKey,
+          key: cacheKeyFor(CacheBucket.thumb, file.id),
         ),
       );
-      await budget.recordFromCache(CacheBucket.thumb, thumbKey);
-    }
-
-    if (_cancelled || budget.isFull) return;
-
-    if (!budget.knows(imageKey)) {
-      await _fetch(
-        () => FullImageCacheManager.instance.getSingleFile(api.imageUrl(file.id)),
-      );
-      await budget.recordFromCache(CacheBucket.image, imageKey);
+      await budget.recordFromCache(CacheBucket.thumb, file.id);
     }
   }
 

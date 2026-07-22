@@ -11,6 +11,13 @@ class AppPrefs {
   static const _remoteServerUrlKey = 'remote_server_url';
   static const _themeModeKey = 'theme_mode';
   static const _cacheBudgetBytesKey = 'cache_budget_bytes';
+  static const _cacheKeySchemaVersionKey = 'cache_key_schema_version';
+  static const _manualOfflineKey = 'manual_offline';
+
+  /// Bumped whenever the [cacheKeyFor] scheme changes, making every entry
+  /// already on disk unreachable. Version 1 keyed full images and videos by
+  /// their URL, so those entries died on any LAN/public address switch.
+  static const currentCacheKeySchemaVersion = 2;
 
   final SharedPreferences _prefs;
 
@@ -77,4 +84,23 @@ class AppPrefs {
 
   Future<void> setCacheBudgetBytes(int bytes) =>
       _prefs.setInt(_cacheBudgetBytesKey, bytes);
+
+  /// The cache-key scheme the on-disk media caches were written with.
+  ///
+  /// Defaults to 1 because the key predates versioning: an install carrying
+  /// v1 caches and a fresh install are indistinguishable here, so both take
+  /// the migration path. For a fresh install that's a no-op wipe of two empty
+  /// caches, which is the safe way round to be wrong.
+  int get cacheKeySchemaVersion => _prefs.getInt(_cacheKeySchemaVersionKey) ?? 1;
+
+  Future<void> setCacheKeySchemaVersion(int version) =>
+      _prefs.setInt(_cacheKeySchemaVersionKey, version);
+
+  /// Whether the user asked to work offline regardless of reachability.
+  /// Persisted so the choice survives a restart rather than silently
+  /// reverting to hitting the network.
+  bool get manualOffline => _prefs.getBool(_manualOfflineKey) ?? false;
+
+  Future<void> setManualOffline(bool value) =>
+      _prefs.setBool(_manualOfflineKey, value);
 }

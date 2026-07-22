@@ -79,6 +79,7 @@ pub async fn run_server(
     let json_routes = axum::Router::new()
         .route("/", delete(delete_files))
         .route("/", get(get_files))
+        .route("/health", get(get_health))
         .route("/stats", get(get_stats))
         .route("/settings", get(get_settings))
         .route("/settings", patch(update_settings))
@@ -118,6 +119,16 @@ pub async fn run_server(
         })
         .await?;
     Ok(())
+}
+
+/// Liveness probe for clients deciding which of several configured addresses
+/// to talk to (the mobile app tries a LAN address before a public one, and
+/// re-probes on every connectivity change). Deliberately touches neither the
+/// database nor the filesystem: it is polled far more often than any real
+/// request, and it must answer "this address reaches the server" and nothing
+/// more.
+async fn get_health() -> impl IntoResponse {
+    axum::Json(json!({ "status": "ok" }))
 }
 
 async fn get_stats(State(state): State<Arc<AppState>>) -> impl IntoResponse {

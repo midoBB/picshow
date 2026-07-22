@@ -122,7 +122,11 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
       try {
         final file = await cacheManager.getSingleFile(
           source,
-          key: 'video-${source.hashCode}',
+          // Falling back to a URL-derived key keeps the previous behavior for
+          // callers that don't set one, but a host app whose cache survives a
+          // change of server address must supply [GalleryItem.cacheKey] — the
+          // hash of a URL it no longer uses would miss every cached file.
+          key: widget.item.cacheKey ?? 'video-${source.hashCode}',
         );
         // Superseded by a swipe-away/dispose while the download was in
         // flight — the player this call was meant for no longer exists.

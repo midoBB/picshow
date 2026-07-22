@@ -20,6 +20,7 @@ void main() async {
   final cacheBudget = await MediaCacheBudget.open(
     budgetBytes: prefs.cacheBudgetBytes,
   );
+  await _migrateCacheKeys(prefs, cacheBudget);
 
   runApp(
     ProviderScope(
@@ -33,6 +34,19 @@ void main() async {
   );
 }
 
+/// Drops full-image and video bytes written under the old, URL-derived cache
+/// keys. They are unreachable under the current scheme, so leaving them would
+/// occupy the budget forever without ever being served. Thumbnails were always
+/// keyed `thumb-<id>` and carry over untouched, which keeps the grid populated
+/// while the background filler re-downloads the rest over WiFi.
+Future<void> _migrateCacheKeys(AppPrefs prefs, MediaCacheBudget budget) async {
+  if (prefs.cacheKeySchemaVersion >= AppPrefs.currentCacheKeySchemaVersion) {
+    return;
+  }
+  await budget.clearFullBlobs();
+  await prefs.setCacheKeySchemaVersion(AppPrefs.currentCacheKeySchemaVersion);
+}
+
 class PicShowApp extends ConsumerWidget {
   const PicShowApp({super.key});
 
@@ -40,9 +54,10 @@ class PicShowApp extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final themeMode = ref.watch(themeModeProvider);
     final serverUrls = ref.watch(serverUrlsProvider);
-    // Keep the reconnect probe alive for the app's lifetime, not just while
-    // the gallery screen happens to be mounted.
-    ref.watch(reconnectProbeProvider);
+    // Keep the connection owner alive for the app's lifetime, not just while
+    // the gallery screen happens to be mounted: it owns the probe timers and
+    // the active server address.
+    ref.watch(serverConnectionProvider);
     // Same reasoning for the background cache filler: it should run for the
     // whole session, not only while the gallery is on screen.
     ref.watch(cacheFillProvider);

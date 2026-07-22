@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
+import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
@@ -124,6 +125,10 @@ class _MediaGridState extends ConsumerState<MediaGrid> {
   Widget build(BuildContext context) {
     final columns = _columnCount(MediaQuery.of(context).size.width);
     final api = ref.watch(apiClientProvider);
+    final isOnline = ref.watch(isOnlineProvider);
+    final budget = ref.watch(mediaCacheBudgetProvider);
+    // Rebuilds the badges as the background filler makes files available.
+    ref.watch(mediaCacheLedgerRevisionProvider);
 
     return RefreshIndicator(
       onRefresh: () =>
@@ -143,6 +148,7 @@ class _MediaGridState extends ConsumerState<MediaGrid> {
             heroTag: file.mediaType == MediaType.video
                 ? api.videoUrl(file.id)
                 : api.imageUrl(file.id),
+            isOfflineReady: isOnline && budget.isAvailableOffline(file),
             onTap: () => _openAndSyncToLastSlide(index),
           );
         },

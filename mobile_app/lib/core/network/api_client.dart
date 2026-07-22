@@ -1,8 +1,11 @@
+import 'dart:async';
+
 import 'package:dio/dio.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/models/media_stats.dart';
 import 'package:picshow_mobile/core/models/pagination.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 
 class PagedFilesResult {
   PagedFilesResult({required this.files, required this.pagination});
@@ -12,66 +15,39 @@ class PagedFilesResult {
 }
 
 class ApiClient {
-  /// [baseUrls] is an ordered list of candidate server addresses (e.g. a
-  /// LAN address and a public/internet address for the same server). The
-  /// first candidate is tried by default; on a connection failure, requests
-  /// automatically retry against the remaining candidates, and whichever
-  /// one succeeds becomes the active address for subsequent calls (and for
-  /// [thumbnailUrl]/[imageUrl]/[videoUrl]).
-  ApiClient({
-    List<String> baseUrls = const [],
-    this.onConnectionError,
-    this.onConnectionSuccess,
-  }) : _candidates = baseUrls
-           .map(_normalize)
-           .where((u) => u.isNotEmpty)
-           .toList(),
-       _dio = Dio() {
-    if (_candidates.isNotEmpty) {
-      _baseUrl = _candidates.first;
-      _dio.options.baseUrl = _apiBaseUrl;
-    }
+  /// Talks to whichever server address [connection] currently considers
+  /// active, and reports every outcome back to it.
+  ///
+  /// Address selection deliberately lives in [ServerConnection] rather than
+  /// here. This class once carried its own failover loop, which had two
+  /// problems: it only ran when an API request happened to fail, and it left
+  /// media URLs alone entirely — thumbnails, images and videos are fetched by
+  /// `flutter_cache_manager`, which never passes through a dio interceptor.
+  /// With one owner, [thumbnailUrl]/[imageUrl]/[videoUrl] follow the same
+  /// address as every API call, and probing happens on connectivity changes
+  /// and app resume rather than only after something has already broken.
+  ApiClient({required this.connection}) : _dio = Dio() {
     _dio.options.connectTimeout = const Duration(seconds: 10);
     _dio.options.receiveTimeout = const Duration(seconds: 30);
     _dio.interceptors.add(
       InterceptorsWrapper(
+        onRequest: (options, handler) {
+          // Resolved per request: the active address can change between the
+          // client being constructed and a call being made.
+          options.baseUrl = _apiBaseUrl;
+          handler.next(options);
+        },
         onResponse: (response, handler) {
-          _consecutiveConnectionErrors = 0;
-          onConnectionSuccess?.call();
+          connection.noteResponse();
           handler.next(response);
         },
-        onError: (error, handler) async {
-          final alreadyRetried =
-              error.requestOptions.extra['_failoverRetried'] == true;
-          if (isConnectionError(error) &&
-              !alreadyRetried &&
-              _candidates.length > 1) {
-            for (final candidate in _candidates) {
-              if (candidate == _baseUrl) continue;
-              try {
-                final options = error.requestOptions
-                  ..extra['_failoverRetried'] = true
-                  ..baseUrl = '$candidate/api';
-                final response = await _dio.fetch<dynamic>(options);
-                baseUrl = candidate;
-                _consecutiveConnectionErrors = 0;
-                onConnectionSuccess?.call();
-                handler.resolve(response);
-                return;
-              } on DioException {
-                continue;
-              }
-            }
-          }
+        onError: (error, handler) {
           if (isConnectionError(error)) {
-            // A single flaky request among several concurrent ones (e.g. one
-            // thumbnail timing out while others succeed) shouldn't declare
-            // the whole app offline — require a couple of consecutive
-            // failures with no intervening success first.
-            _consecutiveConnectionErrors++;
-            if (_consecutiveConnectionErrors >= _connectionErrorThreshold) {
-              onConnectionError?.call();
-            }
+            // Best-effort: gives the connection a chance to move to another
+            // configured address before the next call. This request still
+            // fails — callers already treat a connection error as "fall back
+            // to the cache".
+            unawaited(connection.failOver(baseUrl));
           }
           handler.next(error);
         },
@@ -79,11 +55,7 @@ class ApiClient {
     );
   }
 
-  static const _connectionErrorThreshold = 2;
-  int _consecutiveConnectionErrors = 0;
-
-  final void Function()? onConnectionError;
-  final void Function()? onConnectionSuccess;
+  final ServerConnection connection;
 
   static bool isConnectionError(DioException e) =>
       e.type == DioExceptionType.connectionError ||
@@ -91,23 +63,12 @@ class ApiClient {
       e.type == DioExceptionType.sendTimeout ||
       e.type == DioExceptionType.receiveTimeout;
 
-  static String _normalize(String value) =>
-      value.endsWith('/') ? value.substring(0, value.length - 1) : value;
-
   final Dio _dio;
-  final List<String> _candidates;
-  String _baseUrl = '';
 
-  String get _apiBaseUrl => '$_baseUrl/api';
+  String get _apiBaseUrl => '$baseUrl/api';
 
-  /// The currently-active server address (starts as the first candidate;
-  /// switches to whichever one last answered successfully).
-  String get baseUrl => _baseUrl;
-
-  set baseUrl(String value) {
-    _baseUrl = _normalize(value);
-    _dio.options.baseUrl = _apiBaseUrl;
-  }
+  /// The currently-active server address, as decided by [connection].
+  String get baseUrl => connection.activeServerUrl ?? '';
 
   Future<MediaStats> fetchStats() async {
     final response = await _dio.get<Map<String, dynamic>>('/stats');
@@ -156,9 +117,12 @@ class ApiClient {
     return response.data!;
   }
 
-  String thumbnailUrl(String id) => '$_baseUrl/api/thumbnail/$id';
+  // Built from the live address, so a failover mid-session immediately
+  // redirects media fetches too. Cache keys deliberately do not follow
+  // (see cacheKeyFor): the bytes are the same file either way.
+  String thumbnailUrl(String id) => '$baseUrl/api/thumbnail/$id';
 
-  String imageUrl(String id) => '$_baseUrl/api/image/$id';
+  String imageUrl(String id) => '$baseUrl/api/image/$id';
 
-  String videoUrl(String id) => '$_baseUrl/api/video/$id';
+  String videoUrl(String id) => '$baseUrl/api/video/$id';
 }

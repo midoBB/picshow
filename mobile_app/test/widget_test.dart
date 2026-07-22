@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -8,15 +9,25 @@ import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/models/media_stats.dart';
 import 'package:picshow_mobile/core/models/pagination.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
-import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 
+/// A connection pinned to one always-reachable address, so [ApiClient]
+/// subclasses under test have a live [ApiClient.baseUrl] without touching the
+/// network or a platform channel.
+ServerConnection _fakeConnection() => ServerConnection(
+  serverUrls: const ['http://example.test'],
+  probe: (_) async => true,
+  connectivityStream: const Stream.empty(),
+);
+
 class _FakeApiClient extends ApiClient {
-  _FakeApiClient(this.files);
+  _FakeApiClient(this.files) : super(connection: _fakeConnection());
 
   List<MediaFile> files;
   final toggledIds = <String>[];
@@ -69,10 +80,10 @@ class _FakeApiClient extends ApiClient {
   }
 }
 
-// isOnlineProvider is a NotifierProvider<StableOnlineNotifier, bool>, so
-// overrideWith requires a StableOnlineNotifier subclass — these bypass the
-// real connectivity-stream/debounce wiring in build() for direct control.
-class _FakeOnlineNotifier extends StableOnlineNotifier {
+// isOnlineProvider is a NotifierProvider<OnlineNotifier, bool>, so
+// overrideWith requires an OnlineNotifier subclass — these bypass the real
+// ServerConnection wiring in build() for direct control.
+class _FakeOnlineNotifier extends OnlineNotifier {
   _FakeOnlineNotifier(this._value);
 
   final bool _value;
@@ -86,7 +97,7 @@ Override _online(bool value) =>
 
 /// Like [_FakeOnlineNotifier], but its value can be flipped mid-test to
 /// simulate a reconnect without recreating the container.
-class _ControllableOnlineNotifier extends StableOnlineNotifier {
+class _ControllableOnlineNotifier extends OnlineNotifier {
   _ControllableOnlineNotifier(this._initial);
 
   final bool _initial;
@@ -94,6 +105,7 @@ class _ControllableOnlineNotifier extends StableOnlineNotifier {
   @override
   bool build() => _initial;
 
+  // ignore: use_setters_to_change_properties
   void setOnline(bool value) => state = value;
 }
 
@@ -125,10 +137,14 @@ MediaFile _mediaFile({
 
 Future<ProviderContainer> _containerWith(ApiClient api) async {
   final store = await RecentMediaStore.openInMemoryForTesting();
+  final budget = await MediaCacheBudget.openInMemoryForTesting(
+    budgetBytes: 1 << 30,
+  );
   return ProviderContainer(
     overrides: [
       apiClientProvider.overrideWithValue(api),
       recentMediaStoreProvider.overrideWithValue(store),
+      mediaCacheBudgetProvider.overrideWithValue(budget),
       _online(true),
     ],
   );
@@ -384,39 +400,31 @@ void main() {
     });
 
     test(
-      'queryOfflineWithThumbs includes thumbnail-only files but not uncached ones',
+      'queryOfflineAvailable excludes thumbnail-only and uncached files',
       () async {
-        final api = _FakeApiClient([]);
         final store = await RecentMediaStore.openInMemoryForTesting();
+        final budget = await MediaCacheBudget.openInMemoryForTesting(
+          budgetBytes: 1 << 30,
+        );
         await store.upsertAll([
           _mediaFile(id: 'thumb-only', isFavorite: false),
           _mediaFile(id: 'fully-cached', isFavorite: false),
           _mediaFile(id: 'not-cached', isFavorite: false),
         ]);
 
-        await ThumbCacheManager.instance.putFile(
-          'thumb-thumb-only',
-          Uint8List.fromList([0]),
-        );
-        await ThumbCacheManager.instance.putFile(
-          'thumb-fully-cached',
-          Uint8List.fromList([0]),
-        );
-        await FullImageCacheManager.instance.putFile(
-          api.imageUrl('fully-cached'),
-          Uint8List.fromList([0]),
-        );
+        await budget.record(CacheBucket.thumb, 'thumb-only', 10);
+        await budget.record(CacheBucket.thumb, 'fully-cached', 10);
+        await budget.record(CacheBucket.image, 'fully-cached', 100);
 
-        final result = await store.queryOfflineWithThumbs(
+        final result = store.queryOfflineAvailable(
           const GalleryQuery(order: SortOrder.createdAt),
+          budget,
         );
 
-        // 'thumb-only' is included: it renders as a grid tile offline even
-        // though tapping it will hit the "Not available offline" path.
-        expect(
-          result.map((f) => f.id).toSet(),
-          {'thumb-only', 'fully-cached'},
-        );
+        // 'thumb-only' is excluded even though it would render as a tile:
+        // showing it offline is what produced the "Not available offline"
+        // dead end when the user tapped it.
+        expect(result.map((f) => f.id).toSet(), {'fully-cached'});
       },
     );
   });
@@ -426,11 +434,15 @@ void main() {
       final api = _FakeApiClient([_mediaFile(id: 'cached-1', isFavorite: false)]);
       final store = await RecentMediaStore.openInMemoryForTesting();
       await store.upsertAll(api.files);
+      final budget = await MediaCacheBudget.openInMemoryForTesting(
+        budgetBytes: 1 << 30,
+      );
 
       final container = ProviderContainer(
         overrides: [
           apiClientProvider.overrideWithValue(api),
           recentMediaStoreProvider.overrideWithValue(store),
+          mediaCacheBudgetProvider.overrideWithValue(budget),
           _online(false),
         ],
       );
@@ -451,11 +463,15 @@ void main() {
     test('loadMore is a no-op while offline', () async {
       final api = _FakeApiClient([_mediaFile(id: 'cached-1', isFavorite: false)]);
       final store = await RecentMediaStore.openInMemoryForTesting();
+      final budget = await MediaCacheBudget.openInMemoryForTesting(
+        budgetBytes: 1 << 30,
+      );
 
       final container = ProviderContainer(
         overrides: [
           apiClientProvider.overrideWithValue(api),
           recentMediaStoreProvider.overrideWithValue(store),
+          mediaCacheBudgetProvider.overrideWithValue(budget),
           _online(false),
         ],
       );
@@ -480,11 +496,15 @@ void main() {
           _mediaFile(id: 'file-1', isFavorite: false),
         ]);
         final store = await RecentMediaStore.openInMemoryForTesting();
+        final budget = await MediaCacheBudget.openInMemoryForTesting(
+          budgetBytes: 1 << 30,
+        );
 
         final container = ProviderContainer(
           overrides: [
             apiClientProvider.overrideWithValue(api),
             recentMediaStoreProvider.overrideWithValue(store),
+            mediaCacheBudgetProvider.overrideWithValue(budget),
             isOnlineProvider.overrideWith(
               () => _ControllableOnlineNotifier(true),
             ),
@@ -498,14 +518,10 @@ void main() {
 
         await container.read(provider.future);
         await store.upsertAll(api.files);
-        await ThumbCacheManager.instance.putFile(
-          'thumb-file-1',
-          Uint8List.fromList([0]),
-        );
-        await FullImageCacheManager.instance.putFile(
-          api.imageUrl('file-1'),
-          Uint8List.fromList([0]),
-        );
+        // Availability comes from the ledger, not from probing the managers,
+        // so this is what makes the file visible in the offline grid.
+        await budget.record(CacheBucket.thumb, 'file-1', 10);
+        await budget.record(CacheBucket.image, 'file-1', 100);
 
         final onlineNotifier =
             container.read(isOnlineProvider.notifier)
@@ -545,11 +561,15 @@ void main() {
           _mediaFile(id: 'file-1', isFavorite: false),
         ]);
         final store = await RecentMediaStore.openInMemoryForTesting();
+        final budget = await MediaCacheBudget.openInMemoryForTesting(
+          budgetBytes: 1 << 30,
+        );
 
         final container = ProviderContainer(
           overrides: [
             apiClientProvider.overrideWithValue(api),
             recentMediaStoreProvider.overrideWithValue(store),
+            mediaCacheBudgetProvider.overrideWithValue(budget),
             isOnlineProvider.overrideWith(
               () => _ControllableOnlineNotifier(true),
             ),
@@ -563,14 +583,10 @@ void main() {
 
         await container.read(provider.future);
         await store.upsertAll(api.files);
-        await ThumbCacheManager.instance.putFile(
-          'thumb-file-1',
-          Uint8List.fromList([0]),
-        );
-        await FullImageCacheManager.instance.putFile(
-          api.imageUrl('file-1'),
-          Uint8List.fromList([0]),
-        );
+        // Availability comes from the ledger, not from probing the managers,
+        // so this is what makes the file visible in the offline grid.
+        await budget.record(CacheBucket.thumb, 'file-1', 10);
+        await budget.record(CacheBucket.image, 'file-1', 100);
 
         final onlineNotifier =
             container.read(isOnlineProvider.notifier)

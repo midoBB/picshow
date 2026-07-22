@@ -5,6 +5,7 @@ import 'package:flutter_test/flutter_test.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 
@@ -45,8 +46,6 @@ void main() {
         (call) async => pathProviderDir,
       );
 
-  final api = ApiClient(baseUrls: const ['http://example.test']);
-
   setUp(() async {
     await ThumbCacheManager.instance.emptyCache();
     await FullImageCacheManager.instance.emptyCache();
@@ -62,8 +61,8 @@ void main() {
     await budget.record(CacheBucket.image, 'b', 300);
 
     expect(budget.totalBytes, 600);
-    expect(budget.knows('a'), isTrue);
-    expect(budget.knows('b'), isTrue);
+    expect(budget.knows(CacheBucket.image, 'a'), isTrue);
+    expect(budget.knows(CacheBucket.image, 'b'), isTrue);
   });
 
   test('evicts oldest-added first once over budget', () async {
@@ -74,23 +73,25 @@ void main() {
     // Written in FIFO order; the manager holds real files so eviction has
     // something to remove.
     for (final id in ['first', 'second', 'third']) {
-      final key = api.imageUrl(id);
-      await FullImageCacheManager.instance.putFile(key, _bytes(400));
-      await budget.record(CacheBucket.image, key, 400);
+      await FullImageCacheManager.instance.putFile(
+        cacheKeyFor(CacheBucket.image, id),
+        _bytes(400),
+      );
+      await budget.record(CacheBucket.image, id, 400);
       // Ensure distinct addedAt timestamps.
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }
 
     // 3 x 400 = 1200 > 1000, so exactly one eviction is needed.
     expect(budget.totalBytes, 800);
-    expect(budget.knows(api.imageUrl('first')), isFalse);
-    expect(budget.knows(api.imageUrl('second')), isTrue);
-    expect(budget.knows(api.imageUrl('third')), isTrue);
+    expect(budget.knows(CacheBucket.image, 'first'), isFalse);
+    expect(budget.knows(CacheBucket.image, 'second'), isTrue);
+    expect(budget.knows(CacheBucket.image, 'third'), isTrue);
 
     // The bytes are gone from disk too, not just from the ledger.
     expect(
       await FullImageCacheManager.instance.getFileFromCache(
-        api.imageUrl('first'),
+        cacheKeyFor(CacheBucket.image, 'first'),
       ),
       isNull,
     );
@@ -110,35 +111,106 @@ void main() {
     await budget.record(CacheBucket.image, 'old', 400);
     await budget.record(CacheBucket.image, 'newest', 400);
 
-    expect(budget.knows('old'), isFalse);
-    expect(budget.knows('new'), isTrue);
-    expect(budget.knows('newest'), isTrue);
+    expect(budget.knows(CacheBucket.image, 'old'), isFalse);
+    expect(budget.knows(CacheBucket.image, 'new'), isTrue);
+    expect(budget.knows(CacheBucket.image, 'newest'), isTrue);
   });
 
-  test('protects thumbnails under the floor and evicts images instead',
-      () async {
-    // Floor is min(10% of budget, 200MB) = 100 bytes here.
+  test('evicts a file\'s thumbnail and blob together', () async {
     final budget = await MediaCacheBudget.openInMemoryForTesting(
       budgetBytes: 1000,
     );
 
-    // Oldest entry is a thumbnail, so naive FIFO would drop it first.
-    await ThumbCacheManager.instance.putFile('thumb-a', _bytes(50));
-    await budget.record(CacheBucket.thumb, 'thumb-a', 50);
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-
+    // Both halves of 'x' are recorded before 'y' arrives, so 'x' is the
+    // oldest file and the one eviction must claim.
     for (final id in ['x', 'y']) {
-      final key = api.imageUrl(id);
-      await FullImageCacheManager.instance.putFile(key, _bytes(600));
-      await budget.record(CacheBucket.image, key, 600);
+      await ThumbCacheManager.instance.putFile(
+        cacheKeyFor(CacheBucket.thumb, id),
+        _bytes(50),
+      );
+      await budget.record(CacheBucket.thumb, id, 50);
+      await FullImageCacheManager.instance.putFile(
+        cacheKeyFor(CacheBucket.image, id),
+        _bytes(600),
+      );
+      await budget.record(CacheBucket.image, id, 600);
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }
 
-    // 50 + 600 + 600 = 1250 > 1000. Thumbnails total 50, under the 100-byte
-    // floor, so the image added first goes instead.
-    expect(budget.knows('thumb-a'), isTrue);
-    expect(budget.knows(api.imageUrl('x')), isFalse);
-    expect(budget.knows(api.imageUrl('y')), isTrue);
+    // 2 x 650 = 1300 > 1000. An earlier version spared thumbnails under a
+    // reserved floor, which left 'x' listed in the offline grid as a tile
+    // that could no longer be opened. Availability is all-or-nothing.
+    expect(budget.knows(CacheBucket.thumb, 'x'), isFalse);
+    expect(budget.knows(CacheBucket.image, 'x'), isFalse);
+    expect(budget.isAvailableOffline(_mediaFile('x')), isFalse);
+    expect(budget.isAvailableOffline(_mediaFile('y')), isTrue);
+  });
+
+  test('isAvailableOffline requires both the thumbnail and the blob', () async {
+    final budget = await MediaCacheBudget.openInMemoryForTesting(
+      budgetBytes: 100000,
+    );
+
+    await budget.record(CacheBucket.thumb, 'partial', 50);
+    expect(
+      budget.isAvailableOffline(_mediaFile('partial')),
+      isFalse,
+      reason: 'a thumbnail alone is a tile that cannot be opened',
+    );
+
+    await budget.record(CacheBucket.image, 'partial', 600);
+    expect(budget.isAvailableOffline(_mediaFile('partial')), isTrue);
+
+    // A video's blob lives in its own bucket; an image row must not satisfy it.
+    final clip = _mediaFile('clip', mediaType: MediaType.video);
+    await budget.record(CacheBucket.thumb, 'clip', 50);
+    await budget.record(CacheBucket.image, 'clip', 600);
+    expect(budget.isAvailableOffline(clip), isFalse);
+    await budget.record(CacheBucket.video, 'clip', 600);
+    expect(budget.isAvailableOffline(clip), isTrue);
+  });
+
+  test('availability survives a change of server address', () async {
+    final budget = await MediaCacheBudget.openInMemoryForTesting(
+      budgetBytes: 100000,
+    );
+    final file = _mediaFile('stable');
+
+    final lan = ApiClient(
+      connection: ServerConnection(
+        serverUrls: const ['http://192.168.1.20:8281'],
+        probe: (_) async => true,
+        connectivityStream: const Stream.empty(),
+      ),
+    );
+    final public = ApiClient(
+      connection: ServerConnection(
+        serverUrls: const ['https://picshow.example.com'],
+        probe: (_) async => true,
+        connectivityStream: const Stream.empty(),
+      ),
+    );
+
+    // Cached while on the LAN.
+    await ThumbCacheManager.instance.putFile(
+      cacheKeyFor(CacheBucket.thumb, file.id),
+      _bytes(50),
+    );
+    await FullImageCacheManager.instance.putFile(
+      cacheKeyFor(CacheBucket.image, file.id),
+      _bytes(600),
+    );
+    await budget.reconcile([file]);
+    expect(budget.isAvailableOffline(file), isTrue);
+
+    // The URLs genuinely differ between the two addresses...
+    expect(lan.imageUrl(file.id), isNot(public.imageUrl(file.id)));
+    // ...but the cache key does not, which is the whole point: keying blobs
+    // by URL is what made photos vanish on failover while their thumbnails
+    // (always keyed by id) survived.
+    await budget.reconcile([file]);
+    expect(budget.isAvailableOffline(file), isTrue);
+    expect(budget.totalBytes, 650);
   });
 
   test('reconcile picks up files written outside the ledger', () async {
@@ -148,12 +220,15 @@ void main() {
 
     // Simulates a grid tile's CachedNetworkImage writing a thumbnail
     // directly, with no record() call.
-    await ThumbCacheManager.instance.putFile('thumb-ghost', _bytes(120));
+    await ThumbCacheManager.instance.putFile(
+      cacheKeyFor(CacheBucket.thumb, 'ghost'),
+      _bytes(120),
+    );
     expect(budget.totalBytes, 0);
 
-    await budget.reconcile([_mediaFile('ghost')], api);
+    await budget.reconcile([_mediaFile('ghost')]);
 
-    expect(budget.knows('thumb-ghost'), isTrue);
+    expect(budget.knows(CacheBucket.thumb, 'ghost'), isTrue);
     expect(budget.totalBytes, 120);
   });
 
@@ -162,15 +237,20 @@ void main() {
       budgetBytes: 100000,
     );
 
-    final key = api.imageUrl('vanished');
-    await FullImageCacheManager.instance.putFile(key, _bytes(500));
-    await budget.record(CacheBucket.image, key, 500);
+    const id = 'vanished';
+    await FullImageCacheManager.instance.putFile(
+      cacheKeyFor(CacheBucket.image, id),
+      _bytes(500),
+    );
+    await budget.record(CacheBucket.image, id, 500);
     expect(budget.totalBytes, 500);
 
-    await FullImageCacheManager.instance.removeFile(key);
-    await budget.reconcile([_mediaFile('vanished')], api);
+    await FullImageCacheManager.instance.removeFile(
+      cacheKeyFor(CacheBucket.image, id),
+    );
+    await budget.reconcile([_mediaFile(id)]);
 
-    expect(budget.knows(key), isFalse);
+    expect(budget.knows(CacheBucket.image, id), isFalse);
     expect(budget.totalBytes, 0);
   });
 
@@ -181,9 +261,11 @@ void main() {
     );
 
     for (final id in ['a', 'b', 'c', 'd']) {
-      final key = api.imageUrl(id);
-      await FullImageCacheManager.instance.putFile(key, _bytes(1000));
-      await budget.record(CacheBucket.image, key, 1000);
+      await FullImageCacheManager.instance.putFile(
+        cacheKeyFor(CacheBucket.image, id),
+        _bytes(1000),
+      );
+      await budget.record(CacheBucket.image, id, 1000);
       await Future<void>.delayed(const Duration(milliseconds: 5));
     }
     expect(budget.totalBytes, 4000);
@@ -192,9 +274,9 @@ void main() {
 
     expect(budget.totalBytes, lessThanOrEqualTo(2000));
     // Oldest-first: 'a' and 'b' go before 'c' and 'd'.
-    expect(budget.knows(api.imageUrl('a')), isFalse);
-    expect(budget.knows(api.imageUrl('b')), isFalse);
-    expect(budget.knows(api.imageUrl('d')), isTrue);
+    expect(budget.knows(CacheBucket.image, 'a'), isFalse);
+    expect(budget.knows(CacheBucket.image, 'b'), isFalse);
+    expect(budget.knows(CacheBucket.image, 'd'), isTrue);
   });
 
   test('isFull reports the ceiling the filler stops at', () async {

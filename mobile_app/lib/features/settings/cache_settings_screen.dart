@@ -4,6 +4,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'package:picshow_mobile/core/network/cache_filler.dart';
+import 'package:picshow_mobile/core/network/connectivity.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 
@@ -41,6 +43,12 @@ class _CacheSettingsScreenState extends ConsumerState<CacheSettingsScreen> {
     if (mounted) setState(() {});
   }
 
+  Future<void> _setManualOffline(bool value) async {
+    await ref.read(appPrefsProvider).setManualOffline(value);
+    await ref.read(serverConnectionProvider).setManualOffline(value);
+    if (mounted) setState(() {});
+  }
+
   Future<void> _clear() async {
     final confirmed = await showDialog<bool>(
       context: context,
@@ -75,6 +83,11 @@ class _CacheSettingsScreenState extends ConsumerState<CacheSettingsScreen> {
     final budget = ref.watch(mediaCacheBudgetProvider);
     final budgetBytes = ref.watch(cacheBudgetBytesProvider);
     final fill = ref.watch(cacheFillProvider);
+    // Watched rather than read so the switch reflects the connection's own
+    // state, which the app can also reach through other paths.
+    final manualOffline =
+        ref.watch(serverConnectionStateProvider) ==
+        ServerConnectionState.manualOffline;
     final used = budget.totalBytes;
     final fraction = budgetBytes == 0
         ? 0.0
@@ -108,12 +121,23 @@ class _CacheSettingsScreenState extends ConsumerState<CacheSettingsScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'PicShow fills this space with photos in the background over WiFi '
-            'so they stay viewable offline. When it is full, the oldest '
-            'cached items are removed first.',
+            'PicShow fills this space in the background over WiFi so photos '
+            'stay viewable offline. Videos are included when they are small '
+            'enough; larger ones are cached only once you watch them. When '
+            'the space is full, the oldest items are removed first.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
-          const SizedBox(height: 24),
+          const SizedBox(height: 16),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            value: manualOffline,
+            onChanged: _setManualOffline,
+            title: const Text('Work offline'),
+            subtitle: const Text(
+              'Stop contacting the server and browse only cached media.',
+            ),
+          ),
+          const SizedBox(height: 8),
           if (fill.isRunning) ...[
             Row(
               children: [

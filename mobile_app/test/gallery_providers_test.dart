@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -7,9 +8,11 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/models/pagination.dart';
 import 'package:picshow_mobile/core/network/api_client.dart';
+import 'package:picshow_mobile/core/network/server_connection.dart';
 import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
+import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/core/storage/recent_media_store.dart';
 import 'package:picshow_mobile/features/gallery/gallery_providers.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
@@ -17,8 +20,17 @@ import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 /// Serves one fixed page at a time, so a "refresh" can be made to return a
 /// completely different set of ids — exactly what a randomly-ordered,
 /// server-paged endpoint does.
+/// A connection pinned to one always-reachable address, so [ApiClient]
+/// subclasses under test have a live [ApiClient.baseUrl] without touching the
+/// network or a platform channel.
+ServerConnection _fakeConnection() => ServerConnection(
+  serverUrls: const ['http://example.test'],
+  probe: (_) async => true,
+  connectivityStream: const Stream.empty(),
+);
+
 class _PagedFakeApi extends ApiClient {
-  _PagedFakeApi(this.page);
+  _PagedFakeApi(this.page) : super(connection: _fakeConnection());
 
   List<MediaFile> page;
 
@@ -46,7 +58,7 @@ class _PagedFakeApi extends ApiClient {
   }
 }
 
-class _FakeOnlineNotifier extends StableOnlineNotifier {
+class _FakeOnlineNotifier extends OnlineNotifier {
   _FakeOnlineNotifier(this._value);
 
   final bool _value;
@@ -99,11 +111,15 @@ void main() {
       final viewed = [for (var i = 0; i < 20; i++) _mediaFile('viewed-$i')];
       final api = _PagedFakeApi(viewed);
       final store = await RecentMediaStore.openInMemoryForTesting();
+      final budget = await MediaCacheBudget.openInMemoryForTesting(
+        budgetBytes: 1 << 30,
+      );
 
       final container = ProviderContainer(
         overrides: [
           apiClientProvider.overrideWithValue(api),
           recentMediaStoreProvider.overrideWithValue(store),
+          mediaCacheBudgetProvider.overrideWithValue(budget),
           isOnlineProvider.overrideWith(() => _FakeOnlineNotifier(true)),
         ],
       );

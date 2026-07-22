@@ -1,20 +1,21 @@
 import 'dart:io';
-import 'dart:math';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 import 'package:hive_flutter/hive_flutter.dart';
 
 import 'package:picshow_mobile/core/models/media_file.dart';
-import 'package:picshow_mobile/core/network/api_client.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 
 /// Which of the three disk caches a ledger row belongs to. Needed because
 /// eviction has to call `removeFile` on the *same* manager that wrote the
-/// bytes, and because thumbnails get a reserved floor (see [enforce]).
+/// bytes, and because a file's thumbnail and its full blob are evicted
+/// together (see [enforce]).
 enum CacheBucket { thumb, image, video }
 
-extension on CacheBucket {
+extension CacheBucketManager on CacheBucket {
+  /// The disk cache that owns this bucket's bytes. Writers must go through
+  /// it so the bytes land where [MediaCacheBudget] later looks for them.
   CacheManager get manager {
     switch (this) {
       case CacheBucket.thumb:
@@ -27,30 +28,40 @@ extension on CacheBucket {
   }
 }
 
-/// The cache key each bucket uses for [id]. These are the same keys the rest
-/// of the app builds at its `getSingleFile`/`CachedNetworkImage` call sites,
-/// and keeping them in one place is what lets the ledger stay authoritative
-/// without ever reverse-mapping an on-disk filename back to a cache key.
-String cacheKeyFor(CacheBucket bucket, String id, ApiClient api) {
-  switch (bucket) {
-    case CacheBucket.thumb:
-      return 'thumb-$id';
-    case CacheBucket.image:
-      return api.imageUrl(id);
-    case CacheBucket.video:
-      return 'video-${api.videoUrl(id).hashCode}';
-  }
-}
+/// The cache key each bucket uses for [id]: `thumb-`, `image-` or `video-`
+/// followed by the media id.
+///
+/// Deliberately derived from nothing but the bucket and the id. An earlier
+/// version keyed the image and video buckets by their full URL, which meant
+/// every entry silently became unreachable the moment [ApiClient] failed over
+/// between the LAN and the public address — the bytes stayed on disk under a
+/// key nothing would ever ask for again. Cache identity must not depend on
+/// which of several addresses happened to answer.
+///
+/// These are the same keys the rest of the app builds at its
+/// `getSingleFile`/`CachedNetworkImage` call sites, and keeping them in one
+/// place is what lets the ledger stay authoritative without ever
+/// reverse-mapping an on-disk filename back to a cache key.
+String cacheKeyFor(CacheBucket bucket, String id) => '${bucket.name}-$id';
 
-/// A byte-size budget across all three media disk caches, with first-in
-/// first-out eviction.
+/// The bucket holding [file]'s full-resolution bytes, as opposed to its
+/// thumbnail.
+CacheBucket fullBlobBucketFor(MediaFile file) =>
+    file.mediaType == MediaType.video ? CacheBucket.video : CacheBucket.image;
+
+/// A byte-size budget across all three media disk caches, and the single
+/// authority on what is available offline.
 ///
 /// `flutter_cache_manager`'s own `Config` can only cap the *number* of cached
 /// objects, which says nothing useful about disk use when a single entry
 /// ranges from a 30 KB thumbnail to a 300 MB video. This class keeps a
-/// separate ledger of `{cache key -> bytes, addedAt}` and is the sole
-/// authority on when something gets dropped; the managers themselves are
-/// configured to effectively never evict on their own.
+/// separate ledger of `{cache key -> id, bucket, bytes, addedAt}` and decides
+/// when something gets dropped; the managers themselves are configured to
+/// effectively never evict on their own.
+///
+/// Because the ledger records exactly what is on disk, it also answers
+/// [isAvailableOffline] synchronously, which is what lets the gallery grid
+/// show only files it can actually open while offline.
 class MediaCacheBudget {
   MediaCacheBudget._(this._box, this._budgetBytes);
 
@@ -66,14 +77,6 @@ class MediaCacheBudget {
     10 * 1024 * 1024 * 1024,
     20 * 1024 * 1024 * 1024,
   ];
-
-  /// Thumbnails are never evicted while they collectively fit under this
-  /// much of the budget. A thumbnail is ~1% the size of its full image but
-  /// is what makes a file *visible* in the offline grid, so letting a run of
-  /// full-resolution downloads evict thumbnails would trade a whole screen
-  /// of browsable tiles for one more openable photo.
-  static int thumbFloorBytes(int budgetBytes) =>
-      min((budgetBytes * 0.1).round(), 200 * 1024 * 1024);
 
   final Box<Map> _box;
   int _budgetBytes;
@@ -101,6 +104,10 @@ class MediaCacheBudget {
 
   int get budgetBytes => _budgetBytes;
 
+  /// Fires whenever a row is added, updated or dropped, so the offline grid
+  /// can re-query as the background filler makes more files available.
+  Listenable get changes => _box.listenable();
+
   int get totalBytes {
     var total = 0;
     for (final row in _box.values) {
@@ -121,7 +128,19 @@ class MediaCacheBudget {
   /// should stop rather than start evicting its own earlier downloads.
   bool get isFull => totalBytes >= (_budgetBytes * 0.95);
 
-  bool knows(String key) => _box.containsKey(key);
+  bool knows(CacheBucket bucket, String id) =>
+      _box.containsKey(cacheKeyFor(bucket, id));
+
+  /// Whether [file] can be opened with no network at all: both its thumbnail
+  /// (so it renders as a grid tile) and its full-resolution bytes (so the
+  /// viewer has something to show) are on disk.
+  ///
+  /// Requiring *both* is the point. Grid browsing writes thumbnails far more
+  /// often than full blobs, so a thumbnail alone means a tile the user can
+  /// see but not open — which is exactly the "Not available offline" dead end
+  /// this replaced.
+  bool isAvailableOffline(MediaFile file) =>
+      knows(CacheBucket.thumb, file.id) && knows(fullBlobBucketFor(file), file.id);
 
   /// Changes the budget and immediately brings the cache back under it.
   Future<void> setBudgetBytes(int bytes) async {
@@ -129,13 +148,15 @@ class MediaCacheBudget {
     await enforce();
   }
 
-  /// Records that [key] now occupies [bytes] on disk, then evicts as needed.
-  /// Re-recording an existing key updates its size but keeps its original
-  /// `addedAt`, so refreshing bytes never moves an entry to the back of the
-  /// FIFO queue.
-  Future<void> record(CacheBucket bucket, String key, int bytes) async {
+  /// Records that [id]'s [bucket] bytes now occupy [bytes] on disk, then
+  /// evicts as needed. Re-recording an existing entry updates its size but
+  /// keeps its original `addedAt`, so refreshing bytes never moves an entry to
+  /// the back of the FIFO queue.
+  Future<void> record(CacheBucket bucket, String id, int bytes) async {
+    final key = cacheKeyFor(bucket, id);
     final existing = _box.get(key);
     await _box.put(key, {
+      'id': id,
       'bucket': bucket.name,
       'bytes': bytes,
       'addedAt':
@@ -144,17 +165,18 @@ class MediaCacheBudget {
     await enforce();
   }
 
-  /// Looks up [key]'s actual on-disk size and records it. No-op when the file
-  /// isn't in the cache (e.g. the download failed).
-  Future<void> recordFromCache(CacheBucket bucket, String key) async {
-    final bytes = await _sizeOnDisk(bucket, key);
+  /// Looks up [id]'s actual on-disk size in [bucket] and records it. No-op
+  /// when the file isn't in the cache (e.g. the download failed).
+  Future<void> recordFromCache(CacheBucket bucket, String id) async {
+    final bytes = await _sizeOnDisk(bucket, cacheKeyFor(bucket, id));
     if (bytes == null) return;
-    await record(bucket, key, bytes);
+    await record(bucket, id, bytes);
   }
 
-  /// Drops [key] from the ledger without touching the disk cache. For use by
-  /// callers that already removed the file themselves.
-  Future<void> forget(String key) => _box.delete(key);
+  /// Drops [id]'s [bucket] row from the ledger without touching the disk
+  /// cache. For use by callers that already removed the file themselves.
+  Future<void> forget(CacheBucket bucket, String id) =>
+      _box.delete(cacheKeyFor(bucket, id));
 
   Future<void> clearAll() async {
     await Future.wait(
@@ -167,11 +189,35 @@ class MediaCacheBudget {
     await _box.clear();
   }
 
-  /// Evicts oldest-first until the total fits the budget.
+  /// Empties the full-image and video caches and their ledger rows, leaving
+  /// thumbnails intact.
   ///
-  /// Thumbnail rows are passed over while thumbnails collectively sit under
-  /// [thumbFloorBytes]; if *only* protected thumbnails remain, eviction stops
-  /// rather than looping forever, leaving the cache slightly over budget.
+  /// Used by the one-time migration off URL-derived cache keys: those two
+  /// buckets' on-disk entries are unreachable under the new key scheme, while
+  /// thumbnails were always keyed `thumb-<id>` and carry over untouched.
+  Future<void> clearFullBlobs() async {
+    await Future.wait(
+      [
+        FullImageCacheManager.instance.emptyCache(),
+        VideoCacheManager.instance.emptyCache(),
+      ].map((future) => future.catchError((_) {})),
+    );
+    final stale = _box.keys.cast<String>().where((key) {
+      final bucket = _bucketOf(_box.get(key)!);
+      return bucket == CacheBucket.image || bucket == CacheBucket.video;
+    }).toList();
+    await _box.deleteAll(stale);
+  }
+
+  /// Evicts oldest-first until the total fits the budget, dropping each
+  /// file's thumbnail *and* full blob together.
+  ///
+  /// Evicting per blob rather than per file is what produced the original
+  /// bug: a run of full-resolution downloads would push out earlier full
+  /// images while their cheap thumbnails survived, leaving a grid full of
+  /// tiles that could no longer be opened. Whole-file eviction keeps the
+  /// ledger's two halves in step, so [isAvailableOffline] never flips to a
+  /// half-truth.
   Future<void> enforce() async {
     if (totalBytes <= _budgetBytes) return;
 
@@ -179,48 +225,56 @@ class MediaCacheBudget {
       final row = _box.get(key)!;
       return (
         key: key as String,
+        // Rows written before ids were stored fall back to their own key, so
+        // they simply evict individually instead of grouping.
+        id: (row['id'] as String?) ?? key,
         bucket: _bucketOf(row),
         bytes: (row['bytes'] as int?) ?? 0,
         addedAt: (row['addedAt'] as int?) ?? 0,
       );
     }).toList()..sort((a, b) => a.addedAt.compareTo(b.addedAt));
 
-    final floor = thumbFloorBytes(_budgetBytes);
-    var total = totalBytes;
-    var thumbTotal = bytesIn(CacheBucket.thumb);
-
+    // Insertion order over the sorted rows ranks each file by its oldest
+    // blob, so the file whose bytes have been resident longest goes first.
+    final byFile = <String, List<({String key, CacheBucket bucket, int bytes})>>{};
     for (final row in rows) {
-      if (total <= _budgetBytes) break;
-      if (row.bucket == CacheBucket.thumb && thumbTotal <= floor) continue;
+      byFile
+          .putIfAbsent(row.id, () => [])
+          .add((key: row.key, bucket: row.bucket, bytes: row.bytes));
+    }
 
-      try {
-        await row.bucket.manager.removeFile(row.key);
-      } catch (_) {
-        // Already gone from disk; the ledger row still needs clearing.
+    var total = totalBytes;
+    for (final file in byFile.values) {
+      if (total <= _budgetBytes) break;
+      for (final row in file) {
+        try {
+          await row.bucket.manager.removeFile(row.key);
+        } catch (_) {
+          // Already gone from disk; the ledger row still needs clearing.
+        }
+        await _box.delete(row.key);
+        total -= row.bytes;
       }
-      await _box.delete(row.key);
-      total -= row.bytes;
-      if (row.bucket == CacheBucket.thumb) thumbTotal -= row.bytes;
     }
   }
 
-  /// Re-syncs the ledger against what is actually on disk for [known] files.
+  /// Re-syncs the ledger rows for [files] against what is actually on disk,
+  /// without touching rows for anything else.
   ///
   /// Necessary because not every write goes through code we control — the
   /// grid's `CachedNetworkImage` tiles write thumbnails straight into
-  /// `ThumbCacheManager`. Rather than hook that, this walks the known ids,
-  /// checks each of the three cache keys, and adds/updates/drops rows to
-  /// match. Existing `addedAt` values are preserved so FIFO order survives.
-  Future<void> reconcile(Iterable<MediaFile> known, ApiClient api) async {
+  /// `ThumbCacheManager`. Rather than hook that, this walks the given ids,
+  /// checks each one's two cache keys, and adds/updates/drops rows to match.
+  /// Existing `addedAt` values are preserved so FIFO order survives.
+  ///
+  /// Returns the keys it examined, which [reconcile] uses to tell a row that
+  /// is genuinely orphaned from one this pass simply didn't look at.
+  Future<Set<String>> refresh(Iterable<MediaFile> files) async {
     final seen = <String>{};
 
-    for (final file in known) {
-      final buckets = file.mediaType == MediaType.video
-          ? const [CacheBucket.thumb, CacheBucket.video]
-          : const [CacheBucket.thumb, CacheBucket.image];
-
-      for (final bucket in buckets) {
-        final key = cacheKeyFor(bucket, file.id, api);
+    for (final file in files) {
+      for (final bucket in [CacheBucket.thumb, fullBlobBucketFor(file)]) {
+        final key = cacheKeyFor(bucket, file.id);
         seen.add(key);
         final bytes = await _sizeOnDisk(bucket, key);
         if (bytes == null) {
@@ -228,6 +282,7 @@ class MediaCacheBudget {
         } else {
           final existing = _box.get(key);
           await _box.put(key, {
+            'id': file.id,
             'bucket': bucket.name,
             'bytes': bytes,
             'addedAt': existing?['addedAt'] as int? ??
@@ -236,6 +291,19 @@ class MediaCacheBudget {
         }
       }
     }
+
+    await enforce();
+    return seen;
+  }
+
+  /// A full resync: [refresh]es every file in [known] and then drops any row
+  /// left over.
+  ///
+  /// [known] must be the *complete* set of files the app knows about — pass a
+  /// subset and every row outside it is discarded. Callers holding one page of
+  /// a paged listing want [refresh] instead.
+  Future<void> reconcile(Iterable<MediaFile> known) async {
+    final seen = await refresh(known);
 
     // Rows for files no longer in the known set (deleted server-side, or
     // aged out of RecentMediaStore's own cap) are dropped from the ledger so
