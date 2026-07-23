@@ -2149,7 +2149,11 @@ mod tests {
         let backup_dir = tempfile::tempdir()?;
 
         let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
-        let backup_path = format!("{}{}", backup_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let backup_path = format!(
+            "{}{}",
+            backup_dir.path().display(),
+            std::path::MAIN_SEPARATOR
+        );
         let db_path = format!("{}picshow.db", data_path);
 
         // Simulate a burked database (e.g. left mid-write by an unexpected shutdown).
@@ -2191,7 +2195,11 @@ mod tests {
         let backup_dir = tempfile::tempdir()?;
 
         let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
-        let backup_path = format!("{}{}", backup_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let backup_path = format!(
+            "{}{}",
+            backup_dir.path().display(),
+            std::path::MAIN_SEPARATOR
+        );
         let db_path = format!("{}picshow.db", data_path);
 
         fs::write(&db_path, b"not a sqlite database at all").await?;

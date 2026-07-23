@@ -119,7 +119,12 @@ pub async fn handle_serve(config: &AppConfig, cli_port: Option<u16>) -> Result<(
     }
     debug!("Shutting down...");
     shutdown_tx.send(())?;
-    let _ = tokio::join!(processorer_handle, api_handle, command_handle, backup_handle);
+    let _ = tokio::join!(
+        processorer_handle,
+        api_handle,
+        command_handle,
+        backup_handle
+    );
     repository.cleanup().await?;
     Ok(())
 }
@@ -128,7 +133,9 @@ fn backup_interval(config: &AppConfig) -> Option<Interval> {
     if !config.backup_scheduled_enabled {
         return None;
     }
-    let seconds = (config.backup_interval_hours as u64).saturating_mul(3600).max(1);
+    let seconds = (config.backup_interval_hours as u64)
+        .saturating_mul(3600)
+        .max(1);
     Some(time::interval(Duration::from_secs(seconds)))
 }
 
