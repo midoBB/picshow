@@ -222,10 +222,13 @@ class ServerConnection extends ChangeNotifier with WidgetsBindingObserver {
       _emit(ServerConnectionState.automaticOffline);
       return;
     }
-    // Only surface the transient "checking" state when there's no already-
-    // online status worth preserving on screen, to avoid banner flicker on
-    // blips that resolve back to online within the same debounce window.
-    if (state != ServerConnectionState.online) {
+    // Only surface the transient "checking" state on the very first pass,
+    // before any verdict exists. Once settled there is always a status worth
+    // preserving on screen: emitting "checking" on each retry made the
+    // offline banner alternate between "Offline" and "Reconnecting" for the
+    // whole time the server stayed unreachable, on an ever-shorter cadence as
+    // the backoff timer fired.
+    if (!_settled) {
       _emit(ServerConnectionState.checking);
     }
     for (final url in _orderedUrls) {

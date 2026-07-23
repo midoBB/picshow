@@ -677,6 +677,10 @@ class GalleryScreen extends ConsumerWidget {
         ],
       ),
       body: asyncState.when(
+        // A rebuild (going offline, the ledger gaining files) should update
+        // the grid under the user, not blank it back to a spinner. Only the
+        // very first load, with nothing to show yet, gets one.
+        skipLoadingOnReload: true,
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, stack) => ErrorRetryState(
           message: 'Failed to load media',

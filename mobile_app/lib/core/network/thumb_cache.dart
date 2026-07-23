@@ -12,9 +12,15 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 const _effectivelyUnlimitedObjects = 1000000;
 const _stalePeriod = Duration(days: 365);
 
-// Note: the web frontend caps thumbnail HTTP `Cache-Control` at 12 seconds,
-// but that TTL is irrelevant here — flutter_cache_manager never keys its
-// cache-hit decisions off response headers, only its own `stalePeriod`.
+// Note: `stalePeriod` governs only the managers' own background cleanup. Each
+// entry additionally carries a `validTill` taken straight from the response's
+// `Cache-Control: max-age` — 12 seconds for thumbnails, 3 days for media — and
+// `CacheManager.getSingleFile` re-downloads (and, offline, *throws*) once that
+// passes, however many bytes are already on disk. Anything that must work
+// offline therefore has to consult the cache itself rather than rely on
+// getSingleFile; see `resolveMediaSource` in k_gallery, and `getFileStream`,
+// which CachedNetworkImage uses and which emits the stale file before trying
+// to refresh it.
 class ThumbCacheManager {
   static const key = 'picshowThumbCache';
 

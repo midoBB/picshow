@@ -36,13 +36,50 @@ final cacheBudgetBytesProvider = StateProvider<int>((ref) {
 /// availability from it ([MediaCacheBudget.isAvailableOffline]) can rebuild.
 /// The ledger is a plain object with no Riverpod identity of its own — this is
 /// what turns its mutations into a watchable signal.
+///
+/// Bursts are coalesced into a single bump. The ledger is written a row at a
+/// time — the startup reconcile alone writes two per cached file, up to a few
+/// thousand — and the offline gallery *rebuilds* on this value rather than
+/// merely repainting. Forwarding every row meant thousands of provider
+/// rebuilds during launch, each one a full-screen loading spinner: the
+/// "offline mode flashes a lot before settling" this replaced.
 class MediaCacheLedgerRevisionNotifier extends Notifier<int> {
+  /// Quiet period after the last write before a bump is published.
+  static const coalesceWindow = Duration(milliseconds: 400);
+
+  /// Cap on how long a steady stream of writes can hold a bump back, so a
+  /// long download pass still grows the offline grid as it goes.
+  static const maxCoalesceDelay = Duration(seconds: 2);
+
+  Timer? _timer;
+  DateTime? _pendingSince;
+
   @override
   int build() {
     final budget = ref.watch(mediaCacheBudgetProvider);
-    void bump() => state++;
+
+    void flush() {
+      _timer?.cancel();
+      _timer = null;
+      _pendingSince = null;
+      state++;
+    }
+
+    void bump() {
+      final since = _pendingSince ??= DateTime.now();
+      if (DateTime.now().difference(since) >= maxCoalesceDelay) {
+        flush();
+        return;
+      }
+      _timer?.cancel();
+      _timer = Timer(coalesceWindow, flush);
+    }
+
     budget.changes.addListener(bump);
-    ref.onDispose(() => budget.changes.removeListener(bump));
+    ref.onDispose(() {
+      _timer?.cancel();
+      budget.changes.removeListener(bump);
+    });
     return 0;
   }
 }

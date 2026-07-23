@@ -9,6 +9,7 @@ import 'package:media_kit_video/media_kit_video.dart';
 import '../../bloc/gallery_bloc.dart';
 import '../../models/gallery_item.dart';
 import '../../models/gallery_theme.dart';
+import '../../utils/media_source_resolver.dart';
 import 'gallery_media_internals.dart';
 
 /// Internal widget rendering a single media_kit video item inside the
@@ -53,6 +54,7 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
   StreamSubscription? _bufferingSubscription;
   StreamSubscription? _widthSubscription;
   StreamSubscription? _heightSubscription;
+  ResolvedMediaSource? _resolvedSource;
   bool _isBuffering = true;
   bool _hasVideoDimensions = false;
 
@@ -109,37 +111,22 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
     if (mounted) setState(() {});
   }
 
-  /// Resolves [item.url] to a local cache file via [widget.cacheManager]
-  /// (downloading it fully if not already cached) before opening it in the
-  /// player, so a replayed video plays from disk instead of re-streaming.
-  /// Falls back to the raw network URL if no cache manager is set or the
-  /// download/lookup fails.
+  /// Resolves [item.url] to a local cache file (downloading it fully if not
+  /// already cached) before opening it in the player, so a replayed video
+  /// plays from disk instead of re-streaming. See [resolveMediaSource].
   Future<void> _openMedia(Player p) async {
-    var source = widget.item.url;
-    final cacheManager = widget.cacheManager;
+    final resolved = await resolveMediaSource(
+      widget.cacheManager,
+      widget.item.url,
+      cacheKey: widget.item.cacheKey,
+    );
 
-    if (cacheManager != null && source.startsWith('http')) {
-      try {
-        final file = await cacheManager.getSingleFile(
-          source,
-          // Falling back to a URL-derived key keeps the previous behavior for
-          // callers that don't set one, but a host app whose cache survives a
-          // change of server address must supply [GalleryItem.cacheKey] — the
-          // hash of a URL it no longer uses would miss every cached file.
-          key: widget.item.cacheKey ?? 'video-${source.hashCode}',
-        );
-        // Superseded by a swipe-away/dispose while the download was in
-        // flight — the player this call was meant for no longer exists.
-        if (!mounted || _player != p) return;
-        source = file.path;
-      } catch (_) {
-        // Fall back to network streaming (offline-first-play, disk full,
-        // 404, etc.) — same behavior as before caching was added.
-      }
-    }
-
+    // Superseded by a swipe-away/dispose while the download was in flight —
+    // the player this call was meant for no longer exists.
     if (!mounted || _player != p) return;
-    await p.open(Media(source), play: false);
+
+    _resolvedSource = resolved;
+    await p.open(Media(resolved.source), play: false);
     _playWithConnectivityCheck();
   }
 
@@ -171,6 +158,7 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
     _videoController = null;
     _isBuffering = true;
     _hasVideoDimensions = false;
+    _resolvedSource = null;
     p.dispose();
 
     final notifier = widget.activePlayerNotifier;
@@ -188,7 +176,11 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
     final p = _player;
     if (p == null) return;
 
-    if (!widget.item.url.startsWith('http')) {
+    // The gate is about the source actually opened, not [item.url]. Checking
+    // the URL meant a fully cached video — the whole point of the cache — was
+    // refused with "no internet connection" the moment the radio went down,
+    // while cached images kept working.
+    if (_resolvedSource?.isLocal ?? !widget.item.url.startsWith('http')) {
       p.play();
       return;
     }
