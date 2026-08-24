@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:math';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -9,6 +10,9 @@ import 'package:picshow_mobile/core/network/connectivity.dart';
 import 'package:picshow_mobile/core/network/thumb_cache.dart';
 import 'package:picshow_mobile/core/providers.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
+import 'package:picshow_mobile/core/storage/recent_media_store.dart';
+
+enum _FillPhaseResult { exhausted, budgetFull, cancelledOrError }
 
 class CacheFillState {
   const CacheFillState({
@@ -44,26 +48,31 @@ class CacheFillState {
   }
 }
 
-/// Proactively downloads favorite full-resolution media and thumbnails until
-/// the cache budget is full, so going offline doesn't mean losing everything
-/// the user hasn't happened to scroll past.
+/// Proactively downloads media until the cache budget is full, so going
+/// offline doesn't mean losing everything the user hasn't happened to scroll
+/// past.
+///
+/// Two-phase strategy:
+///
+/// 1. **Favorites first, newest first** — pages
+///    `type=favorite, order=created_at, direction=desc` until every favorite
+///    is cached or the budget is 95 % full. Favorite videos are cached at any
+///    size, bypassing the video size gate.
+/// 2. **Remainder, uniform random** — if budget remains, pages
+///    `type=all, order=random, seed=<stable per pass>` (single seed for the
+///    whole pass so pagination is deterministic and covers the library
+///    uniformly). This samples the rest of the library evenly instead of only
+///    the newest items, filling the user-selected storage budget.
 ///
 /// Deliberate restrictions:
 ///
 /// * **WiFi/ethernet only** (unless forced from settings) — filling a
 ///   multi-gigabyte budget over cellular would be a nasty surprise.
-/// * **Favorites only, newest first.** The filler pages
-///   `type=favorite, order=created_at, direction=desc` and stops when every
-///   favorite is cached or the budget is 95 % full. A library with no
-///   favorites does no filler work — browsing-driven caching still works via
-///   normal grid loads.
-/// * **Favorite videos at any size.** Non-favorite oversized videos were once
-///   gated by [_maxPrefetchVideoBytes] (50 MB) to avoid spending the whole
-///   budget on a handful of files; favorites bypass that gate. Oversized
-///   non-favorites are still cached on demand when actually watched.
-///
-/// Images take priority over videos within a page, since they're both far
-/// cheaper and the bulk of a typical library.
+/// * **Video size gate:** non-favorite videos at or above
+///   [_maxPrefetchVideoBytes] (50 MB) are left to on-demand caching; favorite
+///   videos bypass it. The gate is enforced in phase 2 via [shouldPrefetch].
+/// * **Images before videos** within each page, since they're cheaper and the
+///   bulk of a typical library.
 class CacheFillNotifier extends Notifier<CacheFillState> {
   /// Kept small so background downloads don't starve the thumbnails and
   /// full-res images the user is waiting on right now.
@@ -169,59 +178,152 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
     final api = ref.read(apiClientProvider);
     final store = ref.read(recentMediaStoreProvider);
 
-    var page = 1;
-    var done = 0;
+    // Dedupe across phases: phase-2 type=all includes favorites again.
+    final seenIds = <String>{};
+    var combinedDone = 0;
+    int? favTotal;
+    int? allTotal;
 
+    int combinedTotal() {
+      // Before phase-2: total is favorite count. Once phase-2 has reported,
+      // total is library size (allTotal) — combined progress is unique done
+      // out of the whole library.
+      if (allTotal != null) return allTotal!;
+      return favTotal ?? 0;
+    }
+
+    // ---- Phase 1: favorites newest-first ----
+    final phase1Done = await _fillPhase(
+      budget: budget,
+      api: api,
+      store: store,
+      seenIds: seenIds,
+      type: 'favorite',
+      order: 'created_at',
+      direction: 'desc',
+      seed: null,
+      onProgress: (delta, total) {
+        favTotal = total;
+        combinedDone += delta;
+        state = state.copyWith(done: combinedDone, total: combinedTotal());
+      },
+    );
+    if (phase1Done == _FillPhaseResult.cancelledOrError) return;
+    if (phase1Done == _FillPhaseResult.budgetFull) {
+      state = state.copyWith(stoppedBecauseFull: true);
+      return;
+    }
+    if (_cancelled || budget.isFull) {
+      if (budget.isFull) state = state.copyWith(stoppedBecauseFull: true);
+      return;
+    }
+
+    // ---- Phase 2: remainder uniformly sampled ----
+    // Single stable seed for the whole pass so ORDER BY random is deterministic
+    // across pages (see repository.rs: random with seed). Without a fixed seed
+    // pagination would revisit the same files while never reaching others.
+    final randomSeed = Random().nextInt(1 << 31);
+    final phase2Done = await _fillPhase(
+      budget: budget,
+      api: api,
+      store: store,
+      seenIds: seenIds,
+      type: 'all',
+      order: 'random',
+      direction: 'desc',
+      seed: randomSeed,
+      skipSeenForProgress: true,
+      onProgress: (delta, total) {
+        allTotal = total;
+        combinedDone += delta;
+        state = state.copyWith(done: combinedDone, total: combinedTotal());
+      },
+    );
+    if (phase2Done == _FillPhaseResult.budgetFull) {
+      state = state.copyWith(stoppedBecauseFull: true);
+    }
+  }
+
+  /// Drives one phase of the filler, paging [type]/[order]/[seed] until the
+  /// budget is full, the server reports no more pages, or a network error
+  /// occurs. Returns how the phase terminated.
+  Future<_FillPhaseResult> _fillPhase({
+    required MediaCacheBudget budget,
+    required ApiClient api,
+    required RecentMediaStore store,
+    required Set<String> seenIds,
+    required String type,
+    required String order,
+    required String direction,
+    required int? seed,
+    bool skipSeenForProgress = false,
+    required void Function(int delta, int totalRecords) onProgress,
+  }) async {
+    var page = 1;
     while (!_cancelled) {
-      if (budget.isFull) {
-        state = state.copyWith(stoppedBecauseFull: true);
-        return;
-      }
+      if (budget.isFull) return _FillPhaseResult.budgetFull;
 
       final PagedFilesResult result;
       try {
-        // Deliberately not the user's current GalleryQuery: a random seed
-        // makes paging non-deterministic, so a fill pass could revisit the
-        // same files while never reaching others. Favorites-only: the server
-        // filters and the filler never falls back to type=all.
         result = await api.listFiles(
           page: page,
           pageSize: _pageSize,
-          order: 'created_at',
-          direction: 'desc',
-          type: 'favorite',
+          order: order,
+          direction: direction,
+          seed: seed,
+          type: type,
         );
       } catch (_) {
-        return; // Offline or server trouble; the next trigger retries.
+        return _FillPhaseResult
+            .cancelledOrError; // Offline or server trouble; next trigger retries.
       }
 
       unawaited(store.upsertAll(result.files));
 
+      // Work on unique files only when the phase overlaps phase-1 (type=all
+      // includes favorites). De-dupe before downloading and before counting
+      // toward combined done, so progress is unique files out of total.
+      final List<MediaFile> unique;
+      if (skipSeenForProgress) {
+        unique = [];
+        for (final f in result.files) {
+          if (seenIds.add(f.id)) unique.add(f);
+        }
+      } else {
+        for (final f in result.files) {
+          seenIds.add(f.id);
+        }
+        unique = result.files;
+      }
+
       // Images first: a page's worth of them costs less than one large video
       // and makes far more of the library browsable offline.
       await _downloadAll(
-        result.files.where((f) => f.mediaType == MediaType.image).toList(),
+        unique.where((f) => f.mediaType == MediaType.image).toList(),
         api,
         budget,
       );
       await _downloadAll(
-        result.files
+        unique
             .where((f) => f.mediaType == MediaType.video && shouldPrefetch(f))
             .toList(),
         api,
         budget,
       );
-      done += result.files.length;
-      state = state.copyWith(done: done, total: result.pagination.totalRecords);
+
+      onProgress(unique.length, result.pagination.totalRecords);
 
       // Only this page's rows — a full reconcile would treat every file
       // outside the page as an orphan and drop it from the ledger.
       await budget.refresh(result.files);
 
+      if (budget.isFull) return _FillPhaseResult.budgetFull;
+
       final next = result.pagination.nextPage;
-      if (next == null) return;
+      if (next == null) return _FillPhaseResult.exhausted;
       page = next;
     }
+    return _FillPhaseResult.cancelledOrError;
   }
 
   /// Downloads [files] with at most [_concurrency] requests in flight, using

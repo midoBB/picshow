@@ -32,6 +32,7 @@ class _CountingApi extends ApiClient {
   final List<int> pageSizes = [];
   final List<String> orders = [];
   final List<String> directions = [];
+  final List<int?> seeds = [];
 
   @override
   Future<PagedFilesResult> listFiles({
@@ -48,6 +49,7 @@ class _CountingApi extends ApiClient {
     pageSizes.add(pageSize);
     orders.add(order);
     directions.add(direction);
+    seeds.add(seed);
     // Simulate server-side pagination so multi-page filler behavior can be
     // exercised without a real server. Single-page tests still get one page.
     final start = (page - 1) * pageSize;
@@ -192,11 +194,14 @@ void main() {
     await container.read(cacheFillProvider.notifier).bootstrapped;
     await container.read(cacheFillProvider.notifier).start(force: true);
 
-    expect(api.listCalls, 1);
-    expect(api.types, everyElement('favorite'));
-    expect(api.orders, everyElement('created_at'));
+    // Two-phase: favorites then uniform random remainder.
+    expect(api.listCalls, 2);
+    expect(api.types, ['favorite', 'all']);
+    expect(api.orders, ['created_at', 'random']);
     expect(api.directions, everyElement('desc'));
     expect(api.pageSizes, everyElement(100));
+    expect(api.seeds[0], isNull);
+    expect(api.seeds[1], isNotNull);
   });
 
   test('does not run while offline', () async {
@@ -277,7 +282,11 @@ void main() {
     await container.read(cacheFillProvider.notifier).bootstrapped;
 
     expect(budget.knows(CacheBucket.video, id), isTrue);
-    expect(api.types, everyElement('favorite'));
+    expect(api.types.first, 'favorite');
+    expect(api.orders.first, 'created_at');
+    // Second phase is uniform random remainder.
+    expect(api.types, contains('all'));
+    expect(api.orders, contains('random'));
   });
 
   test('the prefetch predicate skips only oversized non-favorite videos', () {
@@ -334,7 +343,7 @@ void main() {
     );
   });
 
-  test('filler queries type favorite only', () async {
+  test('filler queries favorites first then uniform random remainder', () async {
     final favorites = [
       _mediaFile('fav-a', isFavorite: true),
       _mediaFile('fav-b', isFavorite: true),
@@ -353,13 +362,16 @@ void main() {
 
     await container.read(cacheFillProvider.notifier).bootstrapped;
 
-    expect(api.listCalls, greaterThanOrEqualTo(1));
-    expect(api.types, everyElement('favorite'));
-    expect(api.types, isNot(contains('all')));
-    expect(api.orders, everyElement('created_at'));
+    expect(api.listCalls, greaterThanOrEqualTo(2));
+    expect(api.types.first, 'favorite');
+    expect(api.types, contains('all'));
+    expect(api.orders.first, 'created_at');
+    expect(api.orders, contains('random'));
+    expect(api.seeds.first, isNull);
+    expect(api.seeds.last, isNotNull);
     expect(api.directions, everyElement('desc'));
     expect(api.pageSizes, everyElement(100));
-    // done/total reflects favorite pagination totalRecords
+    // done/total combined: favorites 2 unique, remainder deduped to 0, total is library size 2
     expect(container.read(cacheFillProvider).total, favorites.length);
     expect(container.read(cacheFillProvider).done, favorites.length);
   });
@@ -398,7 +410,8 @@ void main() {
 
     await container.read(cacheFillProvider.notifier).bootstrapped;
 
-    expect(api.types, everyElement('favorite'));
+    expect(api.types.first, 'favorite');
+    expect(api.types, contains('all'));
     expect(budget.knows(CacheBucket.video, id), isTrue);
     // Ledger entry proves oversized favorite bypassed maxPrefetchVideoBytes
     expect(
@@ -414,7 +427,7 @@ void main() {
     );
   });
 
-  test('zero favorites does no filler work', () async {
+  test('zero favorites falls through to uniform random filler', () async {
     final api = _CountingApi([]);
     final budget = await MediaCacheBudget.openInMemoryForTesting(
       budgetBytes: 100000,
@@ -429,8 +442,10 @@ void main() {
 
     await container.read(cacheFillProvider.notifier).bootstrapped;
 
-    expect(api.listCalls, 1);
-    expect(api.types, everyElement('favorite'));
+    // Phase-1 favorites empty (1 call) then phase-2 uniform random (1 call)
+    expect(api.listCalls, 2);
+    expect(api.types, ['favorite', 'all']);
+    expect(api.orders, ['created_at', 'random']);
     expect(container.read(cacheFillProvider).done, 0);
     expect(container.read(cacheFillProvider).total, 0);
     expect(budget.totalBytes, 0);
@@ -452,9 +467,9 @@ void main() {
   });
 
   test(
-    'filler pages favorites without duplication and updates done/total',
+    'filler pages favorites without duplication and updates done/total (two-phase)',
     () async {
-      // 150 favorites -> 2 pages at pageSize 100
+      // 150 favorites -> 2 pages at pageSize 100 for phase-1, then 2 more for phase-2 all (same ids deduped)
       final favorites = List.generate(
         150,
         (i) => _mediaFile('fav-$i', isFavorite: true),
@@ -483,9 +498,17 @@ void main() {
 
       await container.read(cacheFillProvider.notifier).bootstrapped;
 
-      expect(api.listCalls, 2);
-      expect(api.pages, [1, 2]);
-      expect(api.types, everyElement('favorite'));
+      // 2 calls favorite + 2 calls all (deduped)
+      expect(api.listCalls, 4);
+      expect(api.pages, [1, 2, 1, 2]);
+      expect(api.types.sublist(0, 2), everyElement('favorite'));
+      expect(api.types.sublist(2), everyElement('all'));
+      expect(api.orders.sublist(0, 2), everyElement('created_at'));
+      expect(api.orders.sublist(2), everyElement('random'));
+      // Phase-2 seed stable across pages
+      expect(api.seeds[2], isNotNull);
+      expect(api.seeds[2], api.seeds[3]);
+      // Combined done is unique 150, total is library size 150
       expect(container.read(cacheFillProvider).done, 150);
       expect(container.read(cacheFillProvider).total, 150);
       // Store should contain all favorites without duplication
