@@ -121,10 +121,11 @@ class _CacheSettingsScreenState extends ConsumerState<CacheSettingsScreen> {
           ),
           const SizedBox(height: 8),
           Text(
-            'PicShow fills this space in the background over WiFi so photos '
-            'stay viewable offline. Videos are included when they are small '
-            'enough; larger ones are cached only once you watch them. When '
-            'the space is full, the oldest items are removed first.',
+            'PicShow fills this space in the background over WiFi with your '
+            'favorites first — newest first, images before videos — so they '
+            'stay viewable offline. Favorite videos are cached at any size; '
+            'other videos are cached only once you watch them. When the space '
+            'is full, the oldest items are removed first.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
           const SizedBox(height: 16),

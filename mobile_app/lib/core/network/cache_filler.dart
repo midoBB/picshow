@@ -44,18 +44,23 @@ class CacheFillState {
   }
 }
 
-/// Proactively downloads full-resolution media and thumbnails until the cache
-/// budget is full, so going offline doesn't mean losing everything the user
-/// hasn't happened to scroll past.
+/// Proactively downloads favorite full-resolution media and thumbnails until
+/// the cache budget is full, so going offline doesn't mean losing everything
+/// the user hasn't happened to scroll past.
 ///
-/// Two deliberate restrictions:
+/// Deliberate restrictions:
 ///
 /// * **WiFi/ethernet only** (unless forced from settings) — filling a
 ///   multi-gigabyte budget over cellular would be a nasty surprise.
-/// * **Videos only up to [_maxPrefetchVideoBytes].** A single large video can
-///   run to hundreds of MB, so prefetching them all would spend the whole
-///   budget on a handful of files. Oversized ones are still cached on demand
-///   when actually watched.
+/// * **Favorites only, newest first.** The filler pages
+///   `type=favorite, order=created_at, direction=desc` and stops when every
+///   favorite is cached or the budget is 95 % full. A library with no
+///   favorites does no filler work — browsing-driven caching still works via
+///   normal grid loads.
+/// * **Favorite videos at any size.** Non-favorite oversized videos were once
+///   gated by [_maxPrefetchVideoBytes] (50 MB) to avoid spending the whole
+///   budget on a handful of files; favorites bypass that gate. Oversized
+///   non-favorites are still cached on demand when actually watched.
 ///
 /// Images take priority over videos within a page, since they're both far
 /// cheaper and the bulk of a typical library.
@@ -65,13 +70,19 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
   static const _concurrency = 3;
   static const _pageSize = 100;
 
-  /// Videos at or above this size are left to on-demand caching.
+  /// Videos at or above this size are left to on-demand caching, unless
+  /// they are favorites.
   static const maxPrefetchVideoBytes = 50 * 1024 * 1024;
 
   /// Whether a background pass should download [file]'s full blob. Images
-  /// always qualify; videos only below [maxPrefetchVideoBytes].
+  /// always qualify; videos below [maxPrefetchVideoBytes] qualify; favorite
+  /// videos qualify at any size (the filler is favorites-only, but the
+  /// predicate is kept favorite-aware so oversized favorites are never
+  /// gated).
   static bool shouldPrefetch(MediaFile file) =>
-      file.mediaType == MediaType.image || file.size < maxPrefetchVideoBytes;
+      file.isFavorite ||
+      file.mediaType == MediaType.image ||
+      file.size < maxPrefetchVideoBytes;
 
   bool _cancelled = false;
   bool _disposed = false;
@@ -171,12 +182,14 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
       try {
         // Deliberately not the user's current GalleryQuery: a random seed
         // makes paging non-deterministic, so a fill pass could revisit the
-        // same files while never reaching others.
+        // same files while never reaching others. Favorites-only: the server
+        // filters and the filler never falls back to type=all.
         result = await api.listFiles(
           page: page,
           pageSize: _pageSize,
           order: 'created_at',
           direction: 'desc',
+          type: 'favorite',
         );
       } catch (_) {
         return; // Offline or server trouble; the next trigger retries.
