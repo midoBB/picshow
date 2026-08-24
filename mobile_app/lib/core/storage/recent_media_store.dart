@@ -8,17 +8,18 @@ import 'package:picshow_mobile/core/models/media_file.dart';
 import 'package:picshow_mobile/core/storage/media_cache_budget.dart';
 import 'package:picshow_mobile/features/gallery/gallery_query.dart';
 
-/// Persists metadata for media the user has already fetched, so the gallery
-/// can keep showing a "recently viewed" subset while offline. This is a
-/// metadata-only cache: the actual thumbnail/image/video bytes continue to
-/// live in the existing flutter_cache_manager instances (ThumbCacheManager,
+/// Persists metadata for all known media so the gallery can show the full
+/// library while offline. This is a metadata-only cache: the actual
+/// thumbnail/image/video bytes continue to live in the existing
+/// flutter_cache_manager instances (ThumbCacheManager,
 /// FullImageCacheManager, VideoCacheManager) and are not duplicated here.
+/// The store is unbounded; eviction is governed solely by the byte budget
+/// ([MediaCacheBudget] 1–20 GB).
 class RecentMediaStore {
   RecentMediaStore._(this._box, this._pendingFavoritesBox);
 
   static const boxName = 'recent_media_v1';
   static const _pendingFavoritesBoxName = 'pending_favorite_sync_v1';
-  static const _cap = 1000;
 
   final Box<Map> _box;
 
@@ -58,7 +59,6 @@ class RecentMediaStore {
       for (final file in files) file.id: {'file': file.toJson(), 'lastSeenAt': now},
     };
     await _box.putAll(updates);
-    await _enforceCap();
   }
 
   List<MediaFile> getAll() {
@@ -177,17 +177,4 @@ class RecentMediaStore {
     return value;
   }
 
-  Future<void> _enforceCap() async {
-    if (_box.length <= _cap) return;
-
-    final entries = _box.keys.map((key) {
-      final value = _box.get(key);
-      final lastSeenAt = value?['lastSeenAt'] as int? ?? 0;
-      return MapEntry(key, lastSeenAt);
-    }).toList()..sort((a, b) => a.value.compareTo(b.value));
-
-    final excess = entries.length - _cap;
-    final keysToRemove = entries.take(excess).map((e) => e.key);
-    await _box.deleteAll(keysToRemove);
-  }
 }

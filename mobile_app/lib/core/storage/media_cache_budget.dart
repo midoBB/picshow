@@ -305,11 +305,10 @@ class MediaCacheBudget {
   Future<void> reconcile(Iterable<MediaFile> known) async {
     final seen = await refresh(known);
 
-    // Rows for files no longer in the known set (deleted server-side, or
-    // aged out of RecentMediaStore's own cap) are dropped from the ledger so
-    // they stop counting against the budget. Their bytes are left to the
-    // managers' own stale-period cleanup, since without a MediaFile we can't
-    // tell which manager owns the key.
+    // Rows for files no longer in the known set (deleted server-side) are
+    // dropped from the ledger so they stop counting against the budget. Their
+    // bytes are left to the managers' own stale-period cleanup, since without
+    // a MediaFile we can't tell which manager owns the key.
     final orphans = _box.keys.cast<String>().where((k) => !seen.contains(k));
     await _box.deleteAll(orphans.toList());
 
