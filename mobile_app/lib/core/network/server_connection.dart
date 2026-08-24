@@ -132,15 +132,24 @@ class ServerConnection extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   Future<void> setManualOffline(bool value) async {
+    if (_manualOffline == value) return;
+    final previousEffective = state;
     _manualOffline = value;
     if (value) {
       _connectivityTimer?.cancel();
       _retryTimer?.cancel();
       _heartbeatTimer?.cancel();
-      _emit(ServerConnectionState.manualOffline);
+      _retryDelay = baseRetryDelay;
+      // Keep an automatic-offline value underneath so exiting manual mode
+      // restores to a consistent base without relying on _emit, which would
+      // compute previousEffective after the flag has already flipped and thus
+      // miss the transition.
+      _state = ServerConnectionState.automaticOffline;
+      if (state != previousEffective) notifyListeners();
     } else {
       _consecutiveFailures = 0;
       _retryDelay = baseRetryDelay;
+      if (state != previousEffective) notifyListeners();
       await checkNow();
     }
   }
