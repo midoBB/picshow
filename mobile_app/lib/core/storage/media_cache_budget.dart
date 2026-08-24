@@ -55,9 +55,9 @@ CacheBucket fullBlobBucketFor(MediaFile file) =>
 /// `flutter_cache_manager`'s own `Config` can only cap the *number* of cached
 /// objects, which says nothing useful about disk use when a single entry
 /// ranges from a 30 KB thumbnail to a 300 MB video. This class keeps a
-/// separate ledger of `{cache key -> id, bucket, bytes, addedAt}` and decides
-/// when something gets dropped; the managers themselves are configured to
-/// effectively never evict on their own.
+/// separate ledger of `{cache key -> id, bucket, bytes, addedAt, isFavorite}`
+/// and decides when something gets dropped; the managers themselves are
+/// configured to effectively never evict on their own.
 ///
 /// Because the ledger records exactly what is on disk, it also answers
 /// [isAvailableOffline] synchronously, which is what lets the gallery grid
@@ -140,7 +140,8 @@ class MediaCacheBudget {
   /// see but not open — which is exactly the "Not available offline" dead end
   /// this replaced.
   bool isAvailableOffline(MediaFile file) =>
-      knows(CacheBucket.thumb, file.id) && knows(fullBlobBucketFor(file), file.id);
+      knows(CacheBucket.thumb, file.id) &&
+      knows(fullBlobBucketFor(file), file.id);
 
   /// Changes the budget and immediately brings the cache back under it.
   Future<void> setBudgetBytes(int bytes) async {
@@ -152,7 +153,12 @@ class MediaCacheBudget {
   /// evicts as needed. Re-recording an existing entry updates its size but
   /// keeps its original `addedAt`, so refreshing bytes never moves an entry to
   /// the back of the FIFO queue.
-  Future<void> record(CacheBucket bucket, String id, int bytes) async {
+  Future<void> record(
+    CacheBucket bucket,
+    String id,
+    int bytes, {
+    bool isFavorite = false,
+  }) async {
     final key = cacheKeyFor(bucket, id);
     final existing = _box.get(key);
     await _box.put(key, {
@@ -161,16 +167,82 @@ class MediaCacheBudget {
       'bytes': bytes,
       'addedAt':
           existing?['addedAt'] as int? ?? DateTime.now().millisecondsSinceEpoch,
+      'isFavorite': isFavorite,
     });
     await enforce();
   }
 
   /// Looks up [id]'s actual on-disk size in [bucket] and records it. No-op
   /// when the file isn't in the cache (e.g. the download failed).
-  Future<void> recordFromCache(CacheBucket bucket, String id) async {
+  Future<void> recordFromCache(
+    CacheBucket bucket,
+    String id, {
+    bool? isFavorite,
+  }) async {
     final bytes = await _sizeOnDisk(bucket, cacheKeyFor(bucket, id));
     if (bytes == null) return;
-    await record(bucket, id, bytes);
+    final existing = _box.get(cacheKeyFor(bucket, id));
+    final fav = isFavorite ?? (existing?['isFavorite'] as bool? ?? false);
+    await record(bucket, id, bytes, isFavorite: fav);
+  }
+
+  /// Updates the favorite flag for every ledger row belonging to [id] without
+  /// moving `addedAt`, so protection is synchronous offline and online and
+  /// survives restart.
+  Future<void> updateFavorite(String id, bool isFavorite) async {
+    final keys = _box.keys.cast<String>().where((key) {
+      final row = _box.get(key);
+      if (row == null) return false;
+      return (row['id'] as String?) == id;
+    }).toList();
+    for (final key in keys) {
+      final row = _box.get(key);
+      if (row == null) continue;
+      await _box.put(key, {
+        'id': row['id'],
+        'bucket': row['bucket'],
+        'bytes': row['bytes'],
+        'addedAt': row['addedAt'],
+        'isFavorite': isFavorite,
+      });
+    }
+  }
+
+  /// One-time migration: for rows missing `isFavorite`, fill from
+  /// [favoriteForId] where possible. Old rows without the field are treated as
+  /// non-favorite.
+  Future<int> backfillIsFavorite(
+    bool? Function(String id) favoriteForId,
+  ) async {
+    var updated = 0;
+    final keys = _box.keys.cast<String>().toList();
+    for (final key in keys) {
+      final row = _box.get(key);
+      if (row == null) continue;
+      if (row.containsKey('isFavorite')) continue;
+      final id = row['id'] as String? ?? key;
+      final fav = favoriteForId(id);
+      if (fav == null) {
+        await _box.put(key, {
+          'id': row['id'],
+          'bucket': row['bucket'],
+          'bytes': row['bytes'],
+          'addedAt': row['addedAt'],
+          'isFavorite': false,
+        });
+        updated++;
+      } else {
+        await _box.put(key, {
+          'id': row['id'],
+          'bucket': row['bucket'],
+          'bytes': row['bytes'],
+          'addedAt': row['addedAt'],
+          'isFavorite': fav,
+        });
+        updated++;
+      }
+    }
+    return updated;
   }
 
   /// Drops [id]'s [bucket] row from the ledger without touching the disk
@@ -212,6 +284,11 @@ class MediaCacheBudget {
   /// Evicts oldest-first until the total fits the budget, dropping each
   /// file's thumbnail *and* full blob together.
   ///
+  /// Favorite protection: non-favorite files are evicted before favorites,
+  /// FIFO by `addedAt` within each partition. Only when no non-favorites
+  /// remain does the oldest favorite (FIFO) evict. Old rows without
+  /// `isFavorite` are treated as non-favorite.
+  ///
   /// Evicting per blob rather than per file is what produced the original
   /// bug: a run of full-resolution downloads would push out earlier full
   /// images while their cheap thumbnails survived, leaving a grid full of
@@ -231,21 +308,49 @@ class MediaCacheBudget {
         bucket: _bucketOf(row),
         bytes: (row['bytes'] as int?) ?? 0,
         addedAt: (row['addedAt'] as int?) ?? 0,
+        isFavorite: (row['isFavorite'] as bool?) ?? false,
       );
     }).toList()..sort((a, b) => a.addedAt.compareTo(b.addedAt));
 
     // Insertion order over the sorted rows ranks each file by its oldest
     // blob, so the file whose bytes have been resident longest goes first.
-    final byFile = <String, List<({String key, CacheBucket bucket, int bytes})>>{};
+    final byFile =
+        <String, List<({String key, CacheBucket bucket, int bytes})>>{};
+    final fileMeta = <String, ({int addedAt, bool isFavorite})>{};
     for (final row in rows) {
-      byFile
-          .putIfAbsent(row.id, () => [])
-          .add((key: row.key, bucket: row.bucket, bytes: row.bytes));
+      byFile.putIfAbsent(row.id, () => []).add((
+        key: row.key,
+        bucket: row.bucket,
+        bytes: row.bytes,
+      ));
+      final existing = fileMeta[row.id];
+      if (existing == null) {
+        fileMeta[row.id] = (addedAt: row.addedAt, isFavorite: row.isFavorite);
+      } else {
+        // Favorite if any row is favorite; addedAt stays the oldest.
+        if (row.isFavorite) {
+          fileMeta[row.id] = (addedAt: existing.addedAt, isFavorite: true);
+        }
+      }
+    }
+
+    // Partition: non-favorites FIFO then favorites FIFO.
+    final orderedIds = <String>[];
+    final nonFavs = fileMeta.entries.where((e) => !e.value.isFavorite).toList()
+      ..sort((a, b) => a.value.addedAt.compareTo(b.value.addedAt));
+    final favs = fileMeta.entries.where((e) => e.value.isFavorite).toList()
+      ..sort((a, b) => a.value.addedAt.compareTo(b.value.addedAt));
+    for (final e in nonFavs) {
+      orderedIds.add(e.key);
+    }
+    for (final e in favs) {
+      orderedIds.add(e.key);
     }
 
     var total = totalBytes;
-    for (final file in byFile.values) {
+    for (final id in orderedIds) {
       if (total <= _budgetBytes) break;
+      final file = byFile[id]!;
       for (final row in file) {
         try {
           await row.bucket.manager.removeFile(row.key);
@@ -285,8 +390,10 @@ class MediaCacheBudget {
             'id': file.id,
             'bucket': bucket.name,
             'bytes': bytes,
-            'addedAt': existing?['addedAt'] as int? ??
+            'addedAt':
+                existing?['addedAt'] as int? ??
                 DateTime.now().millisecondsSinceEpoch,
+            'isFavorite': file.isFavorite,
           });
         }
       }
@@ -314,6 +421,24 @@ class MediaCacheBudget {
 
     await enforce();
   }
+
+  @visibleForTesting
+  Box<Map> get debugBox => _box;
+
+  @visibleForTesting
+  bool? debugIsFavorite(CacheBucket bucket, String id) =>
+      _box.get(cacheKeyFor(bucket, id))?['isFavorite'] as bool?;
+
+  @visibleForTesting
+  int? debugAddedAt(CacheBucket bucket, String id) =>
+      _box.get(cacheKeyFor(bucket, id))?['addedAt'] as int?;
+
+  @visibleForTesting
+  Future<void> debugPutRaw(
+    CacheBucket bucket,
+    String id,
+    Map<String, dynamic> row,
+  ) => _box.put(cacheKeyFor(bucket, id), row);
 
   CacheBucket _bucketOf(Map row) {
     return CacheBucket.values.firstWhere(

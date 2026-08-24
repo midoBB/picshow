@@ -21,6 +21,7 @@ void main() async {
     budgetBytes: prefs.cacheBudgetBytes,
   );
   await _migrateCacheKeys(prefs, cacheBudget);
+  await _backfillFavoriteFlags(prefs, cacheBudget, recentMediaStore);
 
   runApp(
     ProviderScope(
@@ -45,6 +46,21 @@ Future<void> _migrateCacheKeys(AppPrefs prefs, MediaCacheBudget budget) async {
   }
   await budget.clearFullBlobs();
   await prefs.setCacheKeySchemaVersion(AppPrefs.currentCacheKeySchemaVersion);
+}
+
+/// Backfills `isFavorite` for ledger rows written before favorite-protected
+/// eviction existed. Uses [RecentMediaStore] where possible; old rows without
+/// the field are treated as non-favorite and updated to `false` so future
+/// evictions are consistent. Guarded by a pref so it runs once.
+Future<void> _backfillFavoriteFlags(
+  AppPrefs prefs,
+  MediaCacheBudget budget,
+  RecentMediaStore store,
+) async {
+  if (prefs.favoriteLedgerBackfilled) return;
+  final favMap = {for (final f in store.getAll()) f.id: f.isFavorite};
+  await budget.backfillIsFavorite((id) => favMap[id]);
+  await prefs.setFavoriteLedgerBackfilled(true);
 }
 
 class PicShowApp extends ConsumerWidget {

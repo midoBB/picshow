@@ -164,7 +164,9 @@ class PagedFilesNotifier
     state = AsyncData(current.copyWith(files: optimistic));
 
     final store = ref.read(recentMediaStoreProvider);
+    final budget = ref.read(mediaCacheBudgetProvider);
     unawaited(store.updateFavorite(id, newFavorite));
+    unawaited(budget.updateFavorite(id, newFavorite));
 
     if (!ref.read(isOnlineProvider)) {
       // No network available: keep the optimistic change and record it so
@@ -197,6 +199,7 @@ class PagedFilesNotifier
         }
       }
       unawaited(store.updateFavorite(id, original.isFavorite));
+      unawaited(budget.updateFavorite(id, original.isFavorite));
       showToast('Failed to update favorite', isError: true);
     } finally {
       _favoriteInFlight.remove(id);

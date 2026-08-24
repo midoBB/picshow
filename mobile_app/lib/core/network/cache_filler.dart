@@ -271,7 +271,11 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
           key: cacheKeyFor(blobBucket, file.id),
         ),
       );
-      await budget.recordFromCache(blobBucket, file.id);
+      await budget.recordFromCache(
+        blobBucket,
+        file.id,
+        isFavorite: file.isFavorite,
+      );
     }
 
     if (_cancelled) return;
@@ -283,7 +287,11 @@ class CacheFillNotifier extends Notifier<CacheFillState> {
           key: cacheKeyFor(CacheBucket.thumb, file.id),
         ),
       );
-      await budget.recordFromCache(CacheBucket.thumb, file.id);
+      await budget.recordFromCache(
+        CacheBucket.thumb,
+        file.id,
+        isFavorite: file.isFavorite,
+      );
     }
   }
 

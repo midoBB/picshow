@@ -12,6 +12,7 @@ class AppPrefs {
   static const _themeModeKey = 'theme_mode';
   static const _cacheBudgetBytesKey = 'cache_budget_bytes';
   static const _cacheKeySchemaVersionKey = 'cache_key_schema_version';
+  static const _favoriteBackfillDoneKey = 'favorite_ledger_backfilled';
   static const _manualOfflineKey = 'manual_offline';
 
   /// Bumped whenever the [cacheKeyFor] scheme changes, making every entry
@@ -80,7 +81,8 @@ class AppPrefs {
 
   /// Total disk budget for cached thumbnails, images and videos.
   int get cacheBudgetBytes =>
-      _prefs.getInt(_cacheBudgetBytesKey) ?? MediaCacheBudget.defaultBudgetBytes;
+      _prefs.getInt(_cacheBudgetBytesKey) ??
+      MediaCacheBudget.defaultBudgetBytes;
 
   Future<void> setCacheBudgetBytes(int bytes) =>
       _prefs.setInt(_cacheBudgetBytesKey, bytes);
@@ -91,10 +93,20 @@ class AppPrefs {
   /// v1 caches and a fresh install are indistinguishable here, so both take
   /// the migration path. For a fresh install that's a no-op wipe of two empty
   /// caches, which is the safe way round to be wrong.
-  int get cacheKeySchemaVersion => _prefs.getInt(_cacheKeySchemaVersionKey) ?? 1;
+  int get cacheKeySchemaVersion =>
+      _prefs.getInt(_cacheKeySchemaVersionKey) ?? 1;
 
   Future<void> setCacheKeySchemaVersion(int version) =>
       _prefs.setInt(_cacheKeySchemaVersionKey, version);
+
+  /// Whether the ledger's `isFavorite` flag has been backfilled from
+  /// [RecentMediaStore]. One-time migration for installs predating
+  /// favorite-protected eviction.
+  bool get favoriteLedgerBackfilled =>
+      _prefs.getBool(_favoriteBackfillDoneKey) ?? false;
+
+  Future<void> setFavoriteLedgerBackfilled(bool value) =>
+      _prefs.setBool(_favoriteBackfillDoneKey, value);
 
   /// Whether the user asked to work offline regardless of reachability.
   /// Persisted so the choice survives a restart rather than silently

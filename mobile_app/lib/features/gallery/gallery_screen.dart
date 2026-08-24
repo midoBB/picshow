@@ -91,6 +91,7 @@ class GalleryScreen extends ConsumerWidget {
     required bool online,
     required MediaCacheBudget budget,
     required CacheBucket bucket,
+    required bool isFavorite,
   }) async {
     if (!online) return;
     if (!url.startsWith('http')) return;
@@ -113,7 +114,7 @@ class GalleryScreen extends ConsumerWidget {
         context,
         onError: (_, _) {},
       );
-      await budget.recordFromCache(bucket, id);
+      await budget.recordFromCache(bucket, id, isFavorite: isFavorite);
     } finally {
       _preloadingImages.remove(preloadKey);
     }
@@ -124,6 +125,7 @@ class GalleryScreen extends ConsumerWidget {
     String url, {
     required bool online,
     required MediaCacheBudget budget,
+    required bool isFavorite,
   }) async {
     if (!online) return;
     if (!_preloadingVideos.add(id)) return;
@@ -132,7 +134,11 @@ class GalleryScreen extends ConsumerWidget {
         url,
         key: cacheKeyFor(CacheBucket.video, id),
       );
-      await budget.recordFromCache(CacheBucket.video, id);
+      await budget.recordFromCache(
+        CacheBucket.video,
+        id,
+        isFavorite: isFavorite,
+      );
     } catch (_) {
       // Best-effort prefetch; playback will fall back to network streaming.
     } finally {
@@ -162,6 +168,7 @@ class GalleryScreen extends ConsumerWidget {
           online: online,
           budget: budget,
           bucket: CacheBucket.thumb,
+          isFavorite: file.isFavorite,
         ),
       );
 
@@ -175,6 +182,7 @@ class GalleryScreen extends ConsumerWidget {
             online: online,
             budget: budget,
             bucket: CacheBucket.image,
+            isFavorite: file.isFavorite,
           ),
         );
       }
@@ -193,6 +201,7 @@ class GalleryScreen extends ConsumerWidget {
             api.videoUrl(file.id),
             online: online,
             budget: budget,
+            isFavorite: file.isFavorite,
           ),
         );
       }
@@ -504,7 +513,8 @@ class GalleryScreen extends ConsumerWidget {
   }
 
   String _emptyMessageFor(MediaFilter filter, {required bool isOffline}) {
-    if (isOffline) return 'No cached ${filter.label.toLowerCase()} available offline';
+    if (isOffline)
+      return 'No cached ${filter.label.toLowerCase()} available offline';
     switch (filter) {
       case MediaFilter.video:
         return 'No videos found';
