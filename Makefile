@@ -86,6 +86,10 @@ clean: mobile-clean
 	@cd $(FIRST_RUN_DIR) && rm -rf dist node_modules
 	@echo "Project Cleaned"
 
+.PHONY: test
+test:
+	@cargo test
+
 .PHONY: run
 run:
 	@cargo run -- serve -l debug

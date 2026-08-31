@@ -133,14 +133,36 @@ impl MediaRepository {
     }
 
     async fn get_write_conn(&self) -> Result<Arc<sqlx::SqlitePool>> {
-        let _ = self
-            .write_semaphore
-            .read()
-            .await
-            .acquire()
-            .await
-            .map_err(|e| anyhow::anyhow!("Failed to acquire write semaphore: {}", e))?;
-        Ok(Arc::clone(&self.write_pool))
+        // Wait for the write semaphore to become available instead of failing
+        // immediately when it is closed during a backup. This turns the backup
+        // window from a flood of "semaphore closed" errors into a brief wait.
+        let start = tokio::time::Instant::now();
+        let timeout = Duration::from_secs(30);
+        loop {
+            let result = {
+                let semaphore = self.write_semaphore.read().await;
+                semaphore.acquire().await.map(|_| ()).map_err(|e| e.to_string())
+            };
+            match result {
+                Ok(_) => return Ok(Arc::clone(&self.write_pool)),
+                Err(msg) if msg.contains("closed") => {
+                    if start.elapsed() > timeout {
+                        return Err(anyhow::anyhow!(
+                            "Failed to acquire write semaphore: {}",
+                            msg
+                        ));
+                    }
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    continue;
+                }
+                Err(msg) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to acquire write semaphore: {}",
+                        msg
+                    ));
+                }
+            }
+        }
     }
 
     async fn init_schema(&self) -> Result<()> {
@@ -236,12 +258,17 @@ impl MediaRepository {
 
     pub async fn lock_writes(&self) -> Result<()> {
         trace!("Locking writes");
-        // Force acquire the lock semaphore first
-        let _lock = self
+        // Acquire and intentionally leak the permit so the semaphore stays at 0
+        // until unlock_writes() restores it. The previous code used `let _lock`
+        // which dropped the guard immediately, leaking permits via add_permits()
+        // and allowing concurrent lock_writes() to interleave.
+        let permit = self
             .lock_semaphore
-            .acquire()
+            .clone()
+            .acquire_owned()
             .await
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock semaphore: {}", e))?;
+        std::mem::forget(permit);
 
         // Wait a small duration for current operations to complete
         tokio::time::sleep(Duration::from_millis(100)).await;
@@ -2215,6 +2242,130 @@ mod tests {
             .await
             .expect_err("startup should refuse to proceed with no good backup available");
         assert!(!err.to_string().is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn lock_writes_does_not_leak_permits() -> Result<()> {
+        let data_dir = tempfile::tempdir()?;
+        let backup_dir = tempfile::tempdir()?;
+        let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let backup_path = format!(
+            "{}{}",
+            backup_dir.path().display(),
+            std::path::MAIN_SEPARATOR
+        );
+        let config = Arc::new(AppConfig {
+            db_path: data_path,
+            backup_folder_path: backup_path,
+            ..AppConfig::default()
+        });
+        let cache = AppCache::new(1);
+        let repo = MediaRepository::new(cache, config).await?;
+
+        // Run 5 lock/unlock cycles; permits must stay at 1 (no leak).
+        for _ in 0..5 {
+            repo.lock_writes().await?;
+            assert_eq!(
+                repo.lock_semaphore.available_permits(),
+                0,
+                "lock should hold permit (0 available)"
+            );
+            repo.unlock_writes().await?;
+            assert_eq!(
+                repo.lock_semaphore.available_permits(),
+                1,
+                "unlock should restore permit to 1"
+            );
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_write_conn_waits_during_backup_instead_of_failing() -> Result<()> {
+        let data_dir = tempfile::tempdir()?;
+        let backup_dir = tempfile::tempdir()?;
+        let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let backup_path = format!(
+            "{}{}",
+            backup_dir.path().display(),
+            std::path::MAIN_SEPARATOR
+        );
+        let config = Arc::new(AppConfig {
+            db_path: data_path,
+            backup_folder_path: backup_path,
+            ..AppConfig::default()
+        });
+        let cache = AppCache::new(1);
+        let repo = Arc::new(MediaRepository::new(cache, config).await?);
+
+        // Hold backup lock
+        repo.lock_writes().await?;
+
+        // Spawn a writer that should wait (not fail) while lock is held
+        let repo_clone = repo.clone();
+        let writer = tokio::spawn(async move {
+            // Should block until unlock and then succeed within timeout
+            repo_clone.get_write_conn().await
+        });
+
+        // Give writer time to enter wait loop
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(!writer.is_finished(), "writer should be waiting, not failed");
+
+        // Unlock - writer should now succeed
+        repo.unlock_writes().await?;
+        let result = tokio::time::timeout(Duration::from_secs(2), writer)
+            .await
+            .expect("writer should complete after unlock")?;
+        assert!(
+            result.is_ok(),
+            "get_write_conn should succeed after unlock, got {:?}",
+            result.err()
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn concurrent_lock_writes_are_serialized() -> Result<()> {
+        let data_dir = tempfile::tempdir()?;
+        let backup_dir = tempfile::tempdir()?;
+        let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let backup_path = format!(
+            "{}{}",
+            backup_dir.path().display(),
+            std::path::MAIN_SEPARATOR
+        );
+        let config = Arc::new(AppConfig {
+            db_path: data_path,
+            backup_folder_path: backup_path,
+            ..AppConfig::default()
+        });
+        let cache = AppCache::new(1);
+        let repo = Arc::new(MediaRepository::new(cache, config).await?);
+
+        // First lock holds the permit
+        repo.lock_writes().await?;
+
+        // Second lock attempt should block until first unlocks
+        let repo2 = repo.clone();
+        let second_lock = tokio::spawn(async move { repo2.lock_writes().await });
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(
+            !second_lock.is_finished(),
+            "second lock_writes should block while first holds lock"
+        );
+
+        repo.unlock_writes().await?;
+        let result = tokio::time::timeout(Duration::from_secs(1), second_lock)
+            .await
+            .expect("second lock should complete after unlock")?;
+        assert!(result.is_ok(), "second lock should succeed after first unlock");
+        // Cleanup second lock
+        repo.unlock_writes().await?;
 
         Ok(())
     }
