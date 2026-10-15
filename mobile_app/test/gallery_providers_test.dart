@@ -65,6 +65,8 @@ class _FakeOnlineNotifier extends OnlineNotifier {
 
   @override
   bool build() => _value;
+
+  void set(bool value) => state = value;
 }
 
 MediaFile _mediaFile(String id) {
@@ -154,9 +156,7 @@ void main() {
 
       for (final file in viewed) {
         expect(
-          await ThumbCacheManager.instance.getFileFromCache(
-            'thumb-${file.id}',
-          ),
+          await ThumbCacheManager.instance.getFileFromCache('thumb-${file.id}'),
           isNotNull,
           reason: '${file.id} thumbnail should survive a refresh',
         );
@@ -170,4 +170,37 @@ void main() {
       }
     },
   );
+
+  test('dropping offline keeps the already loaded online pages', () async {
+    final loaded = [for (var i = 0; i < 5; i++) _mediaFile('loaded-$i')];
+    final api = _PagedFakeApi(loaded);
+    final store = await RecentMediaStore.openInMemoryForTesting();
+    final budget = await MediaCacheBudget.openInMemoryForTesting(
+      budgetBytes: 1 << 30,
+    );
+    final online = _FakeOnlineNotifier(true);
+
+    final container = ProviderContainer(
+      overrides: [
+        apiClientProvider.overrideWithValue(api),
+        recentMediaStoreProvider.overrideWithValue(store),
+        mediaCacheBudgetProvider.overrideWithValue(budget),
+        isOnlineProvider.overrideWith(() => online),
+      ],
+    );
+    addTearDown(container.dispose);
+
+    const query = GalleryQuery(order: SortOrder.random, seed: 1);
+    final sub = container.listen(pagedFilesProvider(query), (_, _) {});
+    addTearDown(sub.close);
+    final before = await container.read(pagedFilesProvider(query).future);
+    expect(before.files, hasLength(5));
+
+    online.set(false);
+    await Future<void>.delayed(const Duration(milliseconds: 20));
+
+    final after = container.read(pagedFilesProvider(query)).requireValue;
+    expect(after.isOffline, isFalse, reason: 'a blip must not swap the list');
+    expect(after.files.map((f) => f.id), loaded.map((f) => f.id));
+  });
 }

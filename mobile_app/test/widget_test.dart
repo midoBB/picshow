@@ -365,10 +365,7 @@ void main() {
 
     test('queryOffline sorts by createdAt honoring direction', () async {
       final store = await RecentMediaStore.openInMemoryForTesting();
-      final older = _mediaFile(
-        id: 'older',
-        isFavorite: false,
-      );
+      final older = _mediaFile(id: 'older', isFavorite: false);
       final newer = MediaFile(
         id: 'newer',
         hash: 'hash-newer',
@@ -431,7 +428,9 @@ void main() {
 
   group('PagedFilesNotifier offline fallback', () {
     test('falls back to recently-viewed cache when offline', () async {
-      final api = _FakeApiClient([_mediaFile(id: 'cached-1', isFavorite: false)]);
+      final api = _FakeApiClient([
+        _mediaFile(id: 'cached-1', isFavorite: false),
+      ]);
       final store = await RecentMediaStore.openInMemoryForTesting();
       await store.upsertAll(api.files);
       final budget = await MediaCacheBudget.openInMemoryForTesting(
@@ -461,7 +460,9 @@ void main() {
     });
 
     test('loadMore is a no-op while offline', () async {
-      final api = _FakeApiClient([_mediaFile(id: 'cached-1', isFavorite: false)]);
+      final api = _FakeApiClient([
+        _mediaFile(id: 'cached-1', isFavorite: false),
+      ]);
       final store = await RecentMediaStore.openInMemoryForTesting();
       final budget = await MediaCacheBudget.openInMemoryForTesting(
         budgetBytes: 1 << 30,
@@ -528,7 +529,9 @@ void main() {
                 as _ControllableOnlineNotifier;
         onlineNotifier.setOnline(false);
         final offlineState = await container.read(provider.future);
-        expect(offlineState.isOffline, true);
+        // A drop keeps the loaded list on screen rather than swapping in the
+        // cached-only one; only a fresh load while offline uses the cache.
+        expect(offlineState.isOffline, false);
         expect(offlineState.files.map((f) => f.id), ['file-1']);
 
         await container.read(provider.notifier).toggleFavorite('file-1');

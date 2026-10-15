@@ -29,6 +29,7 @@ class ServerConnection extends ChangeNotifier with WidgetsBindingObserver {
     bool manualOffline = false,
     @visibleForTesting Future<bool> Function(String url)? probe,
     @visibleForTesting this.connectivityStream,
+    @visibleForTesting this.demotionRecheckDelay = defaultDemotionRecheckDelay,
   }) : _serverUrls = _normalizeAll(serverUrls),
        // ignore: prefer_initializing_formals
        _manualOffline = manualOffline,
@@ -52,7 +53,19 @@ class ServerConnection extends ChangeNotifier with WidgetsBindingObserver {
   /// How often to re-probe while online. See [_scheduleHeartbeat].
   static const onlineHeartbeat = Duration(seconds: 20);
 
+  /// How long to wait before re-confirming a failed probe that would demote
+  /// an online connection. See [_doCheck].
+  static const defaultDemotionRecheckDelay = Duration(seconds: 1);
+
+  /// Extra probe passes made before an *online* connection is declared
+  /// offline. Total grace is roughly `demotionRechecks * delay` plus probe
+  /// time.
+  static const demotionRechecks = 2;
+
   final Future<bool> Function(String url) _probe;
+
+  @visibleForTesting
+  final Duration demotionRecheckDelay;
 
   /// Overridable so tests can drive transitions without a platform channel.
   @visibleForTesting
@@ -102,10 +115,8 @@ class ServerConnection extends ChangeNotifier with WidgetsBindingObserver {
 
   Future<void> start() async {
     WidgetsBinding.instance.addObserver(this);
-    _networkSub =
-        (connectivityStream ?? Connectivity().onConnectivityChanged).listen(
-          (_) => _scheduleCheck(),
-        );
+    _networkSub = (connectivityStream ?? Connectivity().onConnectivityChanged)
+        .listen((_) => _scheduleCheck());
     if (_manualOffline) {
       _emit(ServerConnectionState.manualOffline);
     } else {
@@ -240,15 +251,38 @@ class ServerConnection extends ChangeNotifier with WidgetsBindingObserver {
     if (!_settled) {
       _emit(ServerConnectionState.checking);
     }
+    final wasOnline = _settled && _state == ServerConnectionState.online;
+    if (await _probePass()) return;
+
+    // A failed probe against a connection that was working a moment ago is
+    // weak evidence: right after the app resumes (or a network handoff) the
+    // radio and DNS are often not ready yet, and the first probe times out
+    // against a server that is perfectly reachable. Demoting on it flipped
+    // the whole gallery to its cached view every time the user switched apps
+    // and back. Keep the previous verdict and re-confirm a few times before
+    // believing it. A connection that was already offline or unsettled has
+    // nothing to protect, so it is reported immediately.
+    if (wasOnline) {
+      for (var i = 0; i < demotionRechecks; i++) {
+        await Future<void>.delayed(demotionRecheckDelay);
+        if (_manualOffline || _disposed) return;
+        if (await _probePass()) return;
+      }
+    }
+    _emit(ServerConnectionState.automaticOffline);
+  }
+
+  /// Probes each configured address once, adopting the first that answers.
+  Future<bool> _probePass() async {
     for (final url in _orderedUrls) {
       if (await _probe(url)) {
         _activeServerUrl = url;
         _consecutiveFailures = 0;
         _emit(ServerConnectionState.online);
-        return;
+        return true;
       }
     }
-    _emit(ServerConnectionState.automaticOffline);
+    return false;
   }
 
   /// The active address first, then the rest in configured order (LAN before

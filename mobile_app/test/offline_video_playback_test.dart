@@ -19,7 +19,10 @@ class _FakeFileService extends FileService {
   int gets = 0;
 
   @override
-  Future<FileServiceResponse> get(String url, {Map<String, String>? headers}) async {
+  Future<FileServiceResponse> get(
+    String url, {
+    Map<String, String>? headers,
+  }) async {
     gets++;
     if (offline) throw const SocketException('offline');
     return _FakeResponse(validTill: DateTime.now().add(maxAge));
@@ -92,34 +95,49 @@ void main() {
   const url = 'http://server.test/api/video/abc';
   const key = 'video-abc';
 
-  test('plays a fully cached video offline once its max-age has passed', () async {
-    // Online: the prefetcher downloads the whole file.
-    final cached = await resolveMediaSource(manager, url, cacheKey: key);
-    expect(cached.isLocal, isTrue, reason: 'sanity: online download works');
-    expect(File(cached.source).existsSync(), isTrue);
+  test(
+    'plays a fully cached video offline once its max-age has passed',
+    () async {
+      // Online: first play streams, and the background fill caches the file.
+      final first = await resolveMediaSource(manager, url, cacheKey: key);
+      expect(
+        first.isLocal,
+        isFalse,
+        reason: 'a miss must not block on a download',
+      );
+      expect(first.source, url);
+      await first.cacheInBackground!();
+      final cached = await resolveMediaSource(manager, url, cacheKey: key);
+      expect(
+        cached.isLocal,
+        isTrue,
+        reason: 'sanity: background fill cached it',
+      );
+      expect(File(cached.source).existsSync(), isTrue);
 
-    // The server's Cache-Control max-age lapses. Nothing was evicted — every
-    // byte is still on disk, and the ledger still lists this file as
-    // available offline.
-    await Future<void>.delayed(const Duration(milliseconds: 1200));
+      // The server's Cache-Control max-age lapses. Nothing was evicted — every
+      // byte is still on disk, and the ledger still lists this file as
+      // available offline.
+      await Future<void>.delayed(const Duration(milliseconds: 1200));
 
-    // Now the network is gone.
-    service.offline = true;
+      // Now the network is gone.
+      service.offline = true;
 
-    final resolved = await resolveMediaSource(manager, url, cacheKey: key);
+      final resolved = await resolveMediaSource(manager, url, cacheKey: key);
 
-    expect(
-      resolved.isLocal,
-      isTrue,
-      reason: 'offline playback must use the bytes already on disk',
-    );
-    expect(File(resolved.source).existsSync(), isTrue);
-    expect(
-      service.gets,
-      1,
-      reason: 'a complete local copy should not be re-fetched at play time',
-    );
-  });
+      expect(
+        resolved.isLocal,
+        isTrue,
+        reason: 'offline playback must use the bytes already on disk',
+      );
+      expect(File(resolved.source).existsSync(), isTrue);
+      expect(
+        service.gets,
+        1,
+        reason: 'a complete local copy should not be re-fetched at play time',
+      );
+    },
+  );
 
   test('falls back to the network URL when nothing is cached', () async {
     service.offline = true;
@@ -128,5 +146,15 @@ void main() {
 
     expect(resolved.isLocal, isFalse);
     expect(resolved.source, url);
+    // A failed background fill must be swallowed, not crash playback.
+    await resolved.cacheInBackground!();
+  });
+
+  test('a cache miss returns the URL without downloading anything', () async {
+    final resolved = await resolveMediaSource(manager, url, cacheKey: key);
+
+    expect(resolved.isLocal, isFalse);
+    expect(resolved.source, url);
+    expect(service.gets, 0, reason: 'nothing may be fetched before playback');
   });
 }

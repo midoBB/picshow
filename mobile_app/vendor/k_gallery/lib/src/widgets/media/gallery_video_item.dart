@@ -58,6 +58,8 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
   bool _isBuffering = true;
   bool _hasVideoDimensions = false;
 
+  bool _cacheFillStarted = false;
+
   bool get _currentlyPlaying => _player?.state.playing == true;
 
   @override
@@ -80,6 +82,13 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
 
     _playingSubscription = p.stream.playing.listen((isPlaying) {
       if (!mounted) return;
+      // Fill the cache only once playback is under way, so the download
+      // doesn't compete with the bytes the player needs to start.
+      final fillCache = _resolvedSource?.cacheInBackground;
+      if (isPlaying && !_cacheFillStarted && fillCache != null) {
+        _cacheFillStarted = true;
+        unawaited(fillCache());
+      }
       final state = widget.galleryBloc.state;
       if (isPlaying &&
           state.isUIVisible &&
@@ -111,9 +120,9 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
     if (mounted) setState(() {});
   }
 
-  /// Resolves [item.url] to a local cache file (downloading it fully if not
-  /// already cached) before opening it in the player, so a replayed video
-  /// plays from disk instead of re-streaming. See [resolveMediaSource].
+  /// Opens a cached local copy when there is one, otherwise streams the
+  /// network URL straight away and caches it in the background once playing,
+  /// so a replay is local. See [resolveMediaSource].
   Future<void> _openMedia(Player p) async {
     final resolved = await resolveMediaSource(
       widget.cacheManager,
@@ -159,6 +168,7 @@ class _GalleryVideoItemState extends State<GalleryVideoItem>
     _isBuffering = true;
     _hasVideoDimensions = false;
     _resolvedSource = null;
+    _cacheFillStarted = false;
     p.dispose();
 
     final notifier = widget.activePlayerNotifier;

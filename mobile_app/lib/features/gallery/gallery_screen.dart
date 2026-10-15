@@ -532,8 +532,9 @@ class GalleryScreen extends ConsumerWidget {
     final query = ref.watch(galleryQueryProvider);
     final asyncState = ref.watch(pagedFilesProvider(query));
     final themeMode = ref.watch(themeModeProvider);
-    final isOnline = ref.watch(isOnlineProvider);
+    final showOfflineBanner = ref.watch(offlineBannerVisibleProvider);
     final connectionState = ref.watch(serverConnectionStateProvider);
+    final showingCached = asyncState.valueOrNull?.isOffline ?? true;
 
     void updateQuery(GalleryQuery Function(GalleryQuery) fn) {
       ref.read(galleryQueryProvider.notifier).state = fn(query);
@@ -542,7 +543,7 @@ class GalleryScreen extends ConsumerWidget {
     return Scaffold(
       appBar: AppBar(
         title: const Text('PicShow'),
-        bottom: isOnline
+        bottom: !showOfflineBanner
             ? null
             : PreferredSize(
                 preferredSize: const Size.fromHeight(28),
@@ -555,6 +556,8 @@ class GalleryScreen extends ConsumerWidget {
                         'Working offline — showing cached items',
                       ServerConnectionState.checking =>
                         'Reconnecting — showing cached items',
+                      _ when !showingCached =>
+                        'Offline — showing already loaded items',
                       _ => 'Offline — showing cached items',
                     },
                     style: TextStyle(

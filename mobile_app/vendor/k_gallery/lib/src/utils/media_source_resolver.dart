@@ -2,19 +2,33 @@ import 'package:flutter_cache_manager/flutter_cache_manager.dart';
 
 /// What [resolveMediaSource] decided to hand to the player.
 class ResolvedMediaSource {
-  const ResolvedMediaSource(this.source, {required this.isLocal});
+  const ResolvedMediaSource(
+    this.source, {
+    required this.isLocal,
+    this.cacheInBackground,
+  });
 
   /// The path or URL to open.
   final String source;
 
   /// Whether [source] is a local file, i.e. playable with no network at all.
   final bool isLocal;
+
+  /// Set when [source] is a network URL that is worth caching: downloads the
+  /// file into the cache without blocking playback, never throws. The caller
+  /// decides *when* to run it — ideally once playback has started, so the
+  /// download doesn't compete with the first bytes the player needs.
+  final Future<void> Function()? cacheInBackground;
 }
 
-/// Resolves [url] to a local cache file via [cacheManager] (downloading it if
-/// not already cached) so a replayed video plays from disk instead of
-/// re-streaming. Falls back to the raw network URL when there is no cache
-/// manager, the URL isn't remote, or nothing is cached and the download fails.
+/// Resolves [url] to a local cache file via [cacheManager] when one is already
+/// cached, so a replayed video plays from disk instead of re-streaming.
+///
+/// On a cache miss the network URL is returned *immediately* so the player
+/// can start progressively with range requests, like a browser `<video>`.
+/// Blocking here until the whole file was downloaded made first play wait for
+/// 100% of the video. The download still happens, off the critical path, via
+/// [ResolvedMediaSource.cacheInBackground], so the next play is local.
 ///
 /// Cache *presence* wins over cache *freshness*, deliberately.
 /// `CacheManager.getSingleFile` re-downloads as soon as the entry's
@@ -49,11 +63,16 @@ Future<ResolvedMediaSource> resolveMediaSource(
     // Unreadable cache entry; fall through to a fresh download.
   }
 
-  try {
-    final file = await cacheManager.getSingleFile(url, key: key);
-    return ResolvedMediaSource(file.path, isLocal: true);
-  } catch (_) {
-    // Fall back to network streaming (offline first play, disk full, 404).
-    return ResolvedMediaSource(url, isLocal: false);
-  }
+  return ResolvedMediaSource(
+    url,
+    isLocal: false,
+    cacheInBackground: () async {
+      try {
+        await cacheManager.getSingleFile(url, key: key);
+      } catch (_) {
+        // Offline, disk full, 404: playback is already streaming; a missed
+        // cache fill only means the next play streams again.
+      }
+    },
+  );
 }

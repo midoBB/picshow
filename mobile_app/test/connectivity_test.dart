@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 import 'package:picshow_mobile/core/network/server_connection.dart';
@@ -14,12 +15,20 @@ class _FakeProbe {
   _FakeProbe(this.reachable);
 
   Set<String> reachable;
+
+  /// Answers `false` to this many calls regardless of [reachable] — a probe
+  /// that times out while the radio wakes up, then works.
+  int failFirst = 0;
   final List<String> calls = [];
   Completer<void>? gate;
 
   Future<bool> call(String url) async {
     calls.add(url);
     if (gate case final gate?) await gate.future;
+    if (failFirst > 0) {
+      failFirst--;
+      return false;
+    }
     return reachable.contains(url);
   }
 }
@@ -36,6 +45,7 @@ void main() {
       serverUrls: urls,
       probe: probe.call,
       connectivityStream: connectivity ?? const Stream.empty(),
+      demotionRecheckDelay: Duration.zero,
     );
     addTearDown(connection.dispose);
     return connection;
@@ -49,40 +59,44 @@ void main() {
 
     expect(connection.isOnline, isTrue);
     expect(connection.activeServerUrl, _lan);
-    expect(
-      probe.calls,
-      [_lan],
-      reason: 'the public address should not be probed once the LAN answers',
-    );
+    expect(probe.calls, [
+      _lan,
+    ], reason: 'the public address should not be probed once the LAN answers');
   });
 
-  test('falls back to the public address when the LAN is unreachable', () async {
-    final probe = _FakeProbe({_public});
-    final connection = connectionWith(probe);
+  test(
+    'falls back to the public address when the LAN is unreachable',
+    () async {
+      final probe = _FakeProbe({_public});
+      final connection = connectionWith(probe);
 
-    await connection.start();
+      await connection.start();
 
-    expect(connection.isOnline, isTrue);
-    expect(connection.activeServerUrl, _public);
-    expect(probe.calls, [_lan, _public]);
-  });
+      expect(connection.isOnline, isTrue);
+      expect(connection.activeServerUrl, _public);
+      expect(probe.calls, [_lan, _public]);
+    },
+  );
 
-  test('reports online optimistically until the first probe resolves', () async {
-    final probe = _FakeProbe({_lan})..gate = Completer<void>();
-    final connection = connectionWith(probe);
+  test(
+    'reports online optimistically until the first probe resolves',
+    () async {
+      final probe = _FakeProbe({_lan})..gate = Completer<void>();
+      final connection = connectionWith(probe);
 
-    final started = connection.start();
-    expect(connection.state, ServerConnectionState.checking);
-    expect(
-      connection.isOnline,
-      isTrue,
-      reason: 'a cold start must not flash the cached-only grid',
-    );
+      final started = connection.start();
+      expect(connection.state, ServerConnectionState.checking);
+      expect(
+        connection.isOnline,
+        isTrue,
+        reason: 'a cold start must not flash the cached-only grid',
+      );
 
-    probe.gate!.complete();
-    await started;
-    expect(connection.isOnline, isTrue);
-  });
+      probe.gate!.complete();
+      await started;
+      expect(connection.isOnline, isTrue);
+    },
+  );
 
   test('an unresolved check does not mask a manual offline choice', () async {
     final probe = _FakeProbe({_lan});
@@ -216,15 +230,71 @@ void main() {
     expect(connection.isOnline, isTrue);
   });
 
-  test('setServerUrls re-probes and keeps a still-valid active address',
-      () async {
-    final probe = _FakeProbe({_lan, _public});
-    final connection = connectionWith(probe);
-    await connection.start();
-    expect(connection.activeServerUrl, _lan);
+  test(
+    'setServerUrls re-probes and keeps a still-valid active address',
+    () async {
+      final probe = _FakeProbe({_lan, _public});
+      final connection = connectionWith(probe);
+      await connection.start();
+      expect(connection.activeServerUrl, _lan);
 
-    // The LAN address is dropped from the configuration entirely.
-    await connection.setServerUrls(const [_public]);
-    expect(connection.activeServerUrl, _public);
+      // The LAN address is dropped from the configuration entirely.
+      await connection.setServerUrls(const [_public]);
+      expect(connection.activeServerUrl, _public);
+    },
+  );
+
+  group('demotion of an online connection', () {
+    test('a failed probe on app resume does not flip offline', () async {
+      final probe = _FakeProbe({_lan});
+      final connection = connectionWith(probe, urls: const [_lan]);
+      await connection.start();
+      var notifications = 0;
+      connection.addListener(() => notifications++);
+
+      // The radio is still waking up: the first probe times out.
+      probe.failFirst = 1;
+      connection.didChangeAppLifecycleState(AppLifecycleState.resumed);
+      await connection.checkNow();
+
+      expect(connection.isOnline, isTrue);
+      expect(
+        notifications,
+        0,
+        reason: 'listeners (and the gallery) must never have seen offline',
+      );
+    });
+
+    test('goes offline once every confirming probe has failed', () async {
+      final probe = _FakeProbe({_lan});
+      final connection = connectionWith(probe, urls: const [_lan]);
+      await connection.start();
+      probe.calls.clear();
+
+      probe.reachable = {};
+      await connection.checkNow();
+
+      expect(connection.isOffline, isTrue);
+      expect(
+        probe.calls,
+        hasLength(1 + ServerConnection.demotionRechecks),
+        reason: 'one pass plus the confirming re-probes',
+      );
+    });
+
+    test(
+      'an already-offline connection is reported without re-confirming',
+      () async {
+        final probe = _FakeProbe({});
+        final connection = connectionWith(probe, urls: const [_lan]);
+        await connection.start();
+        probe.calls.clear();
+
+        await connection.checkNow();
+
+        expect(connection.isOffline, isTrue);
+        expect(probe.calls, hasLength(1));
+      },
+    );
   });
 }

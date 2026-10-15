@@ -60,7 +60,22 @@ class PagedFilesNotifier
     final api = ref.watch(apiClientProvider);
     final store = ref.watch(recentMediaStoreProvider);
     final budget = ref.watch(mediaCacheBudgetProvider);
-    final online = ref.watch(isOnlineProvider);
+    // Read, not watched: a flip to offline must not rebuild this provider,
+    // because a rebuild discards every page the user has loaded and swaps in
+    // the cached-only list. A drop while browsing keeps what is on screen
+    // (the banner says so); the cached list is used for fresh loads.
+    final online = ref.read(isOnlineProvider);
+
+    ref.listen<bool>(isOnlineProvider, (_, nowOnline) {
+      if (!nowOnline) return;
+      final current = state.valueOrNull;
+      if (current != null && current.isOffline) {
+        // Showing the cached list: reconnecting means go get the real one.
+        ref.invalidateSelf();
+      } else {
+        unawaited(_reconcilePendingFavorites(store, api));
+      }
+    });
 
     if (online) unawaited(_reconcilePendingFavorites(store, api));
 
@@ -111,6 +126,9 @@ class PagedFilesNotifier
         !current.hasMore) {
       return;
     }
+    // Kept-on-screen online list after a drop: wait for the connection
+    // rather than failing with a toast on every scroll.
+    if (!ref.read(isOnlineProvider)) return;
 
     state = AsyncData(current.copyWith(isLoadingMore: true));
     final api = ref.read(apiClientProvider);
