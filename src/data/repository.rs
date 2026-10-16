@@ -1234,12 +1234,7 @@ impl MediaRepository {
         let order_by = match query.order.as_str() {
             "random" => {
                 if let Some(seed) = query.seed {
-                    // Use deterministic hash-based ordering with seed
-                    // This combines the rowid with the seed for deterministic randomness
-                    format!(
-                        "(((mf.rowid + {}) * 1103515245 + 12345) % 2147483647)",
-                        seed
-                    )
+                    random_order_expr("mf.rowid", seed)
                 } else {
                     "RANDOM()".to_string()
                 }
@@ -2133,11 +2128,55 @@ pub async fn ensure_dir(db_path: &str) -> Result<()> {
     Ok(())
 }
 
+/// Seeded pseudo-random sort key for `id_expr`.
+///
+/// An affine round, a quadratic round (so different seeds reshuffle instead of
+/// merely rotating one fixed order) and a final multiply, all mod 2^32. The seed
+/// is reduced below 1e8 so every intermediate stays under 2^63 for ids up to
+/// 2^30; larger seeds would overflow SQLite's int64 and silently turn the math
+/// into floating point.
+fn random_order_expr(id_expr: &str, seed: u64) -> String {
+    let seed = seed % 100_000_000;
+    let mixed = format!("(({id_expr} * 2654435761 + {seed} * 40503) % 4294967296)");
+    format!(
+        "(((({mixed} * (({mixed} % 65521) + 1)) % 4294967296) * 668265263 + {seed}) % 4294967296)"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cache::AppCache;
     use crate::config::AppConfig;
+
+    fn random_order(conn: &rusqlite::Connection, seed: u64) -> Vec<i64> {
+        let sql = format!(
+            "WITH RECURSIVE ids(id) AS (SELECT 1 UNION ALL SELECT id + 1 FROM ids WHERE id < 200) SELECT id FROM ids ORDER BY {}",
+            random_order_expr("ids.id", seed)
+        );
+        let mut stmt = conn.prepare(&sql).unwrap();
+        stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+    }
+
+    #[test]
+    fn random_order_is_shuffled_and_reseeds_differ_for_any_seed() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        let mut orders = Vec::new();
+        for seed in [7u64, 424_242, 1_800_000_000, 99_999_999, u64::MAX] {
+            let order = random_order(&conn, seed);
+            let mut sorted = order.clone();
+            sorted.sort();
+            assert_eq!(sorted, (1..=200).collect::<Vec<_>>(), "seed {seed}: not a permutation");
+            let consecutive = order.windows(2).filter(|w| w[1] == w[0] + 1).count();
+            assert!(consecutive <= 20, "seed {seed}: order is not shuffled ({consecutive} consecutive pairs)");
+            orders.push(order);
+        }
+        // Seeds must reshuffle, not rotate: relabelling ids by a constant shift must not reproduce another seed's order.
+        for shift in 1..200i64 {
+            let rotated: Vec<i64> = orders[0].iter().map(|id| (id - 1 + shift) % 200 + 1).collect();
+            assert_ne!(rotated, orders[1], "seeds only rotate the order");
+        }
+    }
 
     #[tokio::test]
     async fn opening_a_pre_existing_wal_database_migrates_it_to_delete_mode() -> Result<()> {
