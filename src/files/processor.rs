@@ -23,7 +23,10 @@ use tokio::{
 use tracing::{debug, error, info, warn};
 
 use super::handler::Handler;
+use super::phash;
 use walkdir::{DirEntry, WalkDir};
+
+const PHASH_VERSION_KEY: &str = "perceptual_hash_version";
 
 #[derive(Clone)]
 pub struct Processor {
@@ -56,6 +59,7 @@ impl Processor {
             self.duplicate_path.as_path().display()
         );
         ensure_path(self.duplicate_path.clone()).await?;
+        self.invalidate_outdated_perceptual_hashes().await?;
 
         // Track processed hashes for cleanup phase
         let processed_hashes: Arc<Mutex<HashSet<String>>> = Arc::new(Mutex::new(HashSet::new()));
@@ -134,6 +138,28 @@ impl Processor {
         info!("Finished processing files");
         Ok((media_files, exit_option))
     }
+    /// Hashes computed by an older algorithm are not comparable with new ones. Clearing them
+    /// makes this scan backfill every image through the "missing hashes" path.
+    async fn invalidate_outdated_perceptual_hashes(&self) -> Result<()> {
+        let current = phash::HASH_VERSION.to_string();
+        if self
+            .repository
+            .get_app_state(PHASH_VERSION_KEY)
+            .await?
+            .as_deref()
+            == Some(current.as_str())
+        {
+            return Ok(());
+        }
+        let cleared = self.repository.clear_perceptual_hashes().await?;
+        info!(
+            "Perceptual hash algorithm changed (now v{}), recomputing hashes for {} images",
+            current, cleared
+        );
+        self.repository
+            .set_app_state(PHASH_VERSION_KEY, &current)
+            .await
+    }
     async fn process_file(
         &self,
         entry: Arc<DirEntry>,
@@ -209,40 +235,11 @@ impl Processor {
                                     filename, e
                                 );
                             } else {
+                                // Clusters are rebuilt from all hashes once the scan finishes.
                                 debug!(
                                     "Backfilled perceptual hashes for existing image {}",
                                     filename
                                 );
-                                // Trigger incremental clustering for the newly hashed image
-                                let hash_vec: Vec<i64> =
-                                    [hashes.0, hashes.1, hashes.2, hashes.3, hashes.4, hashes.5]
-                                        .into_iter()
-                                        .flatten()
-                                        .collect();
-                                if !hash_vec.is_empty() {
-                                    if let Ok(actual_image_id) =
-                                        self.repository.resolve_image_id(media_file_id).await
-                                    {
-                                        let builder = crate::clustering::ClusterBuilder::new(
-                                            self.repository.clone(),
-                                            &self.config,
-                                        );
-                                        if let Err(e) = builder
-                                            .add_to_clusters_multi(actual_image_id, &hash_vec)
-                                            .await
-                                        {
-                                            warn!(
-                                                "Failed to cluster backfilled image {}: {}",
-                                                filename, e
-                                            );
-                                        }
-                                    } else {
-                                        warn!(
-                                            "Failed to resolve image ID for backfilled image {}",
-                                            filename
-                                        );
-                                    }
-                                }
                             }
                         }
                     }

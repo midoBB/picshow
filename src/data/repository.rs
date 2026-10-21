@@ -1155,6 +1155,28 @@ impl MediaRepository {
         Ok(has_missing)
     }
 
+    /// Drops every stored perceptual hash so they get recomputed; returns the images affected.
+    pub async fn clear_perceptual_hashes(&self) -> Result<u64> {
+        let result = sqlx::query(
+            r#"UPDATE images SET
+                    perceptual_hash = NULL,
+                    perceptual_hash_center = NULL,
+                    perceptual_hash_tl = NULL,
+                    perceptual_hash_tr = NULL,
+                    perceptual_hash_bl = NULL,
+                    perceptual_hash_br = NULL
+                WHERE perceptual_hash IS NOT NULL
+                    OR perceptual_hash_center IS NOT NULL
+                    OR perceptual_hash_tl IS NOT NULL
+                    OR perceptual_hash_tr IS NOT NULL
+                    OR perceptual_hash_bl IS NOT NULL
+                    OR perceptual_hash_br IS NOT NULL"#,
+        )
+        .execute(self.get_write_conn().await?.borrow())
+        .await?;
+        Ok(result.rows_affected())
+    }
+
     pub async fn update_image_perceptual_hashes(
         &self,
         media_file_id: Uuid,
@@ -2155,7 +2177,10 @@ mod tests {
             random_order_expr("ids.id", seed)
         );
         let mut stmt = conn.prepare(&sql).unwrap();
-        stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
     }
 
     #[test]
@@ -2166,14 +2191,24 @@ mod tests {
             let order = random_order(&conn, seed);
             let mut sorted = order.clone();
             sorted.sort();
-            assert_eq!(sorted, (1..=200).collect::<Vec<_>>(), "seed {seed}: not a permutation");
+            assert_eq!(
+                sorted,
+                (1..=200).collect::<Vec<_>>(),
+                "seed {seed}: not a permutation"
+            );
             let consecutive = order.windows(2).filter(|w| w[1] == w[0] + 1).count();
-            assert!(consecutive <= 20, "seed {seed}: order is not shuffled ({consecutive} consecutive pairs)");
+            assert!(
+                consecutive <= 20,
+                "seed {seed}: order is not shuffled ({consecutive} consecutive pairs)"
+            );
             orders.push(order);
         }
         // Seeds must reshuffle, not rotate: relabelling ids by a constant shift must not reproduce another seed's order.
         for shift in 1..200i64 {
-            let rotated: Vec<i64> = orders[0].iter().map(|id| (id - 1 + shift) % 200 + 1).collect();
+            let rotated: Vec<i64> = orders[0]
+                .iter()
+                .map(|id| (id - 1 + shift) % 200 + 1)
+                .collect();
             assert_ne!(rotated, orders[1], "seeds only rotate the order");
         }
     }
