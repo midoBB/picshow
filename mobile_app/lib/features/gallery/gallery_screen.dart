@@ -32,10 +32,8 @@ class GalleryScreen extends ConsumerWidget {
   const GalleryScreen({super.key});
 
   static const _nearbyPreloadRadius = 3;
-  // Narrower than the image radius: videos run tens to hundreds of MB, so
-  // prefetching at the same radius as images could mean downloading a
-  // gigabyte+ per swipe-through. Radius 1 keeps "swipe to next video"
-  // feeling instant without excessive bandwidth use.
+  // Videos are streamed, not prefetched (see _recordCachedVideo); this radius
+  // only bounds which neighbours get ledgered after the player cached them.
   static const _videoPreloadRadius = 1;
   static final Set<String> _preloadingImages = <String>{};
   static final Set<String> _preloadingVideos = <String>{};
@@ -120,27 +118,28 @@ class GalleryScreen extends ConsumerWidget {
     }
   }
 
-  Future<void> _precacheVideo(
-    String id,
-    String url, {
-    required bool online,
+  /// Ledgers a nearby video the player already cached; never downloads one.
+  ///
+  /// Full-downloading the current and neighbouring videos here competed with
+  /// media_kit's progressive stream for the same link: with three downloads
+  /// in flight the player got a quarter of the bandwidth and only started
+  /// once roughly a whole file's worth of time had passed — "the video has to
+  /// load entirely before it plays". k_gallery caches a video in the
+  /// background once its playback is under way, so the bytes still land in
+  /// [VideoCacheManager]; this only records them in the budget as the user
+  /// swipes past (startup reconcile catches whatever this misses).
+  Future<void> _recordCachedVideo(
+    String id, {
     required MediaCacheBudget budget,
     required bool isFavorite,
   }) async {
-    if (!online) return;
     if (!_preloadingVideos.add(id)) return;
     try {
-      await VideoCacheManager.instance.getSingleFile(
-        url,
-        key: cacheKeyFor(CacheBucket.video, id),
-      );
       await budget.recordFromCache(
         CacheBucket.video,
         id,
         isFavorite: isFavorite,
       );
-    } catch (_) {
-      // Best-effort prefetch; playback will fall back to network streaming.
     } finally {
       _preloadingVideos.remove(id);
     }
@@ -196,10 +195,8 @@ class GalleryScreen extends ConsumerWidget {
       final file = files[index];
       if (file.mediaType == MediaType.video) {
         unawaited(
-          _precacheVideo(
+          _recordCachedVideo(
             file.id,
-            api.videoUrl(file.id),
-            online: online,
             budget: budget,
             isFavorite: file.isFavorite,
           ),
