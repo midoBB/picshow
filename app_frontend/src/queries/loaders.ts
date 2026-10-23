@@ -195,6 +195,9 @@ export const useDeleteFile = () => {
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ["files"] });
       queryClient.invalidateQueries({ queryKey: ["stats"] });
+      // A delete can shrink a cluster below two images, which the server then hides.
+      queryClient.invalidateQueries({ queryKey: ["clusters"] });
+      queryClient.invalidateQueries({ queryKey: ["cluster"] });
     },
   });
 };

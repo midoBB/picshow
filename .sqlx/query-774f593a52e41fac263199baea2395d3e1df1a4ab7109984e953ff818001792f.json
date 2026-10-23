@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT\n                    i.id,\n                    i.perceptual_hash,\n                    i.perceptual_hash_center,\n                    i.perceptual_hash_tl,\n                    i.perceptual_hash_tr,\n                    i.perceptual_hash_bl,\n                    i.perceptual_hash_br\n               FROM images i\n               JOIN media_images mi ON i.id = mi.image_id\n               JOIN media_files mf ON mi.media_id = mf.id\n               WHERE (\n                    i.perceptual_hash IS NOT NULL OR\n                    i.perceptual_hash_center IS NOT NULL OR\n                    i.perceptual_hash_tl IS NOT NULL OR\n                    i.perceptual_hash_tr IS NOT NULL OR\n                    i.perceptual_hash_bl IS NOT NULL OR\n                    i.perceptual_hash_br IS NOT NULL\n               )",
+  "query": "SELECT\n                    i.id,\n                    i.perceptual_hash,\n                    i.perceptual_hash_center,\n                    i.perceptual_hash_tl,\n                    i.perceptual_hash_tr,\n                    i.perceptual_hash_bl,\n                    i.perceptual_hash_br,\n                    i.perceptual_hash_256,\n                    i.color_histogram\n               FROM images i\n               JOIN media_images mi ON i.id = mi.image_id\n               JOIN media_files mf ON mi.media_id = mf.id",
   "describe": {
     "columns": [
       {
@@ -37,6 +37,16 @@
         "name": "perceptual_hash_br",
         "ordinal": 6,
         "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_256",
+        "ordinal": 7,
+        "type_info": "Blob"
+      },
+      {
+        "name": "color_histogram",
+        "ordinal": 8,
+        "type_info": "Blob"
       }
     ],
     "parameters": {
@@ -49,8 +59,10 @@
       true,
       true,
       true,
+      true,
+      true,
       true
     ]
   },
-  "hash": "d5951b1f3f1422846172b9c6c2905abc1e8fe944dcccce1b9460e15a73e2f37d"
+  "hash": "774f593a52e41fac263199baea2395d3e1df1a4ab7109984e953ff818001792f"
 }

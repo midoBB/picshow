@@ -4,6 +4,11 @@ use std::{fmt::Debug, path::PathBuf, sync::Arc};
 use tokio::sync::{broadcast, RwLock};
 
 pub const DEFAULT_PORT: u16 = 8281;
+
+/// Bump when an upgrade must change values in existing config files, and add
+/// the step to `AppConfig::migrate`. Each step runs once per install, so values
+/// the user sets afterwards are never overwritten.
+pub const CONFIG_VERSION: u32 = 1;
 pub fn get_default_port() -> u16 {
     DEFAULT_PORT
 }
@@ -13,10 +18,12 @@ pub fn get_default_port() -> u16 {
 #[derive(Default)]
 pub enum ClusterAlgorithm {
     Single,
-    #[default]
     Complete,
     Dbscan,
-    Kmeans,
+    // K-means was removed; configs that still name it get HDBSCAN.
+    #[serde(alias = "kmeans")]
+    #[default]
+    Hdbscan,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -41,6 +48,9 @@ pub enum DeleteMode {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
+    /// Missing in files written before versioning, which therefore start at 0.
+    #[serde(default)]
+    pub config_version: u32,
     pub folder_path: String,
     pub db_path: String,
     pub backup_folder_path: String,
@@ -69,8 +79,20 @@ pub struct AppConfig {
     pub cluster_threshold: u32,
     #[serde(default = "default_cluster_dbscan_min_pts")]
     pub cluster_dbscan_min_pts: usize,
-    #[serde(default = "default_cluster_kmeans_k")]
-    pub cluster_kmeans_k: usize,
+    #[serde(default = "default_cluster_threshold_256")]
+    pub cluster_threshold_256: u32,
+    #[serde(default = "default_cluster_color_threshold")]
+    pub cluster_color_threshold: f64,
+    #[serde(default = "default_cluster_color_tight")]
+    pub cluster_color_tight: f64,
+    #[serde(default = "default_cluster_rescue_factor")]
+    pub cluster_rescue_factor: f64,
+    #[serde(default = "default_cluster_hnsw_k")]
+    pub cluster_hnsw_k: usize,
+    #[serde(default = "default_cluster_hdbscan_min_cluster_size")]
+    pub cluster_hdbscan_min_cluster_size: usize,
+    #[serde(default = "default_cluster_hdbscan_min_samples")]
+    pub cluster_hdbscan_min_samples: usize,
     // Scheduled backup config (not exposed in frontend settings — edit config.json directly)
     #[serde(default = "default_backup_scheduled_enabled")]
     pub backup_scheduled_enabled: bool,
@@ -89,7 +111,7 @@ fn default_auto_refresh_duration() -> u16 {
 }
 
 fn default_cluster_algorithm() -> ClusterAlgorithm {
-    ClusterAlgorithm::Complete
+    ClusterAlgorithm::Hdbscan
 }
 
 fn default_cluster_threshold() -> u32 {
@@ -100,8 +122,32 @@ fn default_cluster_dbscan_min_pts() -> usize {
     3
 }
 
-fn default_cluster_kmeans_k() -> usize {
+fn default_cluster_threshold_256() -> u32 {
+    48
+}
+
+fn default_cluster_color_threshold() -> f64 {
+    0.35
+}
+
+fn default_cluster_color_tight() -> f64 {
+    0.12
+}
+
+fn default_cluster_rescue_factor() -> f64 {
+    1.5
+}
+
+fn default_cluster_hnsw_k() -> usize {
     10
+}
+
+fn default_cluster_hdbscan_min_cluster_size() -> usize {
+    2
+}
+
+fn default_cluster_hdbscan_min_samples() -> usize {
+    2
 }
 
 fn default_backup_scheduled_enabled() -> bool {
@@ -119,6 +165,7 @@ fn default_backup_retention_count() -> usize {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            config_version: CONFIG_VERSION,
             folder_path: String::new(),
             db_path: Self::get_default_db_path(),
             concurrency: 4,
@@ -136,7 +183,13 @@ impl Default for AppConfig {
             cluster_algorithm: default_cluster_algorithm(),
             cluster_threshold: default_cluster_threshold(),
             cluster_dbscan_min_pts: default_cluster_dbscan_min_pts(),
-            cluster_kmeans_k: default_cluster_kmeans_k(),
+            cluster_threshold_256: default_cluster_threshold_256(),
+            cluster_color_threshold: default_cluster_color_threshold(),
+            cluster_color_tight: default_cluster_color_tight(),
+            cluster_rescue_factor: default_cluster_rescue_factor(),
+            cluster_hnsw_k: default_cluster_hnsw_k(),
+            cluster_hdbscan_min_cluster_size: default_cluster_hdbscan_min_cluster_size(),
+            cluster_hdbscan_min_samples: default_cluster_hdbscan_min_samples(),
             backup_scheduled_enabled: default_backup_scheduled_enabled(),
             backup_interval_hours: default_backup_interval_hours(),
             backup_retention_count: default_backup_retention_count(),
@@ -167,21 +220,53 @@ impl AppConfig {
             raw.get("clusterAlgorithm").is_none()
                 || raw.get("clusterThreshold").is_none()
                 || raw.get("clusterDbscanMinPts").is_none()
-                || raw.get("clusterKmeansK").is_none()
+                || raw.get("clusterKmeansK").is_some()
+                || raw.get("clusterThreshold256").is_none()
+                || raw.get("clusterColorThreshold").is_none()
+                || raw.get("clusterColorTight").is_none()
+                || raw.get("clusterRescueFactor").is_none()
+                || raw.get("clusterHnswK").is_none()
+                || raw.get("clusterHdbscanMinClusterSize").is_none()
+                || raw.get("clusterHdbscanMinSamples").is_none()
                 || raw.get("backupScheduledEnabled").is_none()
                 || raw.get("backupIntervalHours").is_none()
                 || raw.get("backupRetentionCount").is_none()
         };
 
-        let config: Self = serde_json::from_str(&config_str)
+        let mut config: Self = serde_json::from_str(&config_str)
             .map_err(|e| anyhow::anyhow!("Error parsing configuration file: {}", e))?;
 
-        if needs_rewrite {
+        let from_version = config.config_version;
+        if config.migrate() {
+            let backup_path = config_dir.join(format!("config.json.v{}.bak", from_version));
+            std::fs::write(&backup_path, &config_str)
+                .map_err(|e| anyhow::anyhow!("Error backing up configuration file: {}", e))?;
+            tracing::info!(
+                "Migrated config from version {} to {} (previous file saved to {})",
+                from_version,
+                config.config_version,
+                backup_path.display()
+            );
+        }
+
+        if needs_rewrite || config.config_version != from_version {
             tracing::info!("Adding cluster config defaults to existing config file");
             config.save()?;
         }
 
         Ok(config)
+    }
+
+    /// Apply each pending upgrade step in order. Returns whether anything ran.
+    fn migrate(&mut self) -> bool {
+        let from_version = self.config_version;
+        if from_version < 1 {
+            // v1: K-means removed; HDBSCAN with the 256-bit hash becomes the default.
+            self.cluster_algorithm = ClusterAlgorithm::Hdbscan;
+            self.cluster_threshold_256 = 48;
+        }
+        self.config_version = self.config_version.max(CONFIG_VERSION);
+        self.config_version != from_version
     }
 
     fn get_default_db_path() -> String {
@@ -314,5 +399,56 @@ impl ConfigManager {
 
     pub fn subscribe(&self) -> broadcast::Receiver<ConfigChange> {
         self.change_tx.subscribe()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A config file as written before versioning existed.
+    fn unversioned(algorithm: &str) -> serde_json::Value {
+        let mut raw = serde_json::to_value(AppConfig::default()).unwrap();
+        let obj = raw.as_object_mut().unwrap();
+        obj.remove("configVersion");
+        obj.insert("clusterAlgorithm".into(), algorithm.into());
+        obj.insert("clusterThreshold256".into(), 40.into());
+        raw
+    }
+
+    #[test]
+    fn legacy_kmeans_config_loads_as_hdbscan() {
+        let mut raw = unversioned("kmeans");
+        raw["clusterKmeansK"] = 10.into();
+        let config: AppConfig = serde_json::from_value(raw).unwrap();
+        assert_eq!(config.cluster_algorithm, ClusterAlgorithm::Hdbscan);
+    }
+
+    #[test]
+    fn upgrade_switches_existing_installs_once() {
+        let mut config: AppConfig = serde_json::from_value(unversioned("complete")).unwrap();
+        assert_eq!(config.config_version, 0);
+        assert!(config.migrate());
+        assert_eq!(config.cluster_algorithm, ClusterAlgorithm::Hdbscan);
+        assert_eq!(config.cluster_threshold_256, 48);
+        assert_eq!(config.config_version, CONFIG_VERSION);
+
+        // A later user choice survives the next start.
+        config.cluster_algorithm = ClusterAlgorithm::Single;
+        config.cluster_threshold_256 = 36;
+        let mut reloaded: AppConfig =
+            serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert!(!reloaded.migrate());
+        assert_eq!(reloaded.cluster_algorithm, ClusterAlgorithm::Single);
+        assert_eq!(reloaded.cluster_threshold_256, 36);
+    }
+
+    #[test]
+    fn new_installs_start_current() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.config_version, CONFIG_VERSION);
+        assert_eq!(config.cluster_algorithm, ClusterAlgorithm::Hdbscan);
+        assert_eq!(config.cluster_threshold_256, 48);
+        assert!(!config.migrate());
     }
 }

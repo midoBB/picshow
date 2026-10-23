@@ -509,6 +509,35 @@ impl Media {
     }
 }
 
+/// Everything computed from an image's pixels for similarity clustering.
+#[derive(Clone, Debug, Default)]
+pub struct PerceptualFeatures {
+    /// 64-bit gradient hashes: full (letterboxed), center, tl, tr, bl, br.
+    pub hashes64: [Option<i64>; 6],
+    /// 256-bit (16x16) gradient hash of the full image, big-endian bytes.
+    pub hash256: Option<[u8; 32]>,
+    /// HSV histogram, see `crate::clustering::features::HIST_BINS`; bins sum to 65535.
+    pub histogram: Option<Vec<u16>>,
+}
+
+impl PerceptualFeatures {
+    pub fn is_empty(&self) -> bool {
+        self.hashes64.iter().all(Option::is_none)
+            && self.hash256.is_none()
+            && self.histogram.is_none()
+    }
+
+    pub fn hash256_blob(&self) -> Option<Vec<u8>> {
+        self.hash256.map(|h| h.to_vec())
+    }
+
+    pub fn histogram_blob(&self) -> Option<Vec<u8>> {
+        self.histogram
+            .as_ref()
+            .map(|bins| bins.iter().flat_map(|b| b.to_le_bytes()).collect())
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize, FromRow, Default)]
 pub struct Image {
     pub id: uuid::Uuid,
@@ -523,6 +552,9 @@ pub struct Image {
     pub perceptual_hash_tr: Option<i64>,
     pub perceptual_hash_bl: Option<i64>,
     pub perceptual_hash_br: Option<i64>,
+    /// See `PerceptualFeatures`; only populated on insert, not when reading media back.
+    pub perceptual_hash_256: Option<Vec<u8>>,
+    pub color_histogram: Option<Vec<u8>>,
     #[sqlx(skip)]
     pub thumbnail: Thumbnail,
 }
@@ -532,14 +564,11 @@ impl Image {
         id: uuid::Uuid,
         width: u32,
         height: u32,
-        perceptual_hash: Option<i64>,
-        perceptual_hash_center: Option<i64>,
-        perceptual_hash_tl: Option<i64>,
-        perceptual_hash_tr: Option<i64>,
-        perceptual_hash_bl: Option<i64>,
-        perceptual_hash_br: Option<i64>,
+        features: &PerceptualFeatures,
         thumbnail: Thumbnail,
     ) -> Self {
+        let [perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br] =
+            features.hashes64;
         Self {
             id,
             width,
@@ -550,6 +579,8 @@ impl Image {
             perceptual_hash_tr,
             perceptual_hash_bl,
             perceptual_hash_br,
+            perceptual_hash_256: features.hash256_blob(),
+            color_histogram: features.histogram_blob(),
             thumbnail,
         }
     }

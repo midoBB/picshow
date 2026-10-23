@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE images SET\n                    perceptual_hash = ?,\n                    perceptual_hash_center = ?,\n                    perceptual_hash_tl = ?,\n                    perceptual_hash_tr = ?,\n                    perceptual_hash_bl = ?,\n                    perceptual_hash_br = ?,\n                    perceptual_hash_256 = ?,\n                    color_histogram = ?\n                WHERE id = (\n                    SELECT image_id FROM media_images WHERE media_id = ?\n                )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "b079ddc96693eef4d25ebfbae245e498888c92015c58bd9bae3e5d3b3d38d0ff"
+}

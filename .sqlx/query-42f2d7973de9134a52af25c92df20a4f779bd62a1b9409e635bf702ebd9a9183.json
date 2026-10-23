@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                    c.cluster_id,\n                    i.id,\n                    i.perceptual_hash,\n                    i.perceptual_hash_center,\n                    i.perceptual_hash_tl,\n                    i.perceptual_hash_tr,\n                    i.perceptual_hash_bl,\n                    i.perceptual_hash_br,\n                    i.perceptual_hash_256,\n                    i.color_histogram\n               FROM image_clusters c\n               JOIN images i ON c.representative_image_id = i.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "cluster_id",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "id",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "perceptual_hash",
+        "ordinal": 2,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_center",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_tl",
+        "ordinal": 4,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_tr",
+        "ordinal": 5,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_bl",
+        "ordinal": 6,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_br",
+        "ordinal": 7,
+        "type_info": "Integer"
+      },
+      {
+        "name": "perceptual_hash_256",
+        "ordinal": 8,
+        "type_info": "Blob"
+      },
+      {
+        "name": "color_histogram",
+        "ordinal": 9,
+        "type_info": "Blob"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "42f2d7973de9134a52af25c92df20a4f779bd62a1b9409e635bf702ebd9a9183"
+}

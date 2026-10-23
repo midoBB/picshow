@@ -16,7 +16,9 @@ use uuid::Uuid;
 use xxhash_rust::const_xxh3::xxh3_64;
 
 use crate::config::AppConfig;
-use crate::data::{FilledMediaFile, Image, MediaType, Thumbnail, UnfilledMediaFile, Video};
+use crate::data::{
+    FilledMediaFile, Image, MediaType, PerceptualFeatures, Thumbnail, UnfilledMediaFile, Video,
+};
 
 #[derive(Debug, Clone)]
 pub struct Handler {
@@ -64,36 +66,22 @@ impl Handler {
         let hash = xxh3_64(buf.as_slice()).to_string();
         Ok(hash)
     }
-    pub async fn compute_perceptual_hashes(
-        &self,
-        file_path: &str,
-    ) -> Result<(
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-        Option<i64>,
-    )> {
+    pub async fn compute_perceptual_hashes(&self, file_path: &str) -> Result<PerceptualFeatures> {
         let _permit = self.phash_semp.acquire().await?;
 
         match tokio::task::spawn_blocking({
             let file_path = file_path.to_string();
-            move || -> Result<(
-                Option<i64>,
-                Option<i64>,
-                Option<i64>,
-                Option<i64>,
-                Option<i64>,
-                Option<i64>,
-            )> {
+            move || -> Result<PerceptualFeatures> {
                 // Keep the work per image tiny: we resize directly to the algorithm's input size.
-                // For `HashAlg::Gradient` with `hash_size(8,8)`, the hasher internally uses
-                // (width + 1) x height.
+                // For `HashAlg::Gradient` with `hash_size(w, h)`, the hasher internally uses
+                // (w + 1) x h.
                 const HASH_W: u32 = 8;
                 const HASH_H: u32 = 8;
                 const DST_W: u32 = HASH_W + 1;
                 const DST_H: u32 = HASH_H;
+                const HASH256_W: u32 = 16;
+                const HASH256_H: u32 = 16;
+                const HIST_SIDE: u32 = 64;
 
                 let img = image::open(&file_path)?;
                 let rgba = img.to_rgba8();
@@ -110,6 +98,10 @@ impl Handler {
                     .hash_alg(HashAlg::Gradient)
                     .hash_size(HASH_W, HASH_H)
                     .to_hasher();
+                let hasher256 = HasherConfig::new()
+                    .hash_alg(HashAlg::Gradient)
+                    .hash_size(HASH256_W, HASH256_H)
+                    .to_hasher();
 
                 let to_i64 = |hash: image_hasher::ImageHash| -> Result<i64> {
                     let hash_bytes = hash.as_bytes();
@@ -120,10 +112,19 @@ impl Handler {
                     Ok(hash_u64 as i64)
                 };
 
-                let hash_letterboxed = |resizer: &mut fir::Resizer| -> Result<i64> {
-                    let scale = (DST_W as f32 / src_w as f32).min(DST_H as f32 / src_h as f32);
-                    let new_w = ((src_w as f32) * scale).round().max(1.0) as u32;
-                    let new_h = ((src_h as f32) * scale).round().max(1.0) as u32;
+                let to_bytes32 = |hash: image_hasher::ImageHash| -> Result<[u8; 32]> {
+                    hash.as_bytes()
+                        .try_into()
+                        .map_err(|_| anyhow!("256-bit hash has wrong length"))
+                };
+
+                let letterboxed = |resizer: &mut fir::Resizer,
+                                   dst_w: u32,
+                                   dst_h: u32|
+                 -> Result<DynamicImage> {
+                    let scale = (dst_w as f32 / src_w as f32).min(dst_h as f32 / src_h as f32);
+                    let new_w = ((src_w as f32) * scale).round().clamp(1.0, dst_w as f32) as u32;
+                    let new_h = ((src_h as f32) * scale).round().clamp(1.0, dst_h as f32) as u32;
 
                     let mut resized_buf = vec![0u8; (new_w * new_h * 4) as usize];
                     let mut resized_image = fir::images::Image::from_slice_u8(
@@ -138,14 +139,14 @@ impl Handler {
                         .resize_alg(ResizeAlg::Interpolation(fir::FilterType::Bilinear));
                     resizer.resize(&src_image, &mut resized_image, &opts)?;
 
-                    let mut canvas = vec![128u8; (DST_W * DST_H * 4) as usize];
+                    let mut canvas = vec![128u8; (dst_w * dst_h * 4) as usize];
                     for px in canvas.chunks_exact_mut(4) {
                         px[3] = 255;
                     }
 
-                    let off_x = ((DST_W - new_w) / 2) as usize;
-                    let off_y = ((DST_H - new_h) / 2) as usize;
-                    let dst_stride = (DST_W * 4) as usize;
+                    let off_x = ((dst_w - new_w) / 2) as usize;
+                    let off_y = ((dst_h - new_h) / 2) as usize;
+                    let dst_stride = (dst_w * 4) as usize;
                     let src_stride = (new_w * 4) as usize;
                     for y in 0..(new_h as usize) {
                         let dst_start = (off_y + y) * dst_stride + off_x * 4;
@@ -154,18 +155,20 @@ impl Handler {
                             .copy_from_slice(&resized_buf[src_start..src_start + src_stride]);
                     }
 
-                    let dyn_img = DynamicImage::ImageRgba8(
-                        image::RgbaImage::from_raw(DST_W, DST_H, canvas).unwrap(),
-                    );
-                    to_i64(hasher.hash_image(&dyn_img))
+                    Ok(DynamicImage::ImageRgba8(
+                        image::RgbaImage::from_raw(dst_w, dst_h, canvas).unwrap(),
+                    ))
                 };
 
-                let hash_resized =
-                    |resizer: &mut fir::Resizer, centering: (f64, f64)| -> Result<i64> {
-                    let mut dst_buf = vec![0u8; (DST_W * DST_H * 4) as usize];
+                let resized = |resizer: &mut fir::Resizer,
+                               dst_w: u32,
+                               dst_h: u32,
+                               centering: Option<(f64, f64)>|
+                 -> Result<Vec<u8>> {
+                    let mut dst_buf = vec![0u8; (dst_w * dst_h * 4) as usize];
                     let mut dst_image = fir::images::Image::from_slice_u8(
-                        DST_W,
-                        DST_H,
+                        dst_w,
+                        dst_h,
                         dst_buf.as_mut_slice(),
                         fir::PixelType::U8x4,
                     )?;
@@ -173,46 +176,62 @@ impl Handler {
                     let opts = ResizeOptions::new()
                         .use_alpha(false)
                         .resize_alg(ResizeAlg::Interpolation(fir::FilterType::Bilinear))
-                        .fit_into_destination(Some(centering));
+                        .fit_into_destination(centering);
                     resizer.resize(&src_image, &mut dst_image, &opts)?;
-
-                    // Hash the tiny resized image. The hasher's internal resize is effectively free.
-                    let dyn_img = DynamicImage::ImageRgba8(
-                        image::RgbaImage::from_raw(DST_W, DST_H, dst_buf).unwrap(),
-                    );
-                    to_i64(hasher.hash_image(&dyn_img))
+                    Ok(dst_buf)
                 };
 
-                let full = hash_letterboxed(&mut resizer).ok();
-                let center = hash_resized(&mut resizer, (0.5, 0.5)).ok();
-                let tl = hash_resized(&mut resizer, (0.0, 0.0)).ok();
-                let tr = hash_resized(&mut resizer, (1.0, 0.0)).ok();
-                let bl = hash_resized(&mut resizer, (0.0, 1.0)).ok();
-                let br = hash_resized(&mut resizer, (1.0, 1.0)).ok();
+                let hash_cropped =
+                    |resizer: &mut fir::Resizer, centering: (f64, f64)| -> Result<i64> {
+                        let dst_buf = resized(resizer, DST_W, DST_H, Some(centering))?;
+                        // Hash the tiny resized image. The hasher's internal resize is effectively free.
+                        let dyn_img = DynamicImage::ImageRgba8(
+                            image::RgbaImage::from_raw(DST_W, DST_H, dst_buf).unwrap(),
+                        );
+                        to_i64(hasher.hash_image(&dyn_img))
+                    };
 
-                Ok((full, center, tl, tr, bl, br))
+                let full = letterboxed(&mut resizer, DST_W, DST_H)
+                    .and_then(|img| to_i64(hasher.hash_image(&img)))
+                    .ok();
+                let center = hash_cropped(&mut resizer, (0.5, 0.5)).ok();
+                let tl = hash_cropped(&mut resizer, (0.0, 0.0)).ok();
+                let tr = hash_cropped(&mut resizer, (1.0, 0.0)).ok();
+                let bl = hash_cropped(&mut resizer, (0.0, 1.0)).ok();
+                let br = hash_cropped(&mut resizer, (1.0, 1.0)).ok();
+
+                let hash256 = letterboxed(&mut resizer, HASH256_W + 1, HASH256_H)
+                    .and_then(|img| to_bytes32(hasher256.hash_image(&img)))
+                    .ok();
+
+                // Stretch (no crop, no letterbox) so every source pixel contributes and
+                // the grey padding doesn't skew the colour distribution.
+                let histogram = resized(&mut resizer, HIST_SIDE, HIST_SIDE, None)
+                    .map(|buf| crate::clustering::features::build_histogram(&buf))
+                    .ok();
+
+                Ok(PerceptualFeatures {
+                    hashes64: [full, center, tl, tr, bl, br],
+                    hash256,
+                    histogram,
+                })
             }
         })
         .await
         {
-            Ok(Ok(hashes)) => Ok(hashes),
+            Ok(Ok(features)) => Ok(features),
             Ok(Err(e)) => {
                 warn!(
                     "Failed to compute perceptual hashes for {}: {}",
                     file_path, e
                 );
-                Ok((None, None, None, None, None, None))
+                Ok(PerceptualFeatures::default())
             }
             Err(e) => {
                 warn!("Perceptual hash task panicked for {}: {}", file_path, e);
-                Ok((None, None, None, None, None, None))
+                Ok(PerceptualFeatures::default())
             }
         }
-    }
-
-    pub async fn compute_perceptual_hash(&self, file_path: &str) -> Result<Option<i64>> {
-        let (full, ..) = self.compute_perceptual_hashes(file_path).await?;
-        Ok(full)
     }
 
     pub async fn handle_new_image(
@@ -266,16 +285,12 @@ impl Handler {
             .as_str()
             .parse::<u32>()?;
 
-        // Compute perceptual hashes (full + crop variants)
-        let (
-            perceptual_hash,
-            perceptual_hash_center,
-            perceptual_hash_tl,
-            perceptual_hash_tr,
-            perceptual_hash_bl,
-            perceptual_hash_br,
-        ) = self.compute_perceptual_hashes(path).await?;
-        debug!("Perceptual hash (full): {}", perceptual_hash.unwrap_or(-1));
+        // Compute perceptual features (64-bit full + crops, 256-bit full, colour histogram)
+        let features = self.compute_perceptual_hashes(path).await?;
+        debug!(
+            "Perceptual hash (full): {}",
+            features.hashes64[0].unwrap_or(-1)
+        );
 
         let (thumb_width, thumb_height) = self.calculate_thumb_size(width, height);
         let temp = tempfile::NamedTempFile::new()?;
@@ -311,18 +326,7 @@ impl Handler {
         reader.read_to_end(&mut buf).await?;
         let thumbnail = Thumbnail::new(uuid::Uuid::new_v4(), thumb_width, thumb_height, buf);
         let with_image = file.with_image(
-            Image::new(
-                Uuid::new_v4(),
-                width,
-                height,
-                perceptual_hash,
-                perceptual_hash_center,
-                perceptual_hash_tl,
-                perceptual_hash_tr,
-                perceptual_hash_bl,
-                perceptual_hash_br,
-                thumbnail,
-            ),
+            Image::new(Uuid::new_v4(), width, height, &features, thumbnail),
             full_mime,
         );
         drop(convert_perm);
@@ -492,4 +496,83 @@ pub async fn get_mime(file_path: &str) -> Result<String> {
     let from = Path::new(&file_path);
     let mime = tree_magic_mini::from_filepath(from).ok_or(anyhow!("Could not get mime type"))?;
     Ok(mime.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::clustering::features::{ImageFeatures, MatchParams};
+
+    /// Warm hues across x, brightness down y; `hue_shift` recolours without
+    /// changing the brightness structure the gradient hash sees.
+    fn gradient(w: u32, h: u32, hue_shift: f32) -> image::RgbImage {
+        image::RgbImage::from_fn(w, h, |x, y| {
+            let hue = (x as f32 / w as f32 * 0.25 + hue_shift).fract() * 6.0;
+            let (s, v) = (0.8, 0.3 + 0.7 * y as f32 / h as f32);
+            let c = v * s;
+            let x2 = c * (1.0 - (hue % 2.0 - 1.0).abs());
+            let (r, g, b) = match hue as u32 {
+                0 => (c, x2, 0.0),
+                1 => (x2, c, 0.0),
+                2 => (0.0, c, x2),
+                3 => (0.0, x2, c),
+                4 => (x2, 0.0, c),
+                _ => (c, 0.0, x2),
+            };
+            let m = v - c;
+            let to_u8 = |ch: f32| ((ch + m) * 255.0).round() as u8;
+            image::Rgb([to_u8(r), to_u8(g), to_u8(b)])
+        })
+    }
+
+    #[tokio::test]
+    async fn features_match_resized_copy_and_veto_recoloured_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = |name: &str| dir.path().join(name).to_string_lossy().to_string();
+        gradient(640, 480, 0.0).save(path("a.png")).unwrap();
+        image::imageops::resize(
+            &gradient(640, 480, 0.0),
+            320,
+            240,
+            image::imageops::FilterType::Triangle,
+        )
+        .save(path("small.png"))
+        .unwrap();
+        gradient(640, 480, 0.5)
+            .save(path("recoloured.png"))
+            .unwrap();
+
+        let handler = Handler::new(Arc::new(AppConfig::default()));
+        let mut features = Vec::new();
+        for name in ["a.png", "small.png", "recoloured.png"] {
+            let f = handler
+                .compute_perceptual_hashes(&path(name))
+                .await
+                .unwrap();
+            assert!(f.hashes64.iter().all(Option::is_some), "{name}");
+            assert!(f.hash256.is_some(), "{name}");
+            let total: u32 = f
+                .histogram
+                .as_ref()
+                .unwrap()
+                .iter()
+                .map(|&b| b as u32)
+                .sum();
+            assert!(
+                total.abs_diff(u16::MAX as u32) < 128,
+                "{name}: histogram sums to {total}"
+            );
+            features.push(ImageFeatures::from_perceptual(Uuid::nil(), &f));
+        }
+
+        let params = MatchParams {
+            threshold64: 10,
+            threshold256: 40,
+            color_threshold: 0.35,
+            color_tight: 0.12,
+            rescue_factor: 1.5,
+        };
+        assert!(params.match_weight(&features[0], &features[1]).is_some());
+        assert!(params.match_weight(&features[0], &features[2]).is_none());
+    }
 }

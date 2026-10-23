@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT COUNT(*) as count FROM (\n                   SELECT c.cluster_id\n                   FROM image_clusters c\n                   JOIN cluster_members cm ON c.cluster_id = cm.cluster_id\n                   JOIN media_images mi ON cm.image_id = mi.image_id\n                   JOIN media_files mf ON mi.media_id = mf.id\n                   WHERE c.is_resolved = 0\n                   GROUP BY c.cluster_id\n                   HAVING COUNT(DISTINCT cm.image_id) > 1\n               )",
+  "describe": {
+    "columns": [
+      {
+        "name": "count",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a23e5777974da91848d009aa7dc7ce979b877b12ffff4827879deb22bc5b65a7"
+}

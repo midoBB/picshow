@@ -1,3 +1,9 @@
+pub mod features;
+mod graph;
+mod hdbscan;
+mod hnsw;
+mod mih;
+
 use anyhow::Result;
 use std::sync::Arc;
 use tracing::{debug, info, warn};
@@ -5,13 +11,13 @@ use uuid::Uuid;
 
 use crate::config::{AppConfig, ClusterAlgorithm};
 use crate::data::repository::MediaRepository;
+use crate::data::PerceptualFeatures;
+use features::{stored_distance, ImageFeatures, MatchParams};
+use graph::{build_candidate_graph, MatchGraph, UnionFind};
 
 pub struct ClusterBuilder {
     repository: Arc<MediaRepository>,
-    algorithm: ClusterAlgorithm,
-    hamming_threshold: u32,
-    dbscan_min_points: usize,
-    kmeans_k: usize,
+    settings: ClusterSettings,
 }
 
 #[derive(Debug)]
@@ -24,6 +30,57 @@ pub struct ClusterStats {
 
 const CLUSTERING_PARAMS_KEY: &str = "clustering_params";
 
+/// Bumped when the stored features or the match rule change, so the next
+/// build replaces every cluster.
+const FEATURES_VERSION: u32 = 2;
+
+#[derive(Clone, Copy, Debug)]
+struct ClusterSettings {
+    algorithm: ClusterAlgorithm,
+    matching: MatchParams,
+    dbscan_min_points: usize,
+    hnsw_k: usize,
+    hdbscan_min_cluster_size: usize,
+    hdbscan_min_samples: usize,
+}
+
+impl ClusterSettings {
+    fn from_config(config: &AppConfig) -> Self {
+        Self {
+            algorithm: config.cluster_algorithm,
+            matching: MatchParams {
+                threshold64: config.cluster_threshold,
+                threshold256: config.cluster_threshold_256,
+                color_threshold: config.cluster_color_threshold as f32,
+                color_tight: config.cluster_color_tight as f32,
+                rescue_factor: config.cluster_rescue_factor as f32,
+            },
+            dbscan_min_points: config.cluster_dbscan_min_pts,
+            hnsw_k: config.cluster_hnsw_k,
+            hdbscan_min_cluster_size: config.cluster_hdbscan_min_cluster_size,
+            hdbscan_min_samples: config.cluster_hdbscan_min_samples,
+        }
+    }
+
+    fn serialize(&self) -> String {
+        let m = &self.matching;
+        format!(
+            "{:?},{},{},{},{},{},{},{},{},{},v{}",
+            self.algorithm,
+            m.threshold64,
+            m.threshold256,
+            m.color_threshold,
+            m.color_tight,
+            m.rescue_factor,
+            self.hnsw_k,
+            self.dbscan_min_points,
+            self.hdbscan_min_cluster_size,
+            self.hdbscan_min_samples,
+            FEATURES_VERSION
+        )
+    }
+}
+
 #[derive(Clone, PartialEq)]
 enum VisitStatus {
     Unvisited,
@@ -31,50 +88,176 @@ enum VisitStatus {
     Clustered(usize),
 }
 
-fn serialize_clustering_params(
-    algo: ClusterAlgorithm,
-    threshold: u32,
-    min_pts: usize,
-    k: usize,
-) -> String {
-    format!("{:?},{},{},{}", algo, threshold, min_pts, k)
+/// Group image indices; each returned cluster has ≥ 2 members, representative first.
+fn compute_clusters(images: &[ImageFeatures], settings: &ClusterSettings) -> Vec<Vec<usize>> {
+    let graph = build_candidate_graph(images, &settings.matching, settings.hnsw_k);
+    let edges: usize = (0..graph.len())
+        .map(|i| graph.neighbors(i).len())
+        .sum::<usize>()
+        / 2;
+    debug!(
+        "Match graph: {} images, {} matching pairs",
+        graph.len(),
+        edges
+    );
+
+    let clusters = match settings.algorithm {
+        ClusterAlgorithm::Single => cluster_single(&graph),
+        ClusterAlgorithm::Complete => cluster_complete(&graph),
+        ClusterAlgorithm::Dbscan => cluster_dbscan(&graph, settings.dbscan_min_points),
+        ClusterAlgorithm::Hdbscan => hdbscan::cluster(
+            &graph,
+            settings.hdbscan_min_samples,
+            settings.hdbscan_min_cluster_size,
+        )
+        .into_iter()
+        .map(|c| c.members)
+        .collect(),
+    };
+    clusters.into_iter().filter(|c| c.len() > 1).collect()
+}
+
+// ------------------------------------------------------------------
+// Algorithm: Single-linkage (connected components of the match graph)
+// ------------------------------------------------------------------
+
+fn cluster_single(graph: &MatchGraph) -> Vec<Vec<usize>> {
+    let n = graph.len();
+    let mut uf = UnionFind::new(n);
+    for i in 0..n {
+        for &(j, _) in graph.neighbors(i) {
+            uf.union(i, j);
+        }
+    }
+
+    let mut cluster_of_root = vec![usize::MAX; n];
+    let mut clusters: Vec<Vec<usize>> = Vec::new();
+    for i in 0..n {
+        let root = uf.find(i);
+        if cluster_of_root[root] == usize::MAX {
+            cluster_of_root[root] = clusters.len();
+            clusters.push(Vec::new());
+        }
+        clusters[cluster_of_root[root]].push(i);
+    }
+    clusters
+}
+
+// ------------------------------------------------------------------
+// Algorithm: Complete-linkage (greedy, in image order)
+// ------------------------------------------------------------------
+
+fn cluster_complete(graph: &MatchGraph) -> Vec<Vec<usize>> {
+    let n = graph.len();
+    let mut clusters: Vec<Vec<usize>> = Vec::new();
+    let mut cluster_of = vec![usize::MAX; n];
+
+    for i in 0..n {
+        // Only clusters holding a neighbour of i can have every member match it.
+        let mut candidates: Vec<usize> = graph
+            .neighbors(i)
+            .iter()
+            .map(|&(j, _)| cluster_of[j])
+            .filter(|&c| c != usize::MAX)
+            .collect();
+        candidates.sort_unstable();
+        candidates.dedup();
+
+        let mut best: Option<(usize, f32)> = None;
+        for c in candidates {
+            let mut max_dist = 0f32;
+            let all_within = clusters[c].iter().all(|&m| match graph.weight(i, m) {
+                Some(w) => {
+                    max_dist = max_dist.max(w);
+                    true
+                }
+                None => false,
+            });
+            if all_within && best.is_none_or(|(_, b)| max_dist < b) {
+                best = Some((c, max_dist));
+            }
+        }
+
+        let c = match best {
+            Some((c, _)) => c,
+            None => {
+                clusters.push(Vec::new());
+                clusters.len() - 1
+            }
+        };
+        clusters[c].push(i);
+        cluster_of[i] = c;
+    }
+
+    clusters
+}
+
+// ------------------------------------------------------------------
+// Algorithm: DBSCAN (ε-neighbourhood = matching pairs)
+// ------------------------------------------------------------------
+
+fn cluster_dbscan(graph: &MatchGraph, min_pts: usize) -> Vec<Vec<usize>> {
+    let n = graph.len();
+    let neighbours: Vec<Vec<usize>> = (0..n)
+        .map(|i| graph.neighbors(i).iter().map(|&(j, _)| j).collect())
+        .collect();
+
+    // Track visit status: Unvisited, Noise, or Clustered(cluster_index)
+    let mut assigned: Vec<VisitStatus> = vec![VisitStatus::Unvisited; n];
+    let mut raw_clusters: Vec<Vec<usize>> = Vec::new();
+
+    for i in 0..n {
+        if assigned[i] != VisitStatus::Unvisited {
+            continue;
+        }
+
+        if neighbours[i].len() + 1 < min_pts {
+            assigned[i] = VisitStatus::Noise;
+            continue;
+        }
+
+        let cluster_id = raw_clusters.len();
+        raw_clusters.push(vec![i]);
+        assigned[i] = VisitStatus::Clustered(cluster_id);
+
+        // BFS expansion
+        let mut seeds = neighbours[i].clone();
+        let mut in_seeds = vec![false; n];
+        for &nbr in &neighbours[i] {
+            in_seeds[nbr] = true;
+        }
+
+        while let Some(q) = seeds.pop() {
+            if assigned[q] != VisitStatus::Unvisited {
+                if assigned[q] == VisitStatus::Noise {
+                    assigned[q] = VisitStatus::Clustered(cluster_id);
+                    raw_clusters[cluster_id].push(q);
+                }
+                continue;
+            }
+            assigned[q] = VisitStatus::Clustered(cluster_id);
+            raw_clusters[cluster_id].push(q);
+
+            if neighbours[q].len() + 1 >= min_pts {
+                for &nbr in &neighbours[q] {
+                    if !in_seeds[nbr] {
+                        in_seeds[nbr] = true;
+                        seeds.push(nbr);
+                    }
+                }
+            }
+        }
+    }
+
+    raw_clusters
 }
 
 impl ClusterBuilder {
     pub fn new(repository: Arc<MediaRepository>, config: &AppConfig) -> Self {
         Self {
             repository,
-            algorithm: config.cluster_algorithm,
-            hamming_threshold: config.cluster_threshold,
-            dbscan_min_points: config.cluster_dbscan_min_pts,
-            kmeans_k: config.cluster_kmeans_k,
+            settings: ClusterSettings::from_config(config),
         }
-    }
-
-    // --- Distance helpers ---
-
-    /// Minimum Hamming distance across all hash pairs between two images.
-    fn min_distance(hashset_a: &[u64], hashset_b: &[u64]) -> Option<u32> {
-        if hashset_a.is_empty() || hashset_b.is_empty() {
-            return None;
-        }
-
-        let mut best: Option<u32> = None;
-        for a in hashset_a {
-            for b in hashset_b {
-                let d = (a ^ b).count_ones();
-                match best {
-                    Some(cur) if d >= cur => {}
-                    _ => {
-                        best = Some(d);
-                        if d == 0 {
-                            return Some(0);
-                        }
-                    }
-                }
-            }
-        }
-        best
     }
 
     // --- Public entry point ---
@@ -84,12 +267,7 @@ impl ClusterBuilder {
         force_rebuild: bool,
         save_state: bool,
     ) -> Result<ClusterStats> {
-        let current_params = serialize_clustering_params(
-            self.algorithm,
-            self.hamming_threshold,
-            self.dbscan_min_points,
-            self.kmeans_k,
-        );
+        let current_params = self.settings.serialize();
 
         let params_changed = if !force_rebuild {
             if let Ok(Some(prev_params)) =
@@ -124,12 +302,8 @@ impl ClusterBuilder {
         }
 
         info!(
-            "Starting cluster build (algo: {:?}, threshold: {}, min_pts: {}, k: {}, force: {})",
-            self.algorithm,
-            self.hamming_threshold,
-            self.dbscan_min_points,
-            self.kmeans_k,
-            should_force
+            "Starting cluster build ({:?}, force: {})",
+            self.settings, should_force
         );
 
         debug!("Cleaning up orphaned data");
@@ -141,7 +315,7 @@ impl ClusterBuilder {
             );
         }
 
-        debug!("Fetching all perceptual hashes");
+        debug!("Fetching all perceptual features");
         let all_images = self.repository.get_all_perceptual_hashes().await?;
         let total_images = all_images.len();
         info!("Found {} images with perceptual hashes", total_images);
@@ -155,37 +329,30 @@ impl ClusterBuilder {
             });
         }
 
-        let images_u64: Vec<(Uuid, Vec<u64>)> = all_images
-            .into_iter()
-            .map(|(id, hashes)| (id, hashes.into_iter().map(|h| h as u64).collect()))
-            .collect();
+        let settings = self.settings;
+        let (all_images, new_clusters) = tokio::task::spawn_blocking(move || {
+            let clusters = compute_clusters(&all_images, &settings);
+            (all_images, clusters)
+        })
+        .await?;
 
-        let new_clusters: Vec<Vec<(Uuid, Vec<u64>)>> = match self.algorithm {
-            ClusterAlgorithm::Single => self.cluster_single(&images_u64),
-            ClusterAlgorithm::Complete => self.cluster_complete(&images_u64),
-            ClusterAlgorithm::Dbscan => self.cluster_dbscan(&images_u64),
-            ClusterAlgorithm::Kmeans => self.cluster_kmeans(&images_u64),
+        let members_with_distances = |cluster: &[usize]| -> Vec<(Uuid, u32)> {
+            let representative = &all_images[cluster[0]];
+            cluster
+                .iter()
+                .filter_map(|&m| {
+                    let distance = stored_distance(&all_images[m], representative)?;
+                    Some((all_images[m].id, distance))
+                })
+                .collect()
         };
-
-        let new_clusters_filtered: Vec<_> =
-            new_clusters.into_iter().filter(|c| c.len() > 1).collect();
 
         if should_force {
             debug!("Force rebuild: atomically replacing all clusters");
-            let clusters_to_write: Vec<(Uuid, Vec<(Uuid, u32)>)> = new_clusters_filtered
+            let clusters_to_write: Vec<(Uuid, Vec<(Uuid, u32)>)> = new_clusters
                 .iter()
-                .map(|cluster| {
-                    let representative_id = cluster[0].0;
-                    let representative_hashes = &cluster[0].1;
-                    let members_with_distances: Vec<(Uuid, u32)> = cluster
-                        .iter()
-                        .filter_map(|(id, hashes)| {
-                            let distance = Self::min_distance(hashes, representative_hashes)?;
-                            Some((*id, distance))
-                        })
-                        .collect();
-                    (representative_id, members_with_distances)
-                })
+                .map(|cluster| (all_images[cluster[0]].id, members_with_distances(cluster)))
+                .filter(|(_, members)| members.len() > 1)
                 .collect();
 
             let (created, clustered) = self
@@ -200,7 +367,10 @@ impl ClusterBuilder {
             };
             info!(
                 "Clustering complete: {} clusters / {} images / {} total (algo: {:?})",
-                stats.clusters_created, stats.images_clustered, stats.total_images, self.algorithm
+                stats.clusters_created,
+                stats.images_clustered,
+                stats.total_images,
+                self.settings.algorithm
             );
             return Ok(stats);
         }
@@ -212,10 +382,9 @@ impl ClusterBuilder {
         let mut images_clustered = 0;
         let mut skipped = 0;
 
-        for cluster in new_clusters_filtered {
-            let representative_id = cluster[0].0;
-            let representative_hashes = &cluster[0].1;
-            let member_ids: Vec<Uuid> = cluster.iter().map(|(id, _)| *id).collect();
+        for cluster in new_clusters {
+            let representative_id = all_images[cluster[0]].id;
+            let member_ids: Vec<Uuid> = cluster.iter().map(|&m| all_images[m].id).collect();
 
             let is_unchanged = existing.iter().any(|ec| {
                 if ec.representative_id != representative_id {
@@ -235,13 +404,10 @@ impl ClusterBuilder {
                 continue;
             }
 
-            let members_with_distances: Vec<(Uuid, u32)> = cluster
-                .iter()
-                .filter_map(|(id, hashes)| {
-                    let distance = Self::min_distance(hashes, representative_hashes)?;
-                    Some((*id, distance))
-                })
-                .collect();
+            let members_with_distances = members_with_distances(&cluster);
+            if members_with_distances.len() < 2 {
+                continue;
+            }
 
             let old_cluster_ids: Vec<i64> = existing
                 .iter()
@@ -281,344 +447,36 @@ impl ClusterBuilder {
 
         info!(
             "Clustering complete (incremental): {} created, {} unchanged, {} images clustered / {} total (algo: {:?})",
-            final_clusters_created, skipped, images_clustered, total_images, self.algorithm
+            final_clusters_created, skipped, images_clustered, total_images, self.settings.algorithm
         );
 
         Ok(stats)
     }
 
     // ------------------------------------------------------------------
-    // Algorithm: Single-linkage
-    // ------------------------------------------------------------------
-
-    fn cluster_single(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
-        let mut clusters: Vec<Vec<(Uuid, Vec<u64>)>> = Vec::new();
-
-        for (image_id, hashes) in images {
-            let mut best_cluster_idx: Option<usize> = None;
-            let mut best_distance = u32::MAX;
-
-            for (cluster_idx, cluster) in clusters.iter().enumerate() {
-                for (_, member_hashes) in cluster {
-                    let Some(distance) = Self::min_distance(hashes, member_hashes) else {
-                        continue;
-                    };
-                    if distance < self.hamming_threshold && distance < best_distance {
-                        best_distance = distance;
-                        best_cluster_idx = Some(cluster_idx);
-                        if distance == 0 {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            match best_cluster_idx {
-                Some(idx) => clusters[idx].push((*image_id, hashes.clone())),
-                None => clusters.push(vec![(*image_id, hashes.clone())]),
-            }
-        }
-
-        clusters
-    }
-
-    // ------------------------------------------------------------------
-    // Algorithm: Complete-linkage
-    // ------------------------------------------------------------------
-
-    fn cluster_complete(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
-        let mut clusters: Vec<Vec<(Uuid, Vec<u64>)>> = Vec::new();
-
-        for (image_id, hashes) in images {
-            let mut best_cluster_idx: Option<usize> = None;
-            let mut best_max_dist = u32::MAX;
-
-            for (cluster_idx, cluster) in clusters.iter().enumerate() {
-                let mut max_dist = 0u32;
-                let mut all_within = true;
-
-                for (_, member_hashes) in cluster {
-                    let Some(distance) = Self::min_distance(hashes, member_hashes) else {
-                        all_within = false;
-                        break;
-                    };
-                    if distance >= self.hamming_threshold {
-                        all_within = false;
-                        break;
-                    }
-                    if distance > max_dist {
-                        max_dist = distance;
-                    }
-                }
-
-                if all_within && max_dist < best_max_dist {
-                    best_max_dist = max_dist;
-                    best_cluster_idx = Some(cluster_idx);
-                }
-            }
-
-            match best_cluster_idx {
-                Some(idx) => clusters[idx].push((*image_id, hashes.clone())),
-                None => clusters.push(vec![(*image_id, hashes.clone())]),
-            }
-        }
-
-        clusters
-    }
-
-    // ------------------------------------------------------------------
-    // Algorithm: DBSCAN
-    // ------------------------------------------------------------------
-
-    fn cluster_dbscan(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
-        let n = images.len();
-        let eps = self.hamming_threshold;
-        let min_pts = self.dbscan_min_points;
-
-        if n == 0 {
-            return Vec::new();
-        }
-
-        // Precompute symmetric neighbour list.
-        let mut neighbours: Vec<Vec<usize>> = vec![Vec::new(); n];
-        for i in 0..n {
-            for j in (i + 1)..n {
-                if let Some(d) = Self::min_distance(&images[i].1, &images[j].1) {
-                    if d < eps {
-                        neighbours[i].push(j);
-                        neighbours[j].push(i);
-                    }
-                }
-            }
-        }
-
-        // Track visit status: Unvisited, Noise, or Clustered(cluster_index)
-        let mut assigned: Vec<VisitStatus> = vec![VisitStatus::Unvisited; n];
-        let mut raw_clusters: Vec<Vec<usize>> = Vec::new();
-
-        for i in 0..n {
-            if assigned[i] != VisitStatus::Unvisited {
-                continue;
-            }
-
-            if neighbours[i].len() + 1 < min_pts {
-                assigned[i] = VisitStatus::Noise;
-                continue;
-            }
-
-            let cluster_id = raw_clusters.len();
-            raw_clusters.push(vec![i]);
-            assigned[i] = VisitStatus::Clustered(cluster_id);
-
-            // BFS expansion
-            let mut seeds = neighbours[i].clone();
-            let mut in_seeds = vec![false; n];
-            for &nbr in &neighbours[i] {
-                in_seeds[nbr] = true;
-            }
-
-            while let Some(q) = seeds.pop() {
-                if assigned[q] != VisitStatus::Unvisited {
-                    if assigned[q] == VisitStatus::Noise {
-                        assigned[q] = VisitStatus::Clustered(cluster_id);
-                        raw_clusters[cluster_id].push(q);
-                    }
-                    continue;
-                }
-                assigned[q] = VisitStatus::Clustered(cluster_id);
-                raw_clusters[cluster_id].push(q);
-
-                if neighbours[q].len() + 1 >= min_pts {
-                    for &nbr in &neighbours[q] {
-                        if !in_seeds[nbr] {
-                            in_seeds[nbr] = true;
-                            seeds.push(nbr);
-                        }
-                    }
-                }
-            }
-        }
-
-        raw_clusters
-            .into_iter()
-            .map(|indices| {
-                indices
-                    .into_iter()
-                    .map(|idx| (images[idx].0, images[idx].1.clone()))
-                    .collect()
-            })
-            .collect()
-    }
-
-    // ------------------------------------------------------------------
-    // Algorithm: K-means / K-modes (for binary perceptual hashes)
-    //
-    // Uses only the *first* (full-image) hash for centroid computation
-    // and assignment.  Centroid update = bitwise majority vote (k-modes).
-    // ------------------------------------------------------------------
-
-    fn cluster_kmeans(&self, images: &[(Uuid, Vec<u64>)]) -> Vec<Vec<(Uuid, Vec<u64>)>> {
-        let n = images.len();
-        if n == 0 {
-            return Vec::new();
-        }
-
-        let k = self.kmeans_k.min(n);
-        if k <= 1 {
-            return vec![images.to_vec()];
-        }
-
-        const MAX_ITERS: usize = 50;
-
-        // Each image’s first hash (full hash).  Images with no hash use
-        // u64::MAX as sentinel – virtually impossible to collide.
-        let hashes: Vec<u64> = images
-            .iter()
-            .map(|(_, hs)| *hs.first().unwrap_or(&u64::MAX))
-            .collect();
-
-        // --- Initialisation (k-means++) ---
-        let mut centroids: Vec<u64> = Vec::with_capacity(k);
-        {
-            // Simple xorshift seeded from wall-clock nanos.
-            let mut s = {
-                use std::time::{SystemTime, UNIX_EPOCH};
-                let raw = SystemTime::now()
-                    .duration_since(UNIX_EPOCH)
-                    .map(|d| d.subsec_nanos() as u64)
-                    .unwrap_or(42);
-                if raw == 0 {
-                    42
-                } else {
-                    raw
-                }
-            };
-            let mut xorshift = move || {
-                s ^= s << 13;
-                s ^= s >> 7;
-                s ^= s << 17;
-                s
-            };
-
-            // First centroid: random image
-            centroids.push(hashes[(xorshift() as usize) % n]);
-
-            for _ in 1..k {
-                let mut dists = vec![0f64; n];
-                let mut total = 0.0f64;
-                for i in 0..n {
-                    let mut min_d = u32::MAX;
-                    for c in &centroids {
-                        let d = (hashes[i] ^ c).count_ones();
-                        if d < min_d {
-                            min_d = d;
-                        }
-                    }
-                    let dsq = (min_d as f64) * (min_d as f64) + 1.0;
-                    dists[i] = dsq;
-                    total += dsq;
-                }
-
-                let threshold = (xorshift() as f64 / u64::MAX as f64) * total;
-                let mut cum = 0.0f64;
-                let mut chosen = 0usize;
-                for (i, &d) in dists.iter().enumerate() {
-                    cum += d;
-                    if cum >= threshold {
-                        chosen = i;
-                        break;
-                    }
-                }
-                centroids.push(hashes[chosen]);
-            }
-        }
-
-        let mut labels = vec![0usize; n];
-
-        // --- Lloyd iteration ---
-        for iter in 0..MAX_ITERS {
-            // Assign
-            for i in 0..n {
-                let mut best_c = 0;
-                let mut best_d = u32::MAX;
-                for (c, centroid) in centroids.iter().enumerate() {
-                    let d = (hashes[i] ^ centroid).count_ones();
-                    if d < best_d {
-                        best_d = d;
-                        best_c = c;
-                        if d == 0 {
-                            break;
-                        }
-                    }
-                }
-                labels[i] = best_c;
-            }
-
-            // Update centroids (bitwise majority)
-            let prev = centroids.clone();
-            for c in 0..k {
-                let mut counts = vec![0u32; 64];
-                let mut total = 0usize;
-                for i in 0..n {
-                    if labels[i] == c {
-                        total += 1;
-                        for (bit, count) in counts.iter_mut().enumerate() {
-                            *count += ((hashes[i] >> bit) & 1) as u32;
-                        }
-                    }
-                }
-
-                if total == 0 {
-                    continue; // keep previous centroid for empty clusters
-                }
-
-                let mut new_hash = 0u64;
-                for (bit, &ones) in counts.iter().enumerate() {
-                    let zeros = total as u32 - ones;
-                    if ones > zeros || (ones == zeros && (prev[c] >> bit) & 1 == 1) {
-                        new_hash |= 1 << bit;
-                    }
-                }
-                centroids[c] = new_hash;
-            }
-
-            if centroids == prev {
-                debug!("K-means converged after {} iterations", iter + 1);
-                break;
-            }
-        }
-
-        // Build clusters from final labels
-        let mut clusters: Vec<Vec<(Uuid, Vec<u64>)>> = vec![Vec::new(); k];
-        for (i, &label) in labels.iter().enumerate() {
-            clusters[label].push((images[i].0, images[i].1.clone()));
-        }
-        clusters.retain(|c| !c.is_empty());
-
-        clusters
-    }
-
-    // ------------------------------------------------------------------
     // Incremental clustering
     // ------------------------------------------------------------------
 
-    pub async fn add_to_clusters_multi(&self, image_id: Uuid, hashes: &[i64]) -> Result<()> {
-        let effective_algo = match self.algorithm {
-            ClusterAlgorithm::Single | ClusterAlgorithm::Complete => self.algorithm,
-            ClusterAlgorithm::Dbscan | ClusterAlgorithm::Kmeans => {
-                warn!(
-                    "Incremental clustering with {:?} is not meaningful; \
-                     falling back to single-linkage",
-                    self.algorithm
-                );
-                ClusterAlgorithm::Single
-            }
-        };
+    /// Attach a newly hashed image to the best-matching existing cluster.
+    /// Every algorithm compares against representatives only, as single
+    /// linkage would; density-based ones can't place a single point meaningfully.
+    pub async fn add_to_clusters_multi(
+        &self,
+        image_id: Uuid,
+        features: &PerceptualFeatures,
+    ) -> Result<()> {
+        if matches!(
+            self.settings.algorithm,
+            ClusterAlgorithm::Dbscan | ClusterAlgorithm::Hdbscan
+        ) {
+            warn!(
+                "Incremental clustering with {:?} is not meaningful; \
+                 falling back to single-linkage",
+                self.settings.algorithm
+            );
+        }
 
-        debug!(
-            "Incremental clustering for image {} using {:?}",
-            image_id, effective_algo
-        );
+        debug!("Incremental clustering for image {}", image_id);
 
         let representatives = self.repository.get_cluster_representatives().await?;
         if representatives.is_empty() {
@@ -626,27 +484,17 @@ impl ClusterBuilder {
             return Ok(());
         }
 
-        let hashes_u64: Vec<u64> = hashes.iter().copied().map(|h| h as u64).collect();
-        let mut best_match: Option<(i64, u32)> = None;
+        let image = ImageFeatures::from_perceptual(image_id, features);
+        let best_match = representatives
+            .iter()
+            .filter_map(|(cluster_id, rep)| {
+                let weight = self.settings.matching.match_weight(&image, rep)?;
+                Some((*cluster_id, weight, rep))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1));
 
-        for (cluster_id, rep_hashes) in representatives {
-            let rep_u64: Vec<u64> = rep_hashes.into_iter().map(|h| h as u64).collect();
-            let Some(distance) = Self::min_distance(&hashes_u64, &rep_u64) else {
-                continue;
-            };
-
-            if distance < self.hamming_threshold {
-                if let Some((_, best_dist)) = best_match {
-                    if distance < best_dist {
-                        best_match = Some((cluster_id, distance));
-                    }
-                } else {
-                    best_match = Some((cluster_id, distance));
-                }
-            }
-        }
-
-        if let Some((cluster_id, distance)) = best_match {
+        if let Some((cluster_id, _, rep)) = best_match {
+            let distance = stored_distance(&image, rep).unwrap_or(0);
             self.repository
                 .add_to_cluster(cluster_id, image_id, distance)
                 .await?;
@@ -660,8 +508,34 @@ impl ClusterBuilder {
 
         Ok(())
     }
+}
 
-    pub async fn add_to_clusters(&self, image_id: Uuid, phash: i64) -> Result<()> {
-        self.add_to_clusters_multi(image_id, &[phash]).await
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn graph(n: usize, edges: &[(usize, usize)]) -> MatchGraph {
+        MatchGraph::from_edges(n, edges.iter().map(|&(i, j)| (i, j, 0.5)))
+    }
+
+    #[test]
+    fn single_links_chains() {
+        let g = graph(5, &[(0, 1), (1, 2), (3, 4)]);
+        assert_eq!(cluster_single(&g), vec![vec![0, 1, 2], vec![3, 4]]);
+    }
+
+    #[test]
+    fn complete_requires_all_members() {
+        // 2 matches 1 but not 0, so it can't join {0, 1}.
+        let g = graph(3, &[(0, 1), (1, 2)]);
+        assert_eq!(cluster_complete(&g), vec![vec![0, 1], vec![2]]);
+    }
+
+    #[test]
+    fn dbscan_marks_sparse_points_as_noise() {
+        let g = graph(5, &[(0, 1), (0, 2), (1, 2), (3, 4)]);
+        let mut clusters = cluster_dbscan(&g, 3);
+        clusters.iter_mut().for_each(|c| c.sort_unstable());
+        assert_eq!(clusters, vec![vec![0, 1, 2]]);
     }
 }

@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use super::*;
 use crate::cache::{self, AppCache};
+use crate::clustering::features::ImageFeatures;
 use crate::config::AppConfig;
 use crate::server::{FileQueryType, FilledFileQuery};
 
@@ -343,6 +344,8 @@ impl MediaRepository {
                     perceptual_hash_tr: row.try_get("perceptual_hash_tr").ok(),
                     perceptual_hash_bl: row.try_get("perceptual_hash_bl").ok(),
                     perceptual_hash_br: row.try_get("perceptual_hash_br").ok(),
+                    perceptual_hash_256: None,
+                    color_histogram: None,
                     thumbnail,
                 };
                 Ok(media_file.with_image(image, mime_type.clone()))
@@ -716,8 +719,9 @@ impl MediaRepository {
         sqlx::query!(
             r#"INSERT INTO images (
                     id, width, height, thumbnail_id,
-                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br,
+                    perceptual_hash_256, color_histogram
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             image.id,
             image.width,
             image.height,
@@ -728,6 +732,8 @@ impl MediaRepository {
             image.perceptual_hash_tr,
             image.perceptual_hash_bl,
             image.perceptual_hash_br,
+            image.perceptual_hash_256,
+            image.color_histogram,
         )
             .execute(&mut **tx)
             .await?;
@@ -785,8 +791,9 @@ impl MediaRepository {
         sqlx::query!(
             r#"INSERT INTO images (
                     id, width, height, thumbnail_id,
-                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br,
+                    perceptual_hash_256, color_histogram
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             image.id,
             image.width,
             image.height,
@@ -797,6 +804,8 @@ impl MediaRepository {
             image.perceptual_hash_tr,
             image.perceptual_hash_bl,
             image.perceptual_hash_br,
+            image.perceptual_hash_256,
+            image.color_histogram,
         )
             .execute(&mut *tx)
             .await?;
@@ -1146,6 +1155,8 @@ impl MediaRepository {
                     OR i.perceptual_hash_tr IS NULL
                     OR i.perceptual_hash_bl IS NULL
                     OR i.perceptual_hash_br IS NULL
+                    OR i.perceptual_hash_256 IS NULL
+                    OR i.color_histogram IS NULL
                 )
             )"#,
         )
@@ -1158,13 +1169,12 @@ impl MediaRepository {
     pub async fn update_image_perceptual_hashes(
         &self,
         media_file_id: Uuid,
-        perceptual_hash: Option<i64>,
-        perceptual_hash_center: Option<i64>,
-        perceptual_hash_tl: Option<i64>,
-        perceptual_hash_tr: Option<i64>,
-        perceptual_hash_bl: Option<i64>,
-        perceptual_hash_br: Option<i64>,
+        features: &PerceptualFeatures,
     ) -> Result<()> {
+        let [perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br] =
+            features.hashes64;
+        let perceptual_hash_256 = features.hash256_blob();
+        let color_histogram = features.histogram_blob();
         let mut tx = self.get_write_conn().await?.begin().await?;
         sqlx::query!(
             r#"UPDATE images SET
@@ -1173,7 +1183,9 @@ impl MediaRepository {
                     perceptual_hash_tl = ?,
                     perceptual_hash_tr = ?,
                     perceptual_hash_bl = ?,
-                    perceptual_hash_br = ?
+                    perceptual_hash_br = ?,
+                    perceptual_hash_256 = ?,
+                    color_histogram = ?
                 WHERE id = (
                     SELECT image_id FROM media_images WHERE media_id = ?
                 )"#,
@@ -1183,6 +1195,8 @@ impl MediaRepository {
             perceptual_hash_tr,
             perceptual_hash_bl,
             perceptual_hash_br,
+            perceptual_hash_256,
+            color_histogram,
             media_file_id,
         )
         .execute(&mut *tx)
@@ -1324,6 +1338,8 @@ impl MediaRepository {
                             perceptual_hash_tr: row.try_get("perceptual_hash_tr").ok(),
                             perceptual_hash_bl: row.try_get("perceptual_hash_bl").ok(),
                             perceptual_hash_br: row.try_get("perceptual_hash_br").ok(),
+                            perceptual_hash_256: None,
+                            color_histogram: None,
                             thumbnail,
                         };
                         Ok(media_file.with_image(image, mime_type.clone()))
@@ -1349,7 +1365,7 @@ impl MediaRepository {
 
     // ===== Clustering Methods =====
 
-    pub async fn get_all_perceptual_hashes(&self) -> Result<Vec<(uuid::Uuid, Vec<i64>)>> {
+    pub async fn get_all_perceptual_hashes(&self) -> Result<Vec<ImageFeatures>> {
         let rows = sqlx::query!(
             r#"SELECT
                     i.id,
@@ -1358,18 +1374,12 @@ impl MediaRepository {
                     i.perceptual_hash_tl,
                     i.perceptual_hash_tr,
                     i.perceptual_hash_bl,
-                    i.perceptual_hash_br
+                    i.perceptual_hash_br,
+                    i.perceptual_hash_256,
+                    i.color_histogram
                FROM images i
                JOIN media_images mi ON i.id = mi.image_id
-               JOIN media_files mf ON mi.media_id = mf.id
-               WHERE (
-                    i.perceptual_hash IS NOT NULL OR
-                    i.perceptual_hash_center IS NOT NULL OR
-                    i.perceptual_hash_tl IS NOT NULL OR
-                    i.perceptual_hash_tr IS NOT NULL OR
-                    i.perceptual_hash_bl IS NOT NULL OR
-                    i.perceptual_hash_br IS NOT NULL
-               )"#
+               JOIN media_files mf ON mi.media_id = mf.id"#
         )
         .fetch_all(self.get_read_conn())
         .await?;
@@ -1378,30 +1388,20 @@ impl MediaRepository {
             .into_iter()
             .filter_map(|row| {
                 let id = uuid::Uuid::from_slice(&row.id).ok()?;
-                let mut hashes = Vec::with_capacity(6);
-                if let Some(v) = row.perceptual_hash {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_center {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_tl {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_tr {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_bl {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_br {
-                    hashes.push(v);
-                }
-                if hashes.is_empty() {
-                    None
-                } else {
-                    Some((id, hashes))
-                }
+                let features = ImageFeatures::from_parts(
+                    id,
+                    [
+                        row.perceptual_hash,
+                        row.perceptual_hash_center,
+                        row.perceptual_hash_tl,
+                        row.perceptual_hash_tr,
+                        row.perceptual_hash_bl,
+                        row.perceptual_hash_br,
+                    ],
+                    row.perceptual_hash_256.as_deref(),
+                    row.color_histogram.as_deref(),
+                );
+                features.has_hash().then_some(features)
             })
             .collect())
     }
@@ -1753,26 +1753,21 @@ impl MediaRepository {
         Ok((cluster_members_deleted, images_deleted))
     }
 
-    pub async fn get_cluster_representatives(&self) -> Result<Vec<(i64, Vec<i64>)>> {
+    pub async fn get_cluster_representatives(&self) -> Result<Vec<(i64, ImageFeatures)>> {
         let rows = sqlx::query!(
             r#"SELECT
                     c.cluster_id,
+                    i.id,
                     i.perceptual_hash,
                     i.perceptual_hash_center,
                     i.perceptual_hash_tl,
                     i.perceptual_hash_tr,
                     i.perceptual_hash_bl,
-                    i.perceptual_hash_br
+                    i.perceptual_hash_br,
+                    i.perceptual_hash_256,
+                    i.color_histogram
                FROM image_clusters c
-               JOIN images i ON c.representative_image_id = i.id
-               WHERE (
-                    i.perceptual_hash IS NOT NULL OR
-                    i.perceptual_hash_center IS NOT NULL OR
-                    i.perceptual_hash_tl IS NOT NULL OR
-                    i.perceptual_hash_tr IS NOT NULL OR
-                    i.perceptual_hash_bl IS NOT NULL OR
-                    i.perceptual_hash_br IS NOT NULL
-               )"#
+               JOIN images i ON c.representative_image_id = i.id"#
         )
         .fetch_all(self.get_read_conn())
         .await?;
@@ -1780,30 +1775,21 @@ impl MediaRepository {
         Ok(rows
             .into_iter()
             .filter_map(|row| {
-                let mut hashes = Vec::with_capacity(6);
-                if let Some(v) = row.perceptual_hash {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_center {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_tl {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_tr {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_bl {
-                    hashes.push(v);
-                }
-                if let Some(v) = row.perceptual_hash_br {
-                    hashes.push(v);
-                }
-                if hashes.is_empty() {
-                    None
-                } else {
-                    Some((row.cluster_id, hashes))
-                }
+                let id = uuid::Uuid::from_slice(&row.id).ok()?;
+                let features = ImageFeatures::from_parts(
+                    id,
+                    [
+                        row.perceptual_hash,
+                        row.perceptual_hash_center,
+                        row.perceptual_hash_tl,
+                        row.perceptual_hash_tr,
+                        row.perceptual_hash_bl,
+                        row.perceptual_hash_br,
+                    ],
+                    row.perceptual_hash_256.as_deref(),
+                    row.color_histogram.as_deref(),
+                );
+                features.has_hash().then_some((row.cluster_id, features))
             })
             .collect())
     }
@@ -1877,12 +1863,20 @@ impl MediaRepository {
     ) -> Result<(Pagination, Vec<crate::server::ClusterDTO>)> {
         use crate::server::ClusterDTO;
 
-        // Get total count — match the main query's JOIN so empty clusters don't cause drift
+        // Get total count — match the main query's JOINs and HAVING so the count can't drift.
+        // Members only count while their file still exists, as in `get_cluster_images`;
+        // clusters left with a single image are hidden.
         let count_row = sqlx::query!(
-            r#"SELECT COUNT(DISTINCT c.cluster_id) as count
-               FROM image_clusters c
-               JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
-               WHERE c.is_resolved = 0"#,
+            r#"SELECT COUNT(*) as count FROM (
+                   SELECT c.cluster_id
+                   FROM image_clusters c
+                   JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
+                   JOIN media_images mi ON cm.image_id = mi.image_id
+                   JOIN media_files mf ON mi.media_id = mf.id
+                   WHERE c.is_resolved = 0
+                   GROUP BY c.cluster_id
+                   HAVING COUNT(DISTINCT cm.image_id) > 1
+               )"#,
         )
         .fetch_one(self.get_read_conn())
         .await?;
@@ -1912,11 +1906,14 @@ impl MediaRepository {
                 COUNT(DISTINCT cm.image_id) as image_count
             FROM image_clusters c
             JOIN cluster_members cm ON c.cluster_id = cm.cluster_id
+            JOIN media_images mi ON cm.image_id = mi.image_id
+            JOIN media_files mf ON mi.media_id = mf.id
             WHERE c.is_resolved = 0
             GROUP BY c.cluster_id
+            HAVING COUNT(DISTINCT cm.image_id) > 1
             ORDER BY
-                MAX(cm.hamming_distance) ASC,     -- 1. Tightest clusters first (graded by their worst match)
-                COUNT(DISTINCT cm.image_id) DESC, -- 2. Then by largest space savings
+                COUNT(DISTINCT cm.image_id) DESC, -- 1. Most images first
+                MAX(cm.hamming_distance) ASC,     -- 2. Then tightest (graded by their worst match)
                 c.created_at DESC                 -- 3. Then newest
             LIMIT ? OFFSET ?"#,
             page_size,
@@ -1939,6 +1936,8 @@ impl MediaRepository {
                            ROW_NUMBER() OVER (PARTITION BY cm.cluster_id ORDER BY cm.hamming_distance) as rn
                        FROM cluster_members cm
                        JOIN images i ON cm.image_id = i.id
+                       JOIN media_images mi ON i.id = mi.image_id
+                       JOIN media_files mf ON mi.media_id = mf.id
                        JOIN thumbnails t ON i.thumbnail_id = t.id
                        WHERE cm.cluster_id IN ({})
                    ) WHERE rn <= 4"#,
@@ -2155,7 +2154,10 @@ mod tests {
             random_order_expr("ids.id", seed)
         );
         let mut stmt = conn.prepare(&sql).unwrap();
-        stmt.query_map([], |r| r.get(0)).unwrap().map(|r| r.unwrap()).collect()
+        stmt.query_map([], |r| r.get(0))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
     }
 
     #[test]
@@ -2166,14 +2168,24 @@ mod tests {
             let order = random_order(&conn, seed);
             let mut sorted = order.clone();
             sorted.sort();
-            assert_eq!(sorted, (1..=200).collect::<Vec<_>>(), "seed {seed}: not a permutation");
+            assert_eq!(
+                sorted,
+                (1..=200).collect::<Vec<_>>(),
+                "seed {seed}: not a permutation"
+            );
             let consecutive = order.windows(2).filter(|w| w[1] == w[0] + 1).count();
-            assert!(consecutive <= 20, "seed {seed}: order is not shuffled ({consecutive} consecutive pairs)");
+            assert!(
+                consecutive <= 20,
+                "seed {seed}: order is not shuffled ({consecutive} consecutive pairs)"
+            );
             orders.push(order);
         }
         // Seeds must reshuffle, not rotate: relabelling ids by a constant shift must not reproduce another seed's order.
         for shift in 1..200i64 {
-            let rotated: Vec<i64> = orders[0].iter().map(|id| (id - 1 + shift) % 200 + 1).collect();
+            let rotated: Vec<i64> = orders[0]
+                .iter()
+                .map(|id| (id - 1 + shift) % 200 + 1)
+                .collect();
             assert_ne!(rotated, orders[1], "seeds only rotate the order");
         }
     }

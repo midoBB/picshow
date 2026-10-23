@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO images (\n                    id, width, height, thumbnail_id,\n                    perceptual_hash, perceptual_hash_center, perceptual_hash_tl, perceptual_hash_tr, perceptual_hash_bl, perceptual_hash_br,\n                    perceptual_hash_256, color_histogram\n                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 12
+    },
+    "nullable": []
+  },
+  "hash": "2dc1d3d7873067d77ddf3077cfe536291406fab9255df22051331fd208cc0876"
+}

@@ -183,25 +183,11 @@ impl Processor {
                         debug!("Image {} already has perceptual hashes, skipping", filename);
                         return Ok(MediaFile::Unfilled(existing_file));
                     }
-                    if let Ok(hashes) = self.handler.compute_perceptual_hashes(file_path).await {
-                        if hashes.0.is_some()
-                            || hashes.1.is_some()
-                            || hashes.2.is_some()
-                            || hashes.3.is_some()
-                            || hashes.4.is_some()
-                            || hashes.5.is_some()
-                        {
+                    if let Ok(features) = self.handler.compute_perceptual_hashes(file_path).await {
+                        if !features.is_empty() {
                             if let Err(e) = self
                                 .repository
-                                .update_image_perceptual_hashes(
-                                    media_file_id,
-                                    hashes.0,
-                                    hashes.1,
-                                    hashes.2,
-                                    hashes.3,
-                                    hashes.4,
-                                    hashes.5,
-                                )
+                                .update_image_perceptual_hashes(media_file_id, &features)
                                 .await
                             {
                                 warn!(
@@ -214,34 +200,27 @@ impl Processor {
                                     filename
                                 );
                                 // Trigger incremental clustering for the newly hashed image
-                                let hash_vec: Vec<i64> =
-                                    [hashes.0, hashes.1, hashes.2, hashes.3, hashes.4, hashes.5]
-                                        .into_iter()
-                                        .flatten()
-                                        .collect();
-                                if !hash_vec.is_empty() {
-                                    if let Ok(actual_image_id) =
-                                        self.repository.resolve_image_id(media_file_id).await
+                                if let Ok(actual_image_id) =
+                                    self.repository.resolve_image_id(media_file_id).await
+                                {
+                                    let builder = crate::clustering::ClusterBuilder::new(
+                                        self.repository.clone(),
+                                        &self.config,
+                                    );
+                                    if let Err(e) = builder
+                                        .add_to_clusters_multi(actual_image_id, &features)
+                                        .await
                                     {
-                                        let builder = crate::clustering::ClusterBuilder::new(
-                                            self.repository.clone(),
-                                            &self.config,
-                                        );
-                                        if let Err(e) = builder
-                                            .add_to_clusters_multi(actual_image_id, &hash_vec)
-                                            .await
-                                        {
-                                            warn!(
-                                                "Failed to cluster backfilled image {}: {}",
-                                                filename, e
-                                            );
-                                        }
-                                    } else {
                                         warn!(
-                                            "Failed to resolve image ID for backfilled image {}",
-                                            filename
+                                            "Failed to cluster backfilled image {}: {}",
+                                            filename, e
                                         );
                                     }
+                                } else {
+                                    warn!(
+                                        "Failed to resolve image ID for backfilled image {}",
+                                        filename
+                                    );
                                 }
                             }
                         }

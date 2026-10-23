@@ -1,0 +1,44 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n                c.cluster_id AS \"cluster_id!\",\n                c.representative_image_id AS \"representative_image_id!\",\n                c.created_at AS \"created_at!\",\n                c.is_resolved AS \"is_resolved!\",\n                COUNT(DISTINCT cm.image_id) as image_count\n            FROM image_clusters c\n            JOIN cluster_members cm ON c.cluster_id = cm.cluster_id\n            JOIN media_images mi ON cm.image_id = mi.image_id\n            JOIN media_files mf ON mi.media_id = mf.id\n            WHERE c.is_resolved = 0\n            GROUP BY c.cluster_id\n            HAVING COUNT(DISTINCT cm.image_id) > 1\n            ORDER BY\n                COUNT(DISTINCT cm.image_id) DESC, -- 1. Most images first\n                MAX(cm.hamming_distance) ASC,     -- 2. Then tightest (graded by their worst match)\n                c.created_at DESC                 -- 3. Then newest\n            LIMIT ? OFFSET ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "cluster_id!",
+        "ordinal": 0,
+        "type_info": "Integer"
+      },
+      {
+        "name": "representative_image_id!",
+        "ordinal": 1,
+        "type_info": "Blob"
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 2,
+        "type_info": "Text"
+      },
+      {
+        "name": "is_resolved!",
+        "ordinal": 3,
+        "type_info": "Integer"
+      },
+      {
+        "name": "image_count",
+        "ordinal": 4,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true,
+      true,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "2c8ff8734fad2b9cb9aa8e351e4ccea0c2a5cafd7bd2f764a2d6837d6bfb0944"
+}
