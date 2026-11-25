@@ -9,7 +9,7 @@ use std::str::FromStr as _;
 use std::time::Duration;
 use std::{path::Path, sync::Arc};
 use tokio::fs;
-use tokio::sync::{RwLock, Semaphore};
+use tokio::sync::Semaphore;
 use tracing::{debug, error, info, trace};
 use uuid::Uuid;
 
@@ -23,7 +23,7 @@ use crate::server::{FileQueryType, FilledFileQuery};
 pub struct MediaRepository {
     read_pool: sqlx::SqlitePool,
     write_pool: Arc<sqlx::SqlitePool>,
-    write_semaphore: Arc<RwLock<Semaphore>>,
+    write_semaphore: Arc<Semaphore>,
     lock_semaphore: Arc<Semaphore>,
     cache: AppCache,
 }
@@ -119,7 +119,7 @@ impl MediaRepository {
         let repo = Self {
             read_pool,
             write_pool: Arc::new(write_pool),
-            write_semaphore: Arc::new(RwLock::new(Semaphore::new(1))),
+            write_semaphore: Arc::new(Semaphore::new(1)),
             lock_semaphore: Arc::new(Semaphore::new(1)),
             cache,
         };
@@ -134,40 +134,15 @@ impl MediaRepository {
     }
 
     async fn get_write_conn(&self) -> Result<Arc<sqlx::SqlitePool>> {
-        // Wait for the write semaphore to become available instead of failing
-        // immediately when it is closed during a backup. This turns the backup
-        // window from a flood of "semaphore closed" errors into a brief wait.
-        let start = tokio::time::Instant::now();
-        let timeout = Duration::from_secs(30);
-        loop {
-            let result = {
-                let semaphore = self.write_semaphore.read().await;
-                semaphore
-                    .acquire()
-                    .await
-                    .map(|_| ())
-                    .map_err(|e| e.to_string())
-            };
-            match result {
-                Ok(_) => return Ok(Arc::clone(&self.write_pool)),
-                Err(msg) if msg.contains("closed") => {
-                    if start.elapsed() > timeout {
-                        return Err(anyhow::anyhow!(
-                            "Failed to acquire write semaphore: {}",
-                            msg
-                        ));
-                    }
-                    tokio::time::sleep(Duration::from_millis(50)).await;
-                    continue;
-                }
-                Err(msg) => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to acquire write semaphore: {}",
-                        msg
-                    ));
-                }
-            }
-        }
+        // Waits, with no timeout, while a backup holds the write permit (see
+        // lock_writes). A backup of a multi-GB database can take minutes, and a
+        // fixed timeout turned every write in that window into an error.
+        let _permit = self
+            .write_semaphore
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire write semaphore: {}", e))?;
+        Ok(Arc::clone(&self.write_pool))
     }
 
     async fn init_schema(&self) -> Result<()> {
@@ -215,8 +190,7 @@ impl MediaRepository {
     pub(crate) async fn cleanup(&self) -> Result<()> {
         debug!("Starting DB cleanup");
         {
-            let semaphore = self.write_semaphore.read().await;
-            let _write_lock = semaphore.acquire().await?;
+            let _write_lock = self.write_semaphore.acquire().await?;
             trace!("Acquired write lock for cleanup");
         }
 
@@ -275,18 +249,29 @@ impl MediaRepository {
             .map_err(|e| anyhow::anyhow!("Failed to acquire lock semaphore: {}", e))?;
         std::mem::forget(permit);
 
+        // Take the single write permit and hold it until unlock_writes(), so new
+        // writers queue in get_write_conn() rather than erroring out.
+        self.write_semaphore
+            .acquire()
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to acquire write semaphore: {}", e))?
+            .forget();
+
         // Wait a small duration for current operations to complete
         tokio::time::sleep(Duration::from_millis(100)).await;
-
-        // Force reset the write semaphore
-        self.write_semaphore.write().await.close();
         Ok(())
     }
 
     pub async fn unlock_writes(&self) -> Result<()> {
         debug!("Unlocking writes");
-        *self.write_semaphore.write().await = Semaphore::new(1);
-        self.lock_semaphore.add_permits(1);
+        // Guard against an unlock without a matching lock (e.g. a stray
+        // /internal/unlock call), which would otherwise mint extra permits.
+        if self.write_semaphore.available_permits() == 0 {
+            self.write_semaphore.add_permits(1);
+        }
+        if self.lock_semaphore.available_permits() == 0 {
+            self.lock_semaphore.add_permits(1);
+        }
         Ok(())
     }
     async fn fetch_media(
@@ -2383,6 +2368,39 @@ mod tests {
             result.err()
         );
 
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn get_write_conn_survives_backup_longer_than_30s() -> Result<()> {
+        let data_dir = tempfile::tempdir()?;
+        let data_path = format!("{}{}", data_dir.path().display(), std::path::MAIN_SEPARATOR);
+        let config = Arc::new(AppConfig {
+            db_path: data_path,
+            ..AppConfig::default()
+        });
+        let repo = Arc::new(MediaRepository::new(AppCache::new(1), config).await?);
+
+        // Freeze the clock only after the DB is open: sqlx does its IO on worker
+        // threads, and auto-advance would fire its 30s pool timeouts during setup.
+        // From here on nothing touches the DB, so sleeps complete instantly.
+        tokio::time::pause();
+
+        repo.lock_writes().await?;
+        let r2 = repo.clone();
+        let writer = tokio::spawn(async move { r2.get_write_conn().await.map(|_| ()) });
+
+        // A backup of a multi-GB database holding the lock for minutes
+        tokio::time::sleep(Duration::from_secs(300)).await;
+        assert!(!writer.is_finished(), "writer gave up while the backup held the lock");
+        repo.unlock_writes().await?;
+
+        let result = writer.await?;
+        assert!(
+            result.is_ok(),
+            "writer failed during long backup: {:?}",
+            result.err()
+        );
         Ok(())
     }
 

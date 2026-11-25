@@ -48,10 +48,17 @@ impl BackupManager {
     }
 
     pub async fn backup(&self, destination: String) -> Result<()> {
-        let destination = PathBuf::from(destination);
-        let temp_destination = super::temp_backup_path(&destination);
+        let temp_destination = self.snapshot(&destination).await?;
+        finalize_snapshot(&temp_destination, Path::new(&destination))
+    }
+
+    /// Copy the live database page by page into a temp file next to
+    /// `destination`. This is the only backup step that needs writes paused:
+    /// the source was integrity-checked in `new()`, and the copy is checked by
+    /// `finalize_snapshot`, which can run after writes resume.
+    pub async fn snapshot(&self, destination: &str) -> Result<PathBuf> {
+        let temp_destination = super::temp_backup_path(&PathBuf::from(destination));
         let conn = self.write_connection.lock().await;
-        super::check_rusqlite_integrity(&conn)?;
         let progress_fn = |p: rusqlite::backup::Progress| {
             let completed_pages = p.pagecount - p.remaining;
             let percentage = if p.pagecount > 0 {
@@ -72,15 +79,7 @@ impl BackupManager {
             let _ = super::remove_sqlite_sidecars(&temp_destination);
             return Err(e.into());
         }
-
-        super::make_standalone_database_file(&temp_destination)?;
-        super::remove_sqlite_sidecars(&temp_destination)?;
-        verify_database_file(&temp_destination)?;
-        super::sync_file_and_parent(&temp_destination)?;
-        fs::rename(&temp_destination, &destination)?;
-        super::remove_sqlite_sidecars(&destination)?;
-        super::sync_file_and_parent(&destination)?;
-        Ok(())
+        Ok(temp_destination)
     }
 
     pub async fn restore(&self, source: PathBuf) -> Result<()> {
@@ -130,6 +129,19 @@ pub(crate) fn verify_database_file(path: &Path) -> Result<()> {
     )?;
     super::apply_rusqlite_pragmas(&conn, false)?;
     super::check_rusqlite_integrity(&conn)
+}
+
+/// Turn a `snapshot` temp file into a verified, standalone backup at
+/// `destination`. Reads only the copy, so writes to the live database can run.
+pub(crate) fn finalize_snapshot(temp_destination: &Path, destination: &Path) -> Result<()> {
+    super::make_standalone_database_file(temp_destination)?;
+    super::remove_sqlite_sidecars(temp_destination)?;
+    verify_database_file(temp_destination)?;
+    super::sync_file_and_parent(temp_destination)?;
+    fs::rename(temp_destination, destination)?;
+    super::remove_sqlite_sidecars(destination)?;
+    super::sync_file_and_parent(destination)?;
+    Ok(())
 }
 
 /// Build a dated backup destination path in `folder`, matching the naming

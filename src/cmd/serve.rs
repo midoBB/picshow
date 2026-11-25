@@ -192,23 +192,42 @@ async fn run_scheduled_backup(config: &AppConfig, repository: &Arc<MediaReposito
         }
     };
 
+    let db_path = format!("{}picshow.db", &config.db_path);
+    let destination = crate::data::backup_manager::backup_filename(&config.backup_folder_path);
+    info!("Starting scheduled backup to {}", destination);
+
+    // Integrity-check the source before pausing writes; on a multi-GB database
+    // the check takes about as long as the copy itself.
+    let manager = match crate::data::backup_manager::BackupManager::new(db_path).await {
+        Ok(manager) => manager,
+        Err(e) => {
+            error!("Scheduled backup failed: {}", e);
+            return;
+        }
+    };
+
     if let Err(e) = repository.lock_writes().await {
         error!("Scheduled backup: failed to lock writes: {}", e);
         return;
     }
-
-    let db_path = format!("{}picshow.db", &config.db_path);
-    let destination = crate::data::backup_manager::backup_filename(&config.backup_folder_path);
-    info!("Starting scheduled backup to {}", destination);
-    let backup_result = async {
-        let manager = crate::data::backup_manager::BackupManager::new(db_path).await?;
-        manager.backup(destination).await
-    }
-    .await;
-
+    let snapshot = manager.snapshot(&destination).await;
     if let Err(e) = repository.unlock_writes().await {
         error!("Scheduled backup: failed to unlock writes: {}", e);
     }
+
+    // Verify and publish the copy with writes running again.
+    let backup_result = match snapshot {
+        Ok(temp) => {
+            let destination = std::path::PathBuf::from(&destination);
+            tokio::task::spawn_blocking(move || {
+                crate::data::backup_manager::finalize_snapshot(&temp, &destination)
+            })
+            .await
+            .map_err(anyhow::Error::from)
+            .and_then(|r| r)
+        }
+        Err(e) => Err(e),
+    };
 
     match backup_result {
         Ok(_) => {
